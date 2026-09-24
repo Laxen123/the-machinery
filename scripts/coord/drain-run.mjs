@@ -1510,7 +1510,7 @@ export function repathPlanClaimCell(cell, slug, toSubfolder) {
 // done-worktree), or the cell already names the right subfolder. Only when a real repath is needed do we invoke the atomic
 // board.mjs update (its own pull→commit→push). `runUpdate` is injectable for
 // tests. A benign row-vanish race (the row existed in our local read but a
-// parallel done-worktree/handoff removed it before board.mjs's fresh pull) is
+// parallel done-worktree removed it before board.mjs's fresh pull) is
 // swallowed — there is nothing left to repath, and crashing here would abort the
 // drain AFTER the plan-file move + INDEX sync already pushed. Any OTHER board.mjs
 // failure (e.g. a real push error) re-throws like any drain git failure.
@@ -1567,7 +1567,7 @@ export function repathBoardRow(
     update(slug, newCell);
   } catch (e) {
     // Row-vanish race: board.mjs's fresh pull no longer sees the row our local
-    // read found (a parallel done-worktree/handoff removed it) → nothing left to
+    // read found (a parallel done-worktree removed it) → nothing left to
     // repath. Benign; swallow. Re-throw any OTHER failure.
     if (/row not found/i.test(`${e.stderr || ''} ${e.message || ''}`)) {
       return { repathed: false, reason: 'row-vanished' };
