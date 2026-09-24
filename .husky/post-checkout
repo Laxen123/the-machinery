@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# plan 1022 (B): warn when a worktree was created WITHOUT a claim (a hand-built
+# `git worktree add` that skipped pickup-plan — the 2026-06-23 plan-1013 race).
+# Fires on `git worktree add` (git runs post-checkout in the new worktree). ADVISORY
+# ONLY: git ignores a post-checkout hook's exit code, and `|| true` guarantees a guard
+# error (e.g. a worktree cut before this script existed) never breaks the checkout.
+# git passes the hook three args: <prevHEAD> <newHEAD> <branchFlag>; forward them.
+node scripts/post-checkout-claim-guard.mjs "$@" || true

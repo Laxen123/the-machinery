@@ -1,0 +1,368 @@
+{
+  "_comment": [
+    "The coord-core program's step-4 move set: the 68 modules plan 3962 T1 names, with the",
+    "destination layer each one moves to. Committed by plan 4061 (step 4a) so that step 4's work",
+    "list is DATA rather than something a later session re-derives by hand, per operator decision 3",
+    "of 2026-09-19 ('the closure remainder is named in 4061's table rather than discovered",
+    "mid-diff'). scripts/coord/module-graph.mjs closes over these seeds to produce the split list,",
+    "and module-graph.test.mjs asserts plan 4061's acceptance against that same closure.",
+    "Source of truth for the classification is plan 3962 § T1; this file is its machine-readable",
+    "projection and must be regenerated, not hand-edited, if that table changes.",
+    "ONE row diverges from 3962 § T1's literal wording, and by that table's own instruction:",
+    "it listed 'cloud-routine-prompt-lib (until step 6 splits it)' as BLOCKED. Step 6 (plan 3964",
+    "T2) performed that split, so the row now names its surviving project-side half,",
+    "scripts/project/cloud-routine-specs.mjs, and is classed SPLIT. The generic half went to",
+    "scripts/coord/routine-prompt-engine.mjs and needs no row of its own: it is already at a core",
+    "destination and the closure reaches it through the specs module that imports it.",
+    "FIVE MORE rows diverge from 3962 § T1, by plan 4096 T6 (2026-09-22): the wiki family",
+    "(wiki-fold, wiki-log-lint, wiki-size-lint, wiki-updated-merge-driver, wiki-coverage-sweep)",
+    "was classed scripts/project/ there and is classed scripts/coord/ here. Reason: the coord kit",
+    "ships the wiki surface as a GENERIC coord feature — coord-kit-manifest.json carries wiki-commit",
+    "in commands, docs/coord in dirs and a wikiScaffold for wiki/{index,hot,log}.md — so a",
+    "project-side wiki family would leave wiki-commit permanently blocked at the kit closure gate,",
+    "which is the defect plan 4096 exists to close. None of the five names a vetapp concept; they",
+    "are frontmatter parsing, a size budget, a log lint, a merge driver and a coverage sweep."
+  ],
+  "seeds": [
+    {
+      "module": "scripts/landing-queue-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/landing-lock.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/claim-plan-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/coord-refs.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/coord-git.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/coord-edit.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/coord-config.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/coord-session-id.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/coord-metrics.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/index-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/build-index-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/board-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/build-handoff-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/plan-body-state.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/plan-promotable-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/plan-lane-segments.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/plan-cost-banner.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/read-plan-stamps.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/stamp-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/exec-model-stamp.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/exec-model-default-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/blocked-by-lib.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/queue-drain.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/local-drain-filter.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/drain-status.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/session-priority.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/cpu-budget.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/test-queue.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/battery-lock.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/battery-ledger.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/gate-pass-cache.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/battery-pass-cache.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/pass-cache-kernel.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/git-range.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/git-safe.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/worktree-lock.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/worktree-porcelain.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/excl-lock.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/lock-path.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/atomic-write.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/kill-tree.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/sh-exec.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/pwsh-exec.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "BLOCKED"
+    },
+    {
+      "module": "scripts/child-env.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/stdin-read.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/parse-flags.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/box-table.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/ansi-colors.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/slug-charset.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/findings-sidecar-io.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/review-diff-scope.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/compute-push-diff.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/push-queue-status.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/heal-main.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/sweep-stray-stashes.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/landing-queue-board.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/account-registry.mjs",
+      "destination": "scripts/project/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wake-stalls-lib.mjs",
+      "destination": "scripts/project/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/cloud-routine-specs.mjs",
+      "destination": "scripts/project/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-commit.mjs",
+      "destination": "scripts/project/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-coverage-sweep.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-size-lint.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-log-lint.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-updated-merge-driver.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/wiki-fold.mjs",
+      "destination": "scripts/coord/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/wiki-chain-registry.mjs",
+      "destination": "scripts/project/",
+      "class3962": "PURE-MOVE"
+    },
+    {
+      "module": "scripts/railway-domains.mjs",
+      "destination": "scripts/project/",
+      "class3962": "SPLIT"
+    },
+    {
+      "module": "scripts/railway-api.mjs",
+      "destination": "scripts/project/",
+      "class3962": "PURE-MOVE"
+    }
+  ]
+}

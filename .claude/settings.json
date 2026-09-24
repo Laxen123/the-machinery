@@ -1,0 +1,236 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(node scripts/apply-workflow-file.mjs:*)",
+      "Bash(node scripts/assert-doc-pointers.mjs:*)",
+      "Bash(node scripts/assert-plan-pointers.mjs:*)",
+      "Bash(node scripts/batches-view.mjs:*)",
+      "Bash(node scripts/board.mjs:*)",
+      "Bash(node scripts/build-index.mjs:*)",
+      "Bash(node scripts/check-coordination-branch.mjs:*)",
+      "Bash(node scripts/claim-plan.mjs:*)",
+      "Bash(node scripts/coord-edit.mjs:*)",
+      "Bash(node scripts/cut-worktree.mjs:*)",
+      "Bash(node scripts/done-worktree.mjs:*)",
+      "Bash(node scripts/edit-plan.mjs:*)",
+      "Bash(node scripts/ensure-bin-shims.mjs:*)",
+      "Bash(node scripts/exec-model-default.mjs:*)",
+      "Bash(node scripts/gpt-review.mjs:*)",
+      "Bash(node scripts/index.mjs:*)",
+      "Bash(node scripts/landing-lock.mjs:*)",
+      "Bash(node scripts/landing-queue.mjs:*)",
+      "Bash(node scripts/lint-plan-index.mjs:*)",
+      "Bash(node scripts/move-plan.mjs:*)",
+      "Bash(node scripts/next-plan-id.mjs:*)",
+      "Bash(node scripts/post-checkout-claim-guard.mjs:*)",
+      "Bash(node scripts/pre-rebase-main-guard.mjs:*)",
+      "Bash(node scripts/push-queue-status.mjs:*)",
+      "Bash(node scripts/queue-drain.mjs:*)",
+      "Bash(node scripts/queued-run.mjs:*)",
+      "Bash(node scripts/reconcile-drain-markers.mjs:*)",
+      "Bash(node scripts/record-review.mjs:*)",
+      "Bash(node scripts/record-wiki.mjs:*)",
+      "Bash(node scripts/release-claim.mjs:*)",
+      "Bash(node scripts/spec-sweep-lock.mjs:*)",
+      "Bash(node scripts/stamp-cloud-exec.mjs:*)",
+      "Bash(node scripts/stamp-evidence.mjs:*)",
+      "Bash(node scripts/stamp-exec-model.mjs:*)",
+      "Bash(node scripts/trip-status.mjs:*)",
+      "Bash(node scripts/wiki-commit.mjs:*)",
+      "Write(docs/handoff/sessions/**)",
+      "Edit(coord/skills/**)",
+      "Write(coord/skills/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-guard.sh\""
+          },
+          {
+            "type": "command",
+            "if": "Bash(git *)",
+            "timeout": 10,
+            "statusMessage": "Checking the git command against the coordination-path guard",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/coord-write-guard-pretooluse.mjs\""
+          },
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the command against the hand-rolled-step guard",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/hand-rolled-step-guard.mjs\""
+          },
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the command shape against the 2.1.232 classifier traps",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/bash-shape-guard.mjs\""
+          },
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the land invocation against the fixed timeout 14400 cap",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/land-timeout-guard.mjs\""
+          },
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the git command against the main-checkout rebase guard",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/main-checkout-rebase-guard.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the review launch against the per-plan round cap",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/review-round-cap-guard.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|Agent|Task|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the call against the subagent-backgrounding guard",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/subagent-backgrounding-guard.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell|TaskOutput|Monitor",
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 10,
+            "statusMessage": "Checking the call against the cloud-land-backgrounding guard",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/cloud-land-backgrounding-guard.mjs\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/worktree-owner-guard.sh\""
+          },
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/block-archive-plan-edits.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/main-checkout-clean-guard.sh\""
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read|Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking the touched file for a wiki subject page",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/path-wiki-loader.mjs\""
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 60,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/park-master-dirt-on-stop.sh\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 15,
+            "statusMessage": "Checking for a bulk-shaped fable plan running with zero dispatches",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/bulk-fable-zero-dispatch-tripwire-stop.mjs\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/recover-parked-stashes-on-start.sh\""
+          }
+        ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/wiki-markers-compact-reset.mjs\""
+          }
+        ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/apply-session-cpu-class.mjs\""
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "shell": "bash",
+            "timeout": 10,
+            "statusMessage": "Checking prompt for platform / inspector wiki pages",
+            "command": "node \"$CLAUDE_PROJECT_DIR/scripts/hooks/subject-wiki-loader.mjs\""
+          }
+        ]
+      }
+    ]
+  }
+}

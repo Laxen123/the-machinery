@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+# plan 2933 (fix A): warn when a raw `git rebase` / `git pull --rebase` is about to run on
+# `master` in the SHARED MAIN checkout, outside the sanctioned pushMasterWithRebase path.
+# A rebase killed there leaves MAIN detached with residue that heal-main.mjs SPARES for 15
+# minutes (its mtime gate assumes a live operator hand-rebase), so every parallel session
+# sees a wedged checkout. Measured 2026-08-06.
+#
+# EDIT-FROZEN DISPATCHER, same rule as .husky/pre-push (plan 2576): the logic lives in
+# scripts/ because `.husky/**` is a path an unattended cloud drain can never Edit/Write
+# (the harness safetyCheck has no approver and the session hangs until the window dies).
+# Keeping this file trivial means it never needs another edit.
+#
+# ADVISORY ONLY. Unlike post-checkout, git DOES honour a pre-rebase hook's exit code — a
+# non-zero exit ABORTS the rebase. The guard already always exits 0; `|| true` is the second
+# belt so a guard crash (missing node, torn node_modules, a syntax error mid-edit) can never
+# block the operator's rebase. Do not remove it, and do not make this hook blocking.
+#
+# git passes the hook <upstream> [<branch>]; forward them for future use.
+node scripts/pre-rebase-main-guard.mjs "$@" || true

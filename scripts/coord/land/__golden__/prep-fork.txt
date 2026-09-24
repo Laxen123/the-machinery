@@ -1,0 +1,29 @@
+EXIT 0
+--- stdout ---
+DRY git -C <dry:demo-slug> diff --name-only origin/master...HEAD
+done-worktree --prep: mode rebase for demo-slug — refreshing against origin/master and maintaining the land-prep marker.
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> fetch origin
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rebase origin/master
+DRY git -C <dry:demo-slug> push --force-with-lease origin worktree-demo-slug
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+done-worktree --prep: stamped land-prep for demo-slug — base , branch , gates {}.
+--- origin refs ---
+refs/heads/master
+--- coord files ---
+coord.config.json
+docs/superpowers/plans/archive/.gitkeep
+docs/superpowers/plans/in-progress/.gitkeep
+docs/superpowers/plans/parked/.gitkeep
+docs/superpowers/plans/pending-approval/.gitkeep
+docs/superpowers/plans/ready/.gitkeep
+docs/superpowers/plans/waiting-blocked/.gitkeep
+docs/superpowers/plans/waiting-date/.gitkeep
+docs/superpowers/plans/waiting-grill/.gitkeep
+docs/superpowers/plans/waiting-operator/.gitkeep
+docs/superpowers/plans/waiting-trip/.gitkeep

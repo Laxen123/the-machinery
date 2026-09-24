@@ -1,0 +1,83 @@
+EXIT 18
+--- stdout ---
+DRY git -C <dry:demo-slug> diff --name-only origin/master...HEAD
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY disk-headroom prune --keep <dry:demo-slug> --root <main>
+pre-queue freshen: stand-down — chunk mode is enabled; the optional freshen yields its shared wall to the authoritative at-head sync
+DRY node scripts/landing-queue.mjs enqueue demo-slug --lane free --host <host> --session <session>
+HANDOFF:QUEUE_WAIT
+{
+  "code": "QUEUE_WAIT",
+  "reason": "DISAMBIGUATION: any \"queue-watch: spawned a detached keep-hot watcher\" line printed above is PREP-ONLY — it wakes NOBODY. The ONLY watcher that can re-invoke THIS session is the one YOU launch below via run_in_background. queued at position 3/5 behind head undefined — ETA ~16 min. The queue slot is RETAINED (enqueue is idempotent; re-invoking keeps the position). CANONICAL WAIT: launch `node scripts/landing-queue-watch.mjs demo-slug` via Bash run_in_background:true and END THE TURN — it polls at zero token cost, keeps your branch rebased + gate-validated while you wait so you reach head HOT (plan 2551), self-arms queue heartbeats near the head so a long wait stays demote-fresh (plan 2085), and exits the moment demo-slug reaches head, which re-invokes the session; then run a bare done-worktree demo-slug. Pair with a ~1200s ScheduleWakeup dead-man fallback. Alternatives: re-invoke done-worktree manually when nearer the head, or --wait to poll in-process every ~260 s (foreground TTY only). UNATTENDED sessions (cloud — no wake-on-event, plan 1902) use `--wait-chunk` instead. Re-invoke in THIS SAME TURN (unattended sessions must keep the turn alive — plan 1902; give the Bash call a 600000ms timeout, foreground): `node scripts/done-worktree.mjs demo-slug --wait-chunk` — each call blocks in-process up to ~480 s at zero model-token cost (plan 2170).",
+  "state": {
+    "slug": "demo-slug",
+    "branch": "worktree-demo-slug",
+    "main": "<main>",
+    "wtPath": "<dry:demo-slug>",
+    "landId": "<uuid>",
+    "prepDispatched": false,
+    "prepDispatchedSpeculative": false,
+    "syncSkipped": false,
+    "syncSkipSites": {
+      "preQueue": false,
+      "atHead": false
+    },
+    "worktreeLock": null,
+    "lane": "free",
+    "landingClaimed": false,
+    "landingReleased": false,
+    "queued": true,
+    "dequeued": false,
+    "claimReleased": false,
+    "closedOut": false,
+    "mergeSha": null,
+    "deployStatus": null,
+    "planArchived": null,
+    "heartbeatReparked": null,
+    "promoted": [],
+    "promotedToPending": [],
+    "promotedToOperator": [],
+    "newPlans": [],
+    "legacyReadyMints": [],
+    "carryForwardsSkipped": [],
+    "killed": 0,
+    "memory": {
+      "moved": 0,
+      "dup": 0,
+      "diverged": 0
+    },
+    "toreDown": false,
+    "decision": null,
+    "wait": false,
+    "carryforwardDefer": false,
+    "date": "<date>",
+    "host": "<host>",
+    "session": "<session>",
+    "batch": null,
+    "landGateId": "<uuid>",
+    "gatesProven": {},
+    "landGate": null,
+    "seedScope": null,
+    "preflightTip": null,
+    "priority": false,
+    "preconvergeHeartbeated": false,
+    "queuePosition": 3
+  }
+}
+🔴 Waiting in queue (position 3) · <hh:mm>
+--- origin refs ---
+refs/heads/master
+--- coord files ---
+coord.config.json
+docs/superpowers/plans/archive/.gitkeep
+docs/superpowers/plans/in-progress/.gitkeep
+docs/superpowers/plans/parked/.gitkeep
+docs/superpowers/plans/pending-approval/.gitkeep
+docs/superpowers/plans/ready/.gitkeep
+docs/superpowers/plans/waiting-blocked/.gitkeep
+docs/superpowers/plans/waiting-date/.gitkeep
+docs/superpowers/plans/waiting-grill/.gitkeep
+docs/superpowers/plans/waiting-operator/.gitkeep
+docs/superpowers/plans/waiting-trip/.gitkeep

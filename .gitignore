@@ -1,0 +1,4 @@
+node_modules/
+.scratch/
+.claude/worktrees/
+.drain-status/

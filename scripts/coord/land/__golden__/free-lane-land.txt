@@ -1,0 +1,68 @@
+EXIT 0
+--- stdout ---
+DRY git -C <dry:demo-slug> diff --name-only origin/master...HEAD
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY disk-headroom prune --keep <dry:demo-slug> --root <main>
+pre-queue freshen: stand-down — chunk mode is enabled; the optional freshen yields its shared wall to the authoritative at-head sync
+DRY node scripts/landing-queue.mjs enqueue demo-slug --lane free --host <host> --session <session>
+DRY node scripts/landing-queue.mjs status demo-slug --json
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> fetch origin
+DRY git -C <dry:demo-slug> rev-parse origin/master
+DRY git -C <dry:demo-slug> rebase origin/master
+DRY git -C <dry:demo-slug> push --force-with-lease origin worktree-demo-slug
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <dry:demo-slug> merge-base HEAD origin/master
+DRY node scripts/landing-queue.mjs heartbeat demo-slug --progress
+DRY git -C <dry:demo-slug> rev-parse HEAD
+DRY git -C <ephemeral:worktree-demo-slug> merge --no-ff origin/worktree-demo-slug -m Merge worktree-demo-slug: done demo-slug
+DRY git -C <ephemeral:worktree-demo-slug> push origin HEAD:master
+DRY git -C <main> switch master
+DRY git -C <main> merge --ff-only origin/master
+DRY node scripts/release-claim.mjs release <id> --force
+DRY node scripts/board.mjs remove demo-slug
+DRY git -C <main> mv docs/superpowers/plans/in-progress/demo-slug.md docs/superpowers/plans/archive/demo-slug.md
+DRY node scripts/build-index.mjs
+DRY git -C <main> add handoff.md docs/superpowers/plans/archive/demo-slug.md docs/INDEX.md
+DRY HUSKY=0 git -C <main> commit -m docs(plans): done demo-slug — closed via spine -m Coord-Write: done-worktree -- handoff.md docs/superpowers/plans/archive/demo-slug.md docs/INDEX.md docs/superpowers/plans/in-progress/demo-slug.md
+DRY git -C <main> push origin master
+DRY node scripts/landing-lock.mjs release demo-slug
+DRY node scripts/landing-queue.mjs dequeue demo-slug
+DRY pwsh -NoProfile -Command <<kill procs under <dry:demo-slug>>>
+DRY pwsh -NoProfile -File <home>/.claude/scripts/reclaim-worktree-memory.ps1 -WorktreePath <dry:demo-slug> -Apply
+DRY git -C <main> worktree remove --force <dry:demo-slug>
+DRY git -C <main> worktree remove --force --force <dry:demo-slug>
+DRY <force-remove-dir <dry:demo-slug>>
+DRY git -C <main> worktree prune -v
+DRY git -C <main> branch -d worktree-demo-slug
+DRY git -C <main> push origin --delete worktree-demo-slug
+
+Closed from host: <host>
+Merged: worktree-demo-slug → master at <dry-sha>
+Lane: free (no LANDING mutex)
+Live: unknown
+Plan archived: demo-slug.md → archive/
+New plans opened: none
+Killed: 0 processes
+Memory reclaimed: 0 moved, 0 dup deleted, 0 diverged left for review
+Removed: worktree dir, local branch, remote branch
+/state delta: active-worktree row for demo-slug removed
+🟢 Safe to close · <hh:mm>
+--- origin refs ---
+refs/heads/master
+--- coord files ---
+coord.config.json
+docs/superpowers/plans/archive/.gitkeep
+docs/superpowers/plans/in-progress/.gitkeep
+docs/superpowers/plans/parked/.gitkeep
+docs/superpowers/plans/pending-approval/.gitkeep
+docs/superpowers/plans/ready/.gitkeep
+docs/superpowers/plans/waiting-blocked/.gitkeep
+docs/superpowers/plans/waiting-date/.gitkeep
+docs/superpowers/plans/waiting-grill/.gitkeep
+docs/superpowers/plans/waiting-operator/.gitkeep
+docs/superpowers/plans/waiting-trip/.gitkeep

@@ -1,0 +1,68 @@
+#!/usr/bin/env sh
+# Two-mode coordination guard: (1) coordination-file commits on worktree branches
+# must land on master via $MAIN / the coord tools (plan 205); (2) on NON-worktree
+# checkouts (master / detached) a HAND commit staging a coord path or wiki/** is
+# rejected — sanctioned writers commit with HUSKY=0 and never run this hook, and a
+# pathspec-less hand commit would sweep a peer's staged files (plan 1279 / the
+# plan-1256 incident; wiki route: scripts/wiki-commit.mjs). Override with
+# BOARD_GUARD_OVERRIDE=1 for the rare legitimate case.
+node scripts/check-coordination-branch.mjs || exit 1
+
+# Pathspec-commit guard (plan 3968, decision-table row 4): a pathspec commit
+# (`git commit -m … -- <file>`) runs against a TEMPORARY index, and lint-staged's post-task
+# "Updating Git index again" step then writes to BOTH that temp index and the checkout's
+# default index/lock (gitWorkflow.js:283-339, lint-staged v17) — an extra index write this
+# repo does not need, since `prettier --check .` already gates every push. Task 1's
+# reproduction matrix (17 trials on a byte-identical clone) never reproduced the shared-index
+# truncation this plan investigated in isolation, but removing the write is free regardless —
+# see scripts/hooks/pathspec-commit-prettier.mjs's own header for the full mechanism. For
+# THIS shape only, skip lint-staged and run `prettier --check` directly on the paths staged
+# in that temp index; an ordinary commit (this branch's exit 0) is completely unaffected.
+#
+# Runs BEFORE the lint-staged bin-shim-ensure block below (review finding 48a192): a pathspec
+# commit uses `node_modules/prettier/bin/prettier.cjs` directly and never touches lint-staged
+# at all, so it must never wait on — or be blocked by — a shim repair/probe that exists only
+# for the lint-staged fallback path.
+PCP_STATUS=0
+node scripts/hooks/pathspec-commit-prettier.mjs || PCP_STATUS=$?
+if [ "$PCP_STATUS" = 1 ]; then
+  exit 1
+fi
+if [ "$PCP_STATUS" = 3 ]; then
+  exit 0
+fi
+
+# Auto-format staged files with Prettier before every commit, so the
+# `prettier --check .` CI gate (pnpm lint) can never go red from drift.
+#
+# --no-stash (plan 646): lint-staged's DEFAULT backup stash ("Backed up original
+# state in git stash …") is what concurrent commits on the shared master checkout
+# race into orphaned `lint-staged automatic backup` entries (cleaned today only by
+# scripts/sweep-stray-stashes.mjs). With no backup stash there is nothing to orphan.
+# Verified (scripts/pre-commit-nostash.test.mjs): on lint-staged v17 --no-stash still
+# HIDES partially-staged changes (via patch, not the backup stash), so a partial
+# commit still records only the staged hunk (prettier-formatted) and leaves the
+# unstaged hunk untouched — no corruption, no sweep. The one trade-off: if a task
+# FAILS, --no-stash leaves modifications in the index instead of reverting them from
+# the backup; for `prettier --write` (idempotent, non-destructive) that is benign.
+# plan 1874 (reader axis of plan 1869): if a needed .bin shim is missing — a live install
+# rewriting .bin in place, or a torn store — wait out the install (bounded, via the install
+# lock's read-only status) and re-probe instead of dying "not recognized". Probes BOTH
+# lint-staged AND prettier (review finding: the lint-staged task itself shells out to prettier,
+# so a mid-rewrite prettier shim slipped past a lint-staged-only probe). The shell test is the
+# zero-spawn fast path (review finding: no Node boot on the ~always-healthy commit; a platform
+# without the extensionless shim form just falls through to the helper, which re-probes all
+# forms itself). --wait-sec 240 covers warm/moderate installs without stacking minutes onto an
+# interactive commit. FAIL-OPEN: only the helper's DELIBERATE exit 2 (persistent tear, one-line
+# heal already printed) blocks; a helper crash / missing file / lock-wait timeout proceeds to
+# lint-staged's own error. errexit-safe: `cmd || VAR=$?` never trips `sh -e` (the plan-336
+# footgun class).
+EBS_STATUS=0
+if [ -f scripts/ensure-bin-shims.mjs ] && { [ ! -e node_modules/.bin/lint-staged ] || [ ! -e node_modules/.bin/prettier ]; }; then
+  node scripts/ensure-bin-shims.mjs lint-staged prettier --wait-sec 240 || EBS_STATUS=$?
+fi
+if [ "$EBS_STATUS" = 2 ]; then
+  exit 1
+fi
+
+pnpm exec lint-staged --no-stash

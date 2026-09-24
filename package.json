@@ -1,0 +1,26 @@
+{
+  "name": "the-machinery",
+  "version": "0.1.0",
+  "private": false,
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.6.0"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "test": "node --test \"scripts/**/*.test.mjs\"",
+    "lint": "prettier --check .",
+    "format": "prettier --write .",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*": "prettier --ignore-unknown --write"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "husky": "9.1.7",
+    "lint-staged": "17.0.5",
+    "prettier": "3.8.3",
+    "acorn": "8.16.0"
+  }
+}

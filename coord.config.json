@@ -1,0 +1,6 @@
+{
+  "handoffLayout": "sessions",
+  "handoffDir": "docs/handoff",
+  "operatorSpendCeilingUsd": 5,
+  "plugins": {}
+}

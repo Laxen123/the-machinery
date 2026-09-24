@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+# EDIT-FROZEN DISPATCHER (plan 2576) — do NOT add gate logic here.
+#
+# The gate battery lives in scripts/hooks/pre-push.sh. This file exists only to
+# dispatch to it, because `.husky/**` is a path an unattended cloud drain can
+# never Edit/Write (the harness safetyCheck has no approver and the session
+# hangs until the window dies — plans 2197/2213). Keeping the logic under
+# scripts/ makes every future gate plan cloud-eligible; keeping THIS file
+# stable means it never needs another edit. Add gates to the runner instead.
+#
+# SOURCED, not exec'd: `.` runs the runner in THIS shell, so its `exit` codes,
+# its `trap … EXIT` cleanup and its single-read stdin capture keep the exact
+# semantics husky's `sh -e "$s"` wrapper had before the move.
+#
+# Resolved RELATIVE TO CWD, not from `$0`, and not via git:
+#   - git runs hooks from the top level of the working tree, and the runner
+#     already depends on that invariant in 42 places (`node scripts/*.mjs`),
+#     as does husky's own wrapper (`PATH="node_modules/.bin:$PATH"`). So this
+#     adds no assumption the battery did not already make.
+#   - `${0%/*}` is WRONG on Windows: Git Bash hands this hook a backslash path
+#     (C:\…\.husky\pre-push), which contains no `/`, so the expansion strips
+#     nothing and yields `<file>/../scripts/…`.
+#   - `git rev-parse --show-toplevel` is WRONG under test: scripts/pre-push-hook.test.mjs
+#     runs this hook with a FAKE git on PATH whose catch-all answers with exit 0
+#     and no output, resolving the runner to an empty path.
+. ./scripts/hooks/pre-push.sh
