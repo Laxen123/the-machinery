@@ -66,7 +66,7 @@ export function healLine(root, missing, _isMainCheckout = isMainCheckout) {
   return _isMainCheckout(root)
     ? `ensure-bin-shims: node_modules/.bin is missing [${list}] with NO install running — torn store. ` +
         `Heal: \`node scripts/install-main.mjs\` (>=600s timeout; NEVER a bare \`pnpm install\` on the ` +
-        `main checkout, and never --no-verify). Full rule: docs/runbooks/branch-hygiene.md § The THIRD lock.`
+        `main checkout, and never --no-verify). Full rule: docs/coord/worktrees.md § The install lock.`
     : `ensure-bin-shims: node_modules/.bin is missing [${list}] — this worktree has no (or a torn) ` +
         `node_modules. Heal: \`pnpm install\` in this worktree (lock-free; >=600s timeout).`;
 }

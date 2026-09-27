@@ -29,7 +29,12 @@ import {
   dropIfEmptyStash,
   budgetShortfall,
   STASH_RESERVE_MS,
+  measuredRebaseMs,
+  rebaseFitsBudget,
+  DEFAULT_REBASE_RESERVE_MS,
+  REBASE_SAMPLE_WINDOWS,
 } from './pre-yield-guard.mjs';
+import { readCoordOpJournal } from './coord-git.mjs';
 import { isJobOutput, jobOutputStashExcludesFor } from './main-checkout-allowlist.mjs';
 
 // plan 3962 P1: JOB_OUTPUT_PREFIXES is no longer a module-load constant (the leaf module
@@ -37,7 +42,7 @@ import { isJobOutput, jobOutputStashExcludesFor } from './main-checkout-allowlis
 // same vetapp prefix loadCoordConfig(repoRoot).jobOutputPrefixes reads off THIS repo's own
 // coord.config.json, mirrored here as a literal so the fixture repos below (which are not
 // vetapp checkouts) don't need a config file of their own.
-const TEST_JOB_OUTPUT_PREFIXES = ['backend/data/price-pipeline/'];
+const TEST_JOB_OUTPUT_PREFIXES = ['backend/data/data-pipeline/'];
 import { nulBytes as nul } from './corruption-guard.mjs';
 import { TRUNCATED_INDEX_HEAD_FLOOR } from './index-sanity.mjs';
 import { makeLargeRepo as buildLargeRepo, tornIndex } from '../test-helpers/torn-index-repo.mjs';
@@ -71,17 +76,17 @@ test('isDirty distinguishes clean from dirty porcelain', () => {
 
 test('isJobOutput recognises only the live pipeline data root', () => {
   assert.equal(
-    isJobOutput('backend/data/price-pipeline/batches/x/state.json', TEST_JOB_OUTPUT_PREFIXES),
+    isJobOutput('backend/data/data-pipeline/batches/x/state.json', TEST_JOB_OUTPUT_PREFIXES),
     true,
   );
   assert.equal(
     isJobOutput(
-      'backend\\data\\price-pipeline\\render-store\\x\\_meta.json',
+      'backend\\data\\data-pipeline\\render-store\\x\\_meta.json',
       TEST_JOB_OUTPUT_PREFIXES,
     ),
     true,
   );
-  assert.equal(isJobOutput('backend/scripts/price-pipeline/x.py', TEST_JOB_OUTPUT_PREFIXES), false);
+  assert.equal(isJobOutput('backend/scripts/data-pipeline/x.py', TEST_JOB_OUTPUT_PREFIXES), false);
 });
 
 test('job-output matching and stash exclusions derive from every shared prefix', () => {
@@ -282,12 +287,12 @@ test('dirtAgeMs: partitioned porcelain ignores a fresh pipeline write', () => {
   const r = makeRepo();
   try {
     const doc = 'docs/runbooks/x.md';
-    const output = 'backend/data/price-pipeline/batches/x/state.json';
+    const output = 'backend/data/data-pipeline/batches/x/state.json';
     mkdirSync(join(r.dir, 'docs/runbooks'), { recursive: true });
-    mkdirSync(join(r.dir, 'backend/data/price-pipeline/batches/x'), { recursive: true });
+    mkdirSync(join(r.dir, 'backend/data/data-pipeline/batches/x'), { recursive: true });
     writeFileSync(join(r.dir, doc), 'base\n');
-    writeFileSync(join(r.dir, 'backend/data/price-pipeline/.gitkeep'), 'tracked parent\n');
-    r.g('add', doc, 'backend/data/price-pipeline/.gitkeep');
+    writeFileSync(join(r.dir, 'backend/data/data-pipeline/.gitkeep'), 'tracked parent\n');
+    r.g('add', doc, 'backend/data/data-pipeline/.gitkeep');
     r.g('commit', '-qm', 'seed paths');
     writeFileSync(join(r.dir, doc), 'old doc\n');
     writeFileSync(join(r.dir, output), 'live\n');
@@ -400,10 +405,10 @@ test('commitSafe: commits idle doc dirt while leaving untracked pipeline store f
   const r = makeRepoWithRemote();
   try {
     const doc = 'docs/superpowers/plans/in-progress/977-x.md';
-    const store = 'backend/data/price-pipeline/render-store/clinic-1/playwright/abc';
-    mkdirSync(join(r.dir, 'backend/data/price-pipeline'), { recursive: true });
-    writeFileSync(join(r.dir, 'backend/data/price-pipeline/.gitkeep'), 'tracked parent\n');
-    r.g('add', 'backend/data/price-pipeline/.gitkeep');
+    const store = 'backend/data/data-pipeline/render-store/rec-1/playwright/abc';
+    mkdirSync(join(r.dir, 'backend/data/data-pipeline'), { recursive: true });
+    writeFileSync(join(r.dir, 'backend/data/data-pipeline/.gitkeep'), 'tracked parent\n');
+    r.g('add', 'backend/data/data-pipeline/.gitkeep');
     r.g('commit', '-qm', 'seed pipeline parent');
     r.g('push', '-q', 'origin', 'master');
     mkdirSync(join(r.dir, store), { recursive: true });
@@ -423,7 +428,7 @@ test('commitSafe: commits idle doc dirt while leaving untracked pipeline store f
     assert.ok(existsSync(join(r.dir, store, '_meta.json')));
     assert.ok(existsSync(join(r.dir, store, 'html.html.gz')));
     const status = r.g('status', '--porcelain');
-    assert.match(status, /\?\? backend\/data\/price-pipeline\//);
+    assert.match(status, /\?\? backend\/data\/data-pipeline\//);
     assert.doesNotMatch(status, /977-x\.md/);
     assert.equal(r.g('stash', 'list'), '');
   } finally {
@@ -434,10 +439,10 @@ test('commitSafe: commits idle doc dirt while leaving untracked pipeline store f
 test('commitSafe: pipeline-output-only dirt is left in place without a stash', () => {
   const r = makeRepoWithRemote();
   try {
-    const store = 'backend/data/price-pipeline/render-store/clinic-1/playwright/abc';
-    mkdirSync(join(r.dir, 'backend/data/price-pipeline'), { recursive: true });
-    writeFileSync(join(r.dir, 'backend/data/price-pipeline/.gitkeep'), 'tracked parent\n');
-    r.g('add', 'backend/data/price-pipeline/.gitkeep');
+    const store = 'backend/data/data-pipeline/render-store/rec-1/playwright/abc';
+    mkdirSync(join(r.dir, 'backend/data/data-pipeline'), { recursive: true });
+    writeFileSync(join(r.dir, 'backend/data/data-pipeline/.gitkeep'), 'tracked parent\n');
+    r.g('add', 'backend/data/data-pipeline/.gitkeep');
     r.g('commit', '-qm', 'seed pipeline parent');
     r.g('push', '-q', 'origin', 'master');
     mkdirSync(join(r.dir, store), { recursive: true });
@@ -453,7 +458,7 @@ test('commitSafe: pipeline-output-only dirt is left in place without a stash', (
     });
 
     assert.equal(res.skipped, 'job-output-only');
-    assert.match(r.g('status', '--porcelain'), /\?\? backend\/data\/price-pipeline\//);
+    assert.match(r.g('status', '--porcelain'), /\?\? backend\/data\/data-pipeline\//);
     assert.equal(r.g('stash', 'list'), '');
   } finally {
     r.cleanup();
@@ -463,9 +468,9 @@ test('commitSafe: pipeline-output-only dirt is left in place without a stash', (
 test('stash mode: parks code dirt but leaves a tracked pipeline arm modification on disk', () => {
   const r = makeRepo();
   try {
-    const arm = 'backend/data/price-pipeline/llm-runs/gpt-sol/clinic-1.json';
+    const arm = 'backend/data/data-pipeline/llm-runs/gpt-sol/rec-1.json';
     const code = 'scripts/x.mjs';
-    mkdirSync(join(r.dir, 'backend/data/price-pipeline/llm-runs/gpt-sol'), { recursive: true });
+    mkdirSync(join(r.dir, 'backend/data/data-pipeline/llm-runs/gpt-sol'), { recursive: true });
     mkdirSync(join(r.dir, 'scripts'), { recursive: true });
     writeFileSync(join(r.dir, arm), '{"base":true}\n');
     writeFileSync(join(r.dir, code), 'export const x = 1;\n');
@@ -478,10 +483,10 @@ test('stash mode: parks code dirt but leaves a tracked pipeline arm modification
 
     assert.equal(res.mode, 'stash');
     assert.equal(readFileSync(join(r.dir, arm), 'utf8'), '{"live":true}\n');
-    assert.match(r.g('status', '--porcelain'), /backend\/data\/price-pipeline\/llm-runs/);
+    assert.match(r.g('status', '--porcelain'), /backend\/data\/data-pipeline\/llm-runs/);
     const stashDiff = r.g('stash', 'show', '-p');
     assert.match(stashDiff, /scripts\/x\.mjs/);
-    assert.doesNotMatch(stashDiff, /backend\/data\/price-pipeline/);
+    assert.doesNotMatch(stashDiff, /backend\/data\/data-pipeline/);
   } finally {
     r.cleanup();
   }
@@ -1734,6 +1739,121 @@ test('guard --budget-ms: an exhausted budget also blocks the commitSafe commit+p
     assert.equal(r.g('stash', 'list').trim(), '', 'nothing stashed either');
     assert.match(r.g('status', '--porcelain'), /977-x\.md/, 'the doc dirt is still there');
     assert.ok(logs.some((l) => l.includes('park skipped: budget')));
+  } finally {
+    r.cleanup();
+  }
+});
+
+// ── plan 4237 T3: never start a rebase the Stop hook cannot finish ───────────────────────────
+
+test('plan 4237 T3: measuredRebaseMs — slowest recent closed window on this host, else the default', () => {
+  const at = (s) => new Date(Date.UTC(2026, 8, 26, 9, 0, s)).toISOString();
+  const w = (token, s0, s1, host = 'h') => [
+    { tool: 'push-rebase', token, phase: 'start', ts: at(s0), host },
+    { tool: 'push-rebase', token, phase: 'done', ts: at(s1), host },
+  ];
+  assert.equal(measuredRebaseMs([], { host: 'h' }), DEFAULT_REBASE_RESERVE_MS);
+  assert.equal(measuredRebaseMs([...w('a', 0, 4), ...w('b', 10, 22)], { host: 'h' }), 12_000);
+  // an OPEN window (killed rebase, no done) and another host's windows do not count
+  const open = { tool: 'push-rebase', token: 'k', phase: 'start', ts: at(30), host: 'h' };
+  assert.equal(
+    measuredRebaseMs([...w('a', 0, 4), open, ...w('x', 0, 50, 'other')], { host: 'h' }),
+    4_000,
+  );
+  // only the most recent REBASE_SAMPLE_WINDOWS windows are sampled
+  const many = [...w('old', 0, 59)];
+  for (let i = 0; i < REBASE_SAMPLE_WINDOWS; i++) many.push(...w(`n${i}`, 0, 2));
+  assert.equal(measuredRebaseMs(many, { host: 'h' }), 2_000);
+});
+
+test('plan 4237 T3: rebaseFitsBudget — unlimited without a budget; elapsed + rebase + reserve must fit', () => {
+  assert.equal(rebaseFitsBudget({ budgetMs: 0, startMs: 0, nowMs: 1e12 }), true);
+  const base = { budgetMs: 60_000, startMs: 0, rebaseMs: 30_000 };
+  assert.equal(rebaseFitsBudget({ ...base, nowMs: 60_000 - 30_000 - STASH_RESERVE_MS }), true);
+  assert.equal(rebaseFitsBudget({ ...base, nowMs: 60_000 - 30_000 - STASH_RESERVE_MS + 1 }), false);
+});
+
+// A sibling clone pushes first, so the guard's own commit hits a non-ff and needs the rebase.
+function moveOrigin(r) {
+  const bare = r.g('remote', 'get-url', 'origin').trim();
+  const sib = mkdtempSync(join(tmpdir(), 'preyield-sib-'));
+  execFileSync('git', ['clone', '-q', bare, sib]);
+  const gs = (...a) => execFileSync('git', ['-C', sib, ...a], { encoding: 'utf8' });
+  gs('config', 'user.email', 's@s.s');
+  gs('config', 'user.name', 'S');
+  writeFileSync(join(sib, 'sib.txt'), 'sibling\n');
+  gs('add', 'sib.txt');
+  gs('commit', '-qm', 'sibling');
+  gs('push', '-q', 'origin', 'master');
+  const tip = gs('rev-parse', 'HEAD').trim();
+  rmSync(sib, { recursive: true, force: true });
+  return { bare, tip };
+}
+
+test('plan 4237 T3: a budget below the rebase figure commits but opens NO rebase — the push is left to heal-main', () => {
+  const r = makeRepoWithRemote();
+  try {
+    const doc = 'docs/superpowers/plans/in-progress/977-x.md';
+    const { bare, tip } = moveOrigin(r);
+    writeFileSync(join(r.dir, doc), 'base\nidle doc edit\n');
+    const logs = [];
+    // 1 h of budget clears the plan-4026 commit gate on any box; a 10 h rebase figure cannot fit.
+    const res = guard(r.dir, {
+      slug: 'stop-hook',
+      commitSafe: true,
+      budgetMs: 3_600_000,
+      startMs: Date.now(),
+      rebaseReserveMs: 36_000_000,
+      log: (l) => logs.push(l),
+    });
+    assert.equal(res.mode, 'commit-push-deferred');
+    assert.equal(res.protected, true);
+    assert.equal(r.g('status', '--porcelain').trim(), '', 'the doc is committed, tree clean');
+    assert.match(r.g('log', '-1', '--format=%s'), /auto-heal: commit idle commit-safe dirt/);
+    assert.equal(r.g('rev-parse', '--abbrev-ref', 'HEAD').trim(), 'master', 'never detached');
+    assert.equal(
+      execFileSync('git', ['-C', bare, 'rev-parse', 'master'], { encoding: 'utf8' }).trim(),
+      tip,
+      'origin untouched — the local commit waits for heal-main',
+    );
+    assert.equal(
+      readCoordOpJournal(r.dir).some((e) => e.tool === 'push-rebase'),
+      false,
+      'no push-rebase window was ever opened',
+    );
+    assert.ok(logs.some((l) => l.includes('left to the next heal-main pass')));
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('plan 4237 T3: with the budget to spare the non-ff commit+push rebases and lands as today', () => {
+  const r = makeRepoWithRemote();
+  try {
+    const doc = 'docs/superpowers/plans/in-progress/977-x.md';
+    const { bare, tip } = moveOrigin(r);
+    writeFileSync(join(r.dir, doc), 'base\nidle doc edit\n');
+    const res = guard(r.dir, {
+      slug: 'stop-hook',
+      commitSafe: true,
+      budgetMs: 36_000_000,
+      startMs: Date.now(),
+      rebaseReserveMs: 1_000,
+      log: () => {},
+    });
+    assert.equal(res.mode, 'commit-safe');
+    const originLog = execFileSync('git', ['-C', bare, 'log', '--format=%s', 'master'], {
+      encoding: 'utf8',
+    });
+    assert.match(originLog, /auto-heal: commit idle commit-safe dirt/);
+    assert.match(originLog, /sibling/);
+    assert.notEqual(
+      execFileSync('git', ['-C', bare, 'rev-parse', 'master'], { encoding: 'utf8' }).trim(),
+      tip,
+    );
+    assert.ok(
+      readCoordOpJournal(r.dir).some((e) => e.tool === 'push-rebase' && e.phase === 'done'),
+    );
   } finally {
     r.cleanup();
   }

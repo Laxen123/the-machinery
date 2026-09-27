@@ -86,7 +86,7 @@
 // Kill-switches (both enforced in scripts/hooks/pre-push.sh, and `check` honors the first here too as
 // defense in depth): PREPUSH_NO_BATTERY_CACHE=1 disables the cache entirely;
 // PREPUSH_FULL_BATTERY=1 forces a full run that neither reads nor writes the cache.
-// Runbook: docs/runbooks/battery-pass-cache.md
+// Runbook: docs/coord/land-spine.md § The once-per-land proof cache
 
 import { hostname } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -276,14 +276,9 @@ function escapeRegExpLiteral(s) {
 // path literals resolve inside fixtures, and scanning closures makes attribution useless
 // (measured: 89/146 tests' closures mention 'wiki' in prose/error strings).
 // One quoted-string-literal alternative for a path segment — single, double, OR backtick quotes
-// (plan 4071 review finding e5de0f/733b4e). The single-segment path below deliberately does NOT
-// use this: it goes through REAL_TREE_JOIN_IDIOMS directly, which is single-quote-only and is "the
-// system's enforced definition of a real-tree read" (see the module comment above) — N=1 must stay
-// byte-identical to that shared definition, so nothing here widens it. This helper exists only for
-// N > 1, where REAL_TREE_JOIN_IDIOMS has no shape to reuse in the first place (it captures just the
-// first quoted argument), so there is no existing single-quote-only DEFINITION to stay identical
-// to — only a single-quote-only ACCIDENT of how the first cut of this branch was written, which is
-// what this generalization removes.
+// (plan 4071 review finding e5de0f/733b4e). The single-segment path below uses the shared
+// REAL_TREE_JOIN_IDIOMS, which now admits the same three static quote styles (plan 4228).
+// This helper remains for N > 1, where the shared idioms capture only the first argument.
 function quotedSegmentAlt(seg) {
   const esc = escapeRegExpLiteral(seg);
   return `(?:'${esc}'|"${esc}"|\`${esc}\`)`;
@@ -295,10 +290,8 @@ function quotedSegmentAlt(seg) {
 // select-battery-tests.mjs, is the one place that grammar is defined, so REAL_TREE_JOIN_IDIOMS
 // (N=1) and this nested matcher (N>1) are both built from it and a future root alias only ever
 // needs to change there (plan 4071 review round 3). The `..` traversal token goes through
-// `quotedSegmentAlt` too, same as every path segment, so it is matched in any quote style —
-// REAL_TREE_JOIN_IDIOMS itself stays single-quote-only by design (see its own comment), but this
-// generalized matcher has no such single-quote accident to preserve (plan 4071 review round 3,
-// findings 555ec4/8718c1: a hard-coded `'\.\.'` literal missed a double- or backtick-quoted `..`).
+// `quotedSegmentAlt` too, same as every path segment, so it is matched in any quote style
+// (plan 4071 review round 3, findings 555ec4/8718c1).
 function joinIdiomsForSegments(parts) {
   const partsRx = parts.map(quotedSegmentAlt).join('\\s*,\\s*');
   const traversalRx = quotedSegmentAlt('..');
@@ -370,7 +363,7 @@ export function reachableScopedPrefixes(
 // but every coord/infra land moves SOME file under `scripts/`, and the landing queue is
 // coord-heavy, so the population whose batteries this cache would help most defeats each other's
 // hits (122 of 164 measured oid-moved misses, `.husky` + `scripts` combined — plan 2327 re-measure,
-// docs/runbooks/battery-pass-cache.md § Measured). This closure lets the key drop to the
+// docs/coord/land-spine.md § The once-per-land proof cache). This closure lets the key drop to the
 // INDIVIDUAL `scripts/<name>` files the selected tests can actually reach, so an unrelated
 // `scripts/` edit elsewhere in the tree no longer moves the key.
 //
@@ -384,7 +377,7 @@ export function reachableScopedPrefixes(
 // the `const CLI = join(HERE, 'sibling.mjs')` spawn idiom that is this repo's dominant one.
 //
 // THE CLOSURE IS WALKED PERMISSIVELY HERE (`allLiterals`), unlike the selector's. The selector's
-// spawn gate deliberately DROPS a `scripts/x.mjs` / `join(HERE, 'x.mjs')` reference that sits on a
+// spawn gate deliberately DROPS a `scripts/<name>.mjs` / `join(HERE, 'x.mjs')` reference that sits on a
 // line with no child-process call, because library modules name siblings in error strings and
 // counting those welds the graph into one blob. Dropping an edge is free for selection and
 // UNSOUND for the key: `const CLI = join(HERE, 'build-index.mjs')` (done-worktree.mjs) has no
@@ -706,7 +699,7 @@ export function computeKey({
 // `git merge-base origin/master HEAD` again — this is what lets `record` key off the SAME
 // baseline `check` minted for this exact battery run, immune to a sibling session's `git fetch`
 // moving `origin/master` in between (the RECORD-REFUSED reason=key-drift leak, measured 8/218
-// records over 3.1 days — docs/runbooks/battery-pass-cache.md § Measured plan 2327). Absent (the
+// records over 3.1 days — docs/coord/land-spine.md § The once-per-land proof cache; plan 2327 measurement). Absent (the
 // default) means "resolve it fresh", i.e. exactly today's behavior — this parameter can only PIN
 // a value, never suppress or alter the resolution any existing caller relies on.
 export function deriveCanonicalSelection(opts = {}) {

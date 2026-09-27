@@ -15,6 +15,7 @@ import {
   renameSync,
   symlinkSync,
   unlinkSync,
+  statSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
@@ -33,6 +34,8 @@ import {
   ffMasterFromOrigin,
   isForeignDirtRefusal,
   pushMasterWithRebase,
+  replayMismatches,
+  LOCK_FREE_READ_ENV,
   coordWrite,
   coordErrorReason,
   assertPushReachedOrigin,
@@ -137,13 +140,13 @@ import { injectTransientOnFirst as injectTransientGit } from '../test-helpers/in
 
 const COORD_CHECKOUT_EXCLUDED_TOP_LEVEL = ['backend', 'frontend'];
 const PLAN_WORKTREE_EXCLUDED_PATHS = [
-  'backend/data/price-pipeline/render-store',
-  'backend/data/price-pipeline/render-archive',
-  'backend/data/price-pipeline/render-fingerprints',
-  'backend/data/price-pipeline/batches',
-  'backend/data/price-pipeline/prompt-bench',
-  'backend/data/price-pipeline/llm-runs',
-  'backend/data/price-pipeline/page-extractions',
+  'backend/data/data-pipeline/render-store',
+  'backend/data/data-pipeline/render-archive',
+  'backend/data/data-pipeline/render-fingerprints',
+  'backend/data/data-pipeline/batches',
+  'backend/data/data-pipeline/prompt-bench',
+  'backend/data/data-pipeline/llm-runs',
+  'backend/data/data-pipeline/page-extractions',
 ];
 
 // ── plan 3517: deadSeedVerdict ──
@@ -4203,6 +4206,163 @@ test('F-002: pushMasterWithRebase journals an open push-rebase window around the
   }
 });
 
+// ── plan 4237 T0/T1: the rebase-retry replay guard ───────────────────────────────────────────
+// The 2026-09-26 incident: heal-main's rebase-retry picked two local commits onto a moved
+// origin/master, and between pick 1 and pick 2 the INDEX was rewritten back to the pre-rebase
+// tip's state. Git's two-way checkout keeps an index entry at every path the pick does not
+// change, so pick 2 recorded the pre-rebase TREE (c8c55d9e704): 2 changed paths became 30, every
+// path the skipped upstream commits had touched rolled back, and it was pushed.
+//
+// T0 (session decision): the real concurrent-`git status` race did NOT reproduce in 25 bounded
+// trials (24 of them died on index.lock instead), so the writer is not proven; the clobber is
+// SIMULATED deterministically — a post-commit hook (the sequencer runs it after every pick) runs
+// `git read-tree <pre-rebase tip>` once, which is exactly the state the incident's pick 2 read.
+function makeReplayClobberFixture({ clobber = true } = {}) {
+  const { dir, origin, cleanup } = makeBareOrigin();
+  const g = (d, ...a) => execFileSync('git', ['-C', d, ...a], { encoding: 'utf8' }).trim();
+  // the local commits: pick 1 changes one path (the runbook note), pick 2 changes TWO (the
+  // stop-hook's two doc files) — the incident's shape.
+  writeFileSync(join(dir, 'runbook.md'), 'note\n');
+  g(dir, 'add', 'runbook.md');
+  g(dir, 'commit', '-qm', 'local runbook note');
+  writeFileSync(join(dir, 'doc-a.md'), 'a\n');
+  writeFileSync(join(dir, 'doc-b.md'), 'b\n');
+  g(dir, 'add', 'doc-a.md', 'doc-b.md');
+  g(dir, 'commit', '-qm', 'auto-heal: commit idle commit-safe dirt');
+  const preTip = g(dir, 'rev-parse', 'HEAD');
+  // origin moves: a sibling touches 28 OTHER paths (so the clobbered pick reads as 30 paths)
+  const sib = cloneOf(origin);
+  for (let i = 0; i < 28; i++) writeFileSync(join(sib, `sib-${i}.txt`), `${i}\n`);
+  g(sib, 'add', '-A');
+  g(sib, 'commit', '-qm', 'sibling lands 28 paths');
+  g(sib, 'push', '-q', 'origin', 'master');
+  const sibTip = g(sib, 'rev-parse', 'HEAD');
+  if (clobber) {
+    const hooks = join(dirname(origin), 'clobber-hooks');
+    mkdirSync(hooks, { recursive: true });
+    const fired = join(hooks, 'fired').replace(/\\/g, '/');
+    writeFileSync(
+      join(hooks, 'post-commit'),
+      `#!/bin/sh\nif [ ! -f "${fired}" ]; then touch "${fired}"; git read-tree ${preTip}; fi\n`,
+      { mode: 0o755 },
+    );
+    g(dir, 'config', 'core.hooksPath', hooks.replace(/\\/g, '/'));
+  }
+  return { dir, origin, preTip, sibTip, g, cleanup };
+}
+
+test('plan 4237 T1: a rebase pick carrying a clobbered index is REFUSED — no push, master back at the pre-rebase tip, journaled', () => {
+  const f = makeReplayClobberFixture();
+  try {
+    let thrown;
+    assert.throws(
+      () => pushMasterWithRebase(f.dir),
+      (e) => ((thrown = e), true),
+    );
+    assert.equal(thrown.code, 'PUSH_REBASE_REPLAY_MISMATCH');
+    assert.equal(isNonFastForward(thrown), false, 'must not read as a retryable non-ff');
+    assert.equal(
+      f.g(f.origin, 'rev-parse', 'master'),
+      f.sibTip,
+      'origin must still sit at the sibling tip — the rollback commit never reaches it',
+    );
+    assert.equal(
+      f.g(f.dir, 'rev-parse', 'master'),
+      f.preTip,
+      'local master reset to the pre-rebase tip (a later plain push must not ff the bad commit)',
+    );
+    assert.equal(f.g(f.dir, 'rev-parse', '--abbrev-ref', 'HEAD'), 'master', 'HEAD attached');
+    const hit = readCoordOpJournal(f.dir).find((e) => e.tool === 'push-rebase-replay-mismatch');
+    assert.ok(hit, 'a push-rebase-replay-mismatch coord-op line is journaled');
+    assert.equal(hit.originalPaths.length, 2, 'the original commit changed 2 paths');
+    assert.equal(hit.rewrittenPaths.length, 30, 'the clobbered rewrite reads as 30 paths');
+    assert.ok(hit.extraPaths.includes('sib-0.txt'), 'the rolled-back upstream paths are named');
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('plan 4237 T1: a clean two-pick rebase passes the guard and pushes as before', () => {
+  const f = makeReplayClobberFixture({ clobber: false });
+  try {
+    pushMasterWithRebase(f.dir);
+    const tip = f.g(f.origin, 'rev-parse', 'master');
+    assert.notEqual(tip, f.sibTip, 'our rebased commits reached origin');
+    const files = f.g(f.origin, 'ls-tree', '--name-only', 'master').split('\n');
+    for (const p of ['sib-0.txt', 'sib-27.txt', 'runbook.md', 'doc-a.md', 'doc-b.md'])
+      assert.ok(files.includes(p), `origin tree keeps ${p}`);
+    assert.equal(
+      readCoordOpJournal(f.dir).some((e) => e.tool === 'push-rebase-replay-mismatch'),
+      false,
+    );
+  } finally {
+    f.cleanup();
+  }
+});
+
+test('plan 4237 T1: replayMismatches — patch-id equality accepts, a path SUBSET accepts, an extra path refuses', () => {
+  const o = (key, paths, patchId) => ({ sha: `o-${key}`, key, paths, patchId });
+  const r = (key, paths, patchId) => ({ sha: `r-${key}`, key, paths, patchId });
+  // identical change (same patch-id) → accepted even if the path lists were somehow different
+  assert.deepEqual(replayMismatches([o('k1', ['a'], 'P')], [r('k1', ['a'], 'P')]), []);
+  // context moved (patch-id differs) but same paths → accepted
+  assert.deepEqual(replayMismatches([o('k1', ['a', 'b'], 'P')], [r('k1', ['a', 'b'], 'Q')]), []);
+  // part of the change already upstream → the rewrite touches a SUBSET → accepted
+  assert.deepEqual(replayMismatches([o('k1', ['a', 'b'], 'P')], [r('k1', ['a'], 'Q')]), []);
+  // an original the rebase dropped (already upstream / became empty) → accepted
+  assert.deepEqual(
+    replayMismatches([o('k1', ['a'], 'P'), o('k2', ['b'], 'R')], [r('k2', ['b'], 'R')]),
+    [],
+  );
+  // extra paths → refused, naming them
+  const bad = replayMismatches([o('k1', ['a'], 'P')], [r('k1', ['a', 'x', 'y'], 'Q')]);
+  assert.equal(bad.length, 1);
+  assert.deepEqual(bad[0].extraPaths, ['x', 'y']);
+  // a rewritten commit with no original at all → refused
+  const orphan = replayMismatches([o('k1', ['a'], 'P')], [r('zz', ['a'], 'P')]);
+  assert.equal(orphan.length, 1);
+  assert.equal(orphan[0].reason, 'no-original');
+});
+
+// plan 4237 T2: LOCK_FREE_READ_ENV must actually reach the git child through the coord git()
+// seam (gitRaw's env composition strips repo selectors and scrubs CHILD_ENV_STRIP — a layer
+// that silently dropped GIT_OPTIONAL_LOCKS would leave every MAIN poller writing the index back).
+// Observable: a `git status` over stale stat info REWRITES the index (optional-lock refresh);
+// under LOCK_FREE_READ_ENV it must not.
+test('plan 4237 T2: a status read with LOCK_FREE_READ_ENV never writes the index back; a plain one does', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cg-lockfree-'));
+  try {
+    const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+    g('init', '-q');
+    g('config', 'user.email', 'x@x');
+    g('config', 'user.name', 'x');
+    writeFileSync(join(dir, 'a.txt'), 'a\n');
+    g('add', 'a.txt');
+    g('commit', '-qm', 'a');
+    const idx = join(dir, '.git', 'index');
+    const makeStatStale = () => {
+      const old = new Date(Date.now() - 3_600_000);
+      utimesSync(idx, old, old);
+      const newer = new Date(Date.now() - 60_000);
+      utimesSync(join(dir, 'a.txt'), newer, newer); // stat info changed, content unchanged
+      return statSync(idx).mtimeMs;
+    };
+    let before = makeStatStale();
+    git(dir, ['status', '--porcelain'], { env: LOCK_FREE_READ_ENV });
+    assert.equal(statSync(idx).mtimeMs, before, 'the lock-free read left the index untouched');
+    before = makeStatStale();
+    git(dir, ['status', '--porcelain']);
+    assert.notEqual(
+      statSync(idx).mtimeMs,
+      before,
+      'control: a plain status does refresh + write the index (else this test proves nothing)',
+    );
+    assert.deepEqual({ ...LOCK_FREE_READ_ENV }, { GIT_OPTIONAL_LOCKS: '0' });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── plan 971: COORD_MAIN_DIR override + detached-worktree push (HEAD:master) ──
 // done-worktree runs its post-merge bookkeeping in an EPHEMERAL detached worktree off
 // origin/master so foreign dirt on the shared main checkout can never block a land.
@@ -5561,7 +5721,7 @@ function makeConeRepo() {
 
 test('topLevelSegment: first path segment, separator- and prefix-tolerant', () => {
   assert.equal(topLevelSegment('docs/handoff/board.md'), 'docs');
-  assert.equal(topLevelSegment('backend\\data\\clinic-001.json'), 'backend');
+  assert.equal(topLevelSegment('backend\\data\\rec-001.json'), 'backend');
   assert.equal(topLevelSegment('./wiki/index.md'), 'wiki');
   assert.equal(topLevelSegment('/output/reports/r.md'), 'output');
   // A bare root-level file is its own segment -- cone mode always materialises those.
@@ -5573,7 +5733,7 @@ test('assertCoordPathInCone: admits coordination trees, refuses the excluded app
     assert.doesNotThrow(() =>
       assertCoordPathInCone(ok, { excludes: COORD_CHECKOUT_EXCLUDED_TOP_LEVEL }),
     );
-  for (const bad of ['backend/data/seed/clinic-001.json', 'frontend/src/app/page.tsx'])
+  for (const bad of ['backend/data/seed/rec-001.json', 'frontend/src/app/page.tsx'])
     assert.throws(
       () =>
         assertCoordPathInCone(bad, {
@@ -6038,8 +6198,8 @@ function makeNestedConeRepo() {
   put('backend/src/index.ts', '// src\n');
   put('backend/data/README.md', '# data\n');
   put('backend/data/other-study/rows.json', '[]\n');
-  for (let i = 0; i < 30; i++) put(`backend/data/price-pipeline/render-store/r${i}.json`, `{}\n`);
-  put('backend/data/price-pipeline/observations/o.jsonl', '{}\n');
+  for (let i = 0; i < 30; i++) put(`backend/data/data-pipeline/render-store/r${i}.json`, `{}\n`);
+  put('backend/data/data-pipeline/observations/o.jsonl', '{}\n');
   repo.g(seed, 'add', '-A');
   repo.g(seed, 'commit', '-qm', 'nested');
   repo.g(seed, 'push', '-q', 'origin', 'master');
@@ -6076,12 +6236,12 @@ test('sparseConeDirs: a NESTED exclude becomes the sibling set at every ancestor
     // ... the ancestors themselves NOT as a whole (that would drag the excluded path in) ...
     assert.ok(!dirs.includes('backend'));
     assert.ok(!dirs.includes('backend/data'));
-    assert.ok(!dirs.includes('backend/data/price-pipeline'));
+    assert.ok(!dirs.includes('backend/data/data-pipeline'));
     for (const ex of PLAN_WORKTREE_EXCLUDED_PATHS) assert.ok(!dirs.includes(ex), ex);
     // ... and the siblings at each ancestor level instead.
     assert.ok(dirs.includes('backend/src'));
     assert.ok(dirs.includes('backend/data/other-study'));
-    assert.ok(dirs.includes('backend/data/price-pipeline/observations'));
+    assert.ok(dirs.includes('backend/data/data-pipeline/observations'));
     // A trailing slash or a Windows separator on the exclude spells the same path.
     assert.deepEqual(
       sparseConeDirs(repo.main, {
@@ -6129,7 +6289,7 @@ test('sparseConeDirs: an EMPTY exclude list means DENSE (null), never a cone of 
     assert.deepEqual(readSparseState(wt), { enabled: false, dirs: [] });
     // The worktree still populates fully -- dense, not stuck --no-checkout.
     repo.g(wt, 'checkout');
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
   } finally {
     repo.cleanup();
   }
@@ -6162,7 +6322,7 @@ test('ensurePlanSparseCheckout: an empty exclude list disables an ALREADY-sparse
     const admin = repo.g(wt, 'rev-parse', '--absolute-git-dir').trim();
     assert.ok(!existsSync(join(admin, PLAN_SPARSE_MARKER)), 'stale marker removed');
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the previously excluded store is materialised',
     );
     assert.equal(repo.g(wt, 'status', '--porcelain').trim(), '');
@@ -6225,17 +6385,17 @@ test('ensurePlanSparseCheckout + widenPlanWorktree: the excluded folder stays of
       'backend/data/README.md',
       'backend/data/other-study/rows.json',
       // The excluded folder's PARENT stays: its contract files and small siblings are on disk.
-      'backend/data/price-pipeline/observations/o.jsonl',
+      'backend/data/data-pipeline/observations/o.jsonl',
     ])
       assert.ok(existsSync(join(wt, kept)), `expected ${kept} on disk`);
     assert.ok(
-      !existsSync(join(wt, 'backend/data/price-pipeline/render-store')),
+      !existsSync(join(wt, 'backend/data/data-pipeline/render-store')),
       'excluded store must be absent',
     );
     // Still fully in the index and the commit -- only which blobs reach disk changes.
     assert.match(
-      repo.g(wt, 'ls-files', '-v', '--', 'backend/data/price-pipeline/render-store'),
-      /^S backend\/data\/price-pipeline\/render-store\/r0\.json/m,
+      repo.g(wt, 'ls-files', '-v', '--', 'backend/data/data-pipeline/render-store'),
+      /^S backend\/data\/data-pipeline\/render-store\/r0\.json/m,
     );
     assert.equal(repo.g(wt, 'status', '--porcelain').trim(), '');
     // Steady state is a no-op; the marker carries the exact list and git's own list agrees.
@@ -6262,15 +6422,15 @@ test('ensurePlanSparseCheckout + widenPlanWorktree: the excluded folder stays of
     // later merge brought in under an excluded ancestor comes in too), the config flips, the
     // worktree reads dense from here on.
     assert.equal(widenPlanWorktree(wt), true);
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/observations/o.jsonl')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/observations/o.jsonl')));
     assert.deepEqual(readSparseState(wt), { enabled: false, dirs: [] });
     assert.equal(planWorktreeIsSparse(wt), false);
     assert.ok(!existsSync(join(admin, PLAN_SPARSE_MARKER)));
     assert.equal(widenPlanWorktree(wt), false, 'idempotent: a dense worktree is a no-op');
     assert.equal(repo.g(wt, 'status', '--porcelain').trim(), '');
     assert.equal(
-      repo.g(wt, 'ls-files', '-v', '--', 'backend/data/price-pipeline/render-store').match(/^S /gm),
+      repo.g(wt, 'ls-files', '-v', '--', 'backend/data/data-pipeline/render-store').match(/^S /gm),
       null,
       'nothing is skip-worktree after a widen',
     );
@@ -6329,7 +6489,7 @@ test('planWorktreeIsSparse recognises a marker from an EARLIER generation -- a P
     );
     assert.deepEqual(readSparseState(wt), { enabled: false, dirs: [] });
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the heavy store actually materialised',
     );
     assert.ok(!existsSync(older), 'the widen clears whichever generation it found');
@@ -6367,7 +6527,7 @@ test('ensurePlanSparseCheckout: a marker that cannot be written forces the cut D
     assert.deepEqual(readSparseState(wt), { enabled: false, dirs: [] }, 'forced dense');
     assert.equal(planWorktreeIsSparse(wt), false);
     repo.g(wt, 'checkout');
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     // a later healthy call applies the cone and writes the marker
     assert.equal(ensurePlanSparseCheckout(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }), true);
     assert.equal(planWorktreeIsSparse(wt), true);
@@ -6419,7 +6579,7 @@ test('widenPlanWorktree / planWorktreeIsSparse: a dense plan worktree (no marker
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-dense1', wt, 'origin/master');
     assert.equal(planWorktreeIsSparse(wt), false);
     assert.equal(widenPlanWorktree(wt), false);
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     // The coord checkout is NOT a plan worktree either, whatever its own cone says.
     const cdir = resolveCoordCheckout(repo.main, {});
     assert.equal(planWorktreeIsSparse(cdir), false);
@@ -6509,7 +6669,7 @@ test('sparseConeDirs: a nested ls-tree that fails yields NO cone (null), never a
     assert.deepEqual(readSparseState(wt), { enabled: false, dirs: [] });
     repo.g(wt, 'checkout');
     assert.ok(existsSync(join(wt, 'backend/src/index.ts')));
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
   } finally {
     repo.cleanup();
   }
@@ -6526,7 +6686,7 @@ test('narrowPlanWorktree: a DENSE worktree that never carried a cone is narrowed
     // the same shape as the existing "dense plan worktree (no marker)" test above.
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-dense1', wt, 'origin/master');
     assert.equal(planWorktreeIsSparse(wt), false, 'dense: no marker, no cone applied yet');
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
 
     const result = narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS });
     assert.deepEqual(result, {
@@ -6542,7 +6702,7 @@ test('narrowPlanWorktree: a DENSE worktree that never carried a cone is narrowed
       'backend/src/index.ts',
       'backend/data/README.md',
       'backend/data/other-study/rows.json',
-      'backend/data/price-pipeline/observations/o.jsonl',
+      'backend/data/data-pipeline/observations/o.jsonl',
     ])
       assert.ok(existsSync(join(wt, kept)), `expected ${kept} to stay on disk`);
     assert.equal(planWorktreeIsSparse(wt), true);
@@ -6586,7 +6746,7 @@ test('narrowPlanWorktree: REFUSES on an uncommitted modification under an exclud
     const wt = join(repo.main, '.claude', 'worktrees', 'narrow-dirty1');
     mkdirSync(dirname(wt), { recursive: true });
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-dirty1', wt, 'origin/master');
-    const dirty = join(wt, 'backend/data/price-pipeline/render-store/r0.json');
+    const dirty = join(wt, 'backend/data/data-pipeline/render-store/r0.json');
     writeFileSync(dirty, '{"edited":true}\n');
     assert.throws(
       () => narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }),
@@ -6608,9 +6768,9 @@ test('narrowPlanWorktree: REFUSES on STAGED (not yet committed) content under an
     const wt = join(repo.main, '.claude', 'worktrees', 'narrow-staged1');
     mkdirSync(dirname(wt), { recursive: true });
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-staged1', wt, 'origin/master');
-    const staged = join(wt, 'backend/data/price-pipeline/render-store/r1.json');
+    const staged = join(wt, 'backend/data/data-pipeline/render-store/r1.json');
     writeFileSync(staged, '{"staged":true}\n');
-    repo.g(wt, 'add', 'backend/data/price-pipeline/render-store/r1.json');
+    repo.g(wt, 'add', 'backend/data/data-pipeline/render-store/r1.json');
     assert.throws(
       () => narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }),
       /REFUSED/,
@@ -6636,7 +6796,7 @@ test('narrowPlanWorktree: an in-progress MERGE_HEAD blocks the narrow; removing 
       /REFUSED/,
     );
     assert.equal(planWorktreeIsSparse(wt), false, 'nothing changed while MERGE_HEAD stood');
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     rmSync(join(admin, 'MERGE_HEAD'));
     assert.deepEqual(narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }), {
       narrowed: true,
@@ -6654,12 +6814,12 @@ test('narrowPlanWorktree: untracked content under an excluded store does NOT blo
     const wt = join(repo.main, '.claude', 'worktrees', 'narrow-untracked1');
     mkdirSync(dirname(wt), { recursive: true });
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-untracked1', wt, 'origin/master');
-    const scratch = join(wt, 'backend/data/price-pipeline/render-store/scratch.json');
+    const scratch = join(wt, 'backend/data/data-pipeline/render-store/scratch.json');
     writeFileSync(scratch, '{"scratch":true}\n');
     const result = narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS });
     assert.equal(result.narrowed, true);
     assert.deepEqual(result.excluded, [...PLAN_WORKTREE_EXCLUDED_PATHS]);
-    assert.deepEqual(result.untracked, ['backend/data/price-pipeline/render-store/scratch.json']);
+    assert.deepEqual(result.untracked, ['backend/data/data-pipeline/render-store/scratch.json']);
     assert.equal(planWorktreeIsSparse(wt), true);
     // sparse-checkout does not manage untracked content, so nothing forces it off disk.
     assert.ok(existsSync(scratch), 'the untracked file survives the narrow');
@@ -6683,7 +6843,7 @@ test('narrowPlanWorktree round-trips with widenPlanWorktree: narrow, widen, narr
     assert.equal(widenPlanWorktree(wt), true);
     assert.equal(planWorktreeIsSparse(wt), false);
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the store is back on disk after widening',
     );
     assert.deepEqual(narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }), {
@@ -6711,13 +6871,13 @@ test('narrowPlanWorktree: a marked sparse worktree whose cone was widened by han
     mkdirSync(dirname(wt), { recursive: true });
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-handcone1', wt, 'origin/master');
     assert.equal(narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }).narrowed, true);
-    assert.ok(!existsSync(join(wt, 'backend/data/price-pipeline/render-store')));
+    assert.ok(!existsSync(join(wt, 'backend/data/data-pipeline/render-store')));
     // Hand-widen ONE store back into the cone. The marker still matches the list it was written
     // for and git still reads sparse, so the marker-only predicate says "already narrowed".
-    repo.g(wt, 'sparse-checkout', 'add', 'backend/data/price-pipeline/render-store');
+    repo.g(wt, 'sparse-checkout', 'add', 'backend/data/data-pipeline/render-store');
     assert.equal(planWorktreeIsSparse(wt), true, 'still marked + still sparse by config');
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'but the store is back on disk — the state the no-op must NOT accept',
     );
     assert.equal(
@@ -6725,7 +6885,7 @@ test('narrowPlanWorktree: a marked sparse worktree whose cone was widened by han
       true,
       're-narrowed, not a phantom no-op',
     );
-    assert.ok(!existsSync(join(wt, 'backend/data/price-pipeline/render-store')));
+    assert.ok(!existsSync(join(wt, 'backend/data/data-pipeline/render-store')));
     assert.equal(repo.g(wt, 'status', '--porcelain').trim(), '');
     // And a genuinely-correct cone is still the no-op the contract promises.
     assert.equal(narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }), false);
@@ -6748,9 +6908,9 @@ test('narrowPlanWorktree: a cone that cannot be computed THROWS — it is never 
     repo.g(repo.main, 'worktree', 'add', '-b', 'worktree-narrow-conefail1', wt, 'origin/master');
     assert.equal(narrowPlanWorktree(wt, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }).narrowed, true);
     // Hand-widen a store back in: marked, sparse by config, store on disk.
-    repo.g(wt, 'sparse-checkout', 'add', 'backend/data/price-pipeline/render-store');
+    repo.g(wt, 'sparse-checkout', 'add', 'backend/data/data-pipeline/render-store');
     assert.equal(planWorktreeIsSparse(wt), true);
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     // Make the cone uncomputable: sparseConeDirs needs `ls-tree` to enumerate the ancestor's
     // children, and a null cone makes ensureSparseCheckout return false WITHOUT forcing dense
     // and WITHOUT clearing the marker -- the exact shape the inference got wrong.
@@ -6764,7 +6924,7 @@ test('narrowPlanWorktree: a cone that cannot be computed THROWS — it is never 
       'a failed apply must be loud, never a phantom no-op',
     );
     // And the store really is still there — the throw is telling the truth.
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
   } finally {
     repo.cleanup();
   }
@@ -6794,7 +6954,7 @@ test('narrowPlanWorktree: the MAIN-checkout refusal survives an aliased (symlink
       () => narrowPlanWorktree(alias, { excludes: PLAN_WORKTREE_EXCLUDED_PATHS }),
       /main checkout/i,
     );
-    assert.ok(existsSync(join(repo.main, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(repo.main, 'backend/data/data-pipeline/render-store/r0.json')));
   } finally {
     repo.cleanup();
   }
@@ -6814,7 +6974,7 @@ test('narrowPlanWorktree: REFUSES the MAIN checkout — narrowing a shared check
       /main checkout/i,
     );
     assert.ok(
-      existsSync(join(repo.main, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(repo.main, 'backend/data/data-pipeline/render-store/r0.json')),
       'the main checkout is untouched by the refusal',
     );
     assert.equal(readSparseState(repo.main).enabled, false);
@@ -6855,7 +7015,7 @@ test('narrowPlanWorktree: an empty exclude list on an ALREADY-SPARSE worktree en
     assert.equal(planWorktreeIsSparse(wt), false, 'now dense');
     assert.equal(readSparseState(wt).enabled, false);
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the store is materialised back',
     );
     assert.equal(repo.g(wt, 'status', '--porcelain').trim(), '');

@@ -29,13 +29,13 @@ import { MUTATION_BANNER_LABEL } from './build-index-lib.mjs';
 // constant into its own coord.config.json so `cutWorktree`'s self-resolution (from the mainDir it
 // already receives) sees the identical list.
 const PLAN_WORKTREE_EXCLUDED_PATHS = [
-  'backend/data/price-pipeline/render-store',
-  'backend/data/price-pipeline/render-archive',
-  'backend/data/price-pipeline/render-fingerprints',
-  'backend/data/price-pipeline/batches',
-  'backend/data/price-pipeline/prompt-bench',
-  'backend/data/price-pipeline/llm-runs',
-  'backend/data/price-pipeline/page-extractions',
+  'backend/data/data-pipeline/render-store',
+  'backend/data/data-pipeline/render-archive',
+  'backend/data/data-pipeline/render-fingerprints',
+  'backend/data/data-pipeline/batches',
+  'backend/data/data-pipeline/prompt-bench',
+  'backend/data/data-pipeline/llm-runs',
+  'backend/data/data-pipeline/page-extractions',
 ];
 const DENSE_BODY_TERMS = denseBodyTermsFor(PLAN_WORKTREE_EXCLUDED_PATHS);
 // plan 3958: same rationale as build-index-lib.test.mjs's own `sw()` — MUTATION_BANNER_LABEL is
@@ -168,7 +168,7 @@ test('cutWorktree throws without a slug', () => {
 test('F-004 (plan 1313): cutWorktree REJECTS a slug outside the ASCII charset BEFORE touching git', () => {
   const calls = [];
   assert.throws(
-    () => cutWorktree('/main', "869-UI-clinic's-fix", { run: (a) => calls.push(a) }),
+    () => cutWorktree('/main', "869-UI-rec's-fix", { run: (a) => calls.push(a) }),
     /--slug/,
   );
   assert.deepEqual(calls, [], 'no git op ran — the guard fired before any exec()');
@@ -1710,6 +1710,22 @@ test('planWorktreeMode: every dense rule names itself; the sparse default names 
   assert.ok(Object.isFrozen(DENSE_CATEGORIES) && Object.isFrozen(DENSE_BODY_TERMS));
 });
 
+test('plan 4172 planWorktreeMode: extraBasenames (coord.config.json worktreeExcludeBasenames) are dense body terms too; absent, they are not', () => {
+  const body = `${SPARSE_BODY}\nTouches the data-pipeline folder and the weekly-sweep job.\n`;
+  const withExtras = planWorktreeMode({
+    planText: body,
+    basename: '106-Infra-x.md',
+    excludes: [],
+    extraBasenames: ['weekly-sweep'],
+  });
+  assert.deepEqual(withExtras, { dense: true, rule: 'body mentions "weekly-sweep"' });
+  assert.equal(
+    planWorktreeMode({ planText: body, basename: '106-Infra-x.md', excludes: [] }).dense,
+    false,
+  );
+  assert.deepEqual(denseBodyTermsFor(['a/b/store'], ['extra']), ['store', 'extra']);
+});
+
 test('planWorktreeMode: an omitted `excludes` defaults to [] (empty = no exclusions), never a TypeError (plan 4071 review round 1, finding c76ab7)', () => {
   // A sparse-eligible plan with NO excludes argument at all must not throw reaching
   // denseBodyTermsFor([]) / the sparse-default message's `excludes.join`.
@@ -1876,8 +1892,8 @@ function makeSparseOrigin() {
   put('backend/src/data/shards/SE/order.json', '[]\n');
   put('backend/data/README.md', '# data\n');
   put('backend/data/other-study/rows.json', '[]\n');
-  for (let i = 0; i < 20; i++) put(`backend/data/price-pipeline/render-store/r${i}.json`, '{}\n');
-  put('backend/data/price-pipeline/observations/o.jsonl', '{}\n');
+  for (let i = 0; i < 20; i++) put(`backend/data/data-pipeline/render-store/r${i}.json`, '{}\n');
+  put('backend/data/data-pipeline/observations/o.jsonl', '{}\n');
   put('frontend/src/page.tsx', '// page\n');
   execFileSync('git', ['-C', s.A, 'add', '-A']);
   execFileSync('git', ['-C', s.A, 'commit', '-qm', 'shapes']);
@@ -1893,7 +1909,7 @@ test('cutWorktree (real git): an Infra plan is cut SPARSE -- excluded folder abs
     const wt = join(s.A, '.claude', 'worktrees', '1234-Infra-x');
     assert.equal(r.sparse, true, r.modeRule);
     assert.ok(
-      !existsSync(join(wt, 'backend', 'data', 'price-pipeline', 'render-store')),
+      !existsSync(join(wt, 'backend', 'data', 'data-pipeline', 'render-store')),
       'excluded store off disk',
     );
     for (const kept of [
@@ -1903,7 +1919,7 @@ test('cutWorktree (real git): an Infra plan is cut SPARSE -- excluded folder abs
       'backend/data/README.md',
       'backend/data/other-study/rows.json',
       // the excluded stores' parent keeps its contract files and small siblings on disk
-      'backend/data/price-pipeline/observations/o.jsonl',
+      'backend/data/data-pipeline/observations/o.jsonl',
       'frontend/src/page.tsx',
       'docs/superpowers/plans/in-progress/1234-Infra-x.md',
       '.owner',
@@ -1914,9 +1930,9 @@ test('cutWorktree (real git): an Infra plan is cut SPARSE -- excluded folder abs
     assert.equal(g('rev-parse', '--abbrev-ref', 'HEAD').trim(), 'worktree-1234-Infra-x');
     assert.match(g('config', '--worktree', '--get', 'core.sparseCheckoutCone'), /true/);
     // Index and commit still carry the excluded files (skip-worktree), only the disk differs.
-    assert.match(g('ls-files', '-v', '--', 'backend/data/price-pipeline/render-store'), /^S /m);
+    assert.match(g('ls-files', '-v', '--', 'backend/data/data-pipeline/render-store'), /^S /m);
     assert.equal(
-      g('ls-tree', '-r', '--name-only', 'HEAD', '--', 'backend/data/price-pipeline')
+      g('ls-tree', '-r', '--name-only', 'HEAD', '--', 'backend/data/data-pipeline')
         .trim()
         .split('\n').length,
       21,
@@ -1933,8 +1949,8 @@ test('cutWorktree (real git): an Infra plan is cut SPARSE -- excluded folder abs
       worktreePath: '.claude/worktrees/1234-Infra-x',
       widened: true,
     });
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/observations/o.jsonl')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/observations/o.jsonl')));
     assert.equal(g('status', '--porcelain').trim(), '');
     assert.equal(widenWorktree(s.A, '1234-Infra-x').widened, false, 'idempotent');
     assert.throws(() => widenWorktree(s.A, '4321-Infra-never-cut'), /found no worktree/);
@@ -1949,7 +1965,7 @@ test('widenWorktree (real git): a MALFORMED coord.config.json in the worktree st
     cutWorktree(s.A, '1234-Infra-x', { push: false, installDeps: false });
     const wt = join(s.A, '.claude', 'worktrees', '1234-Infra-x');
     assert.ok(
-      !existsSync(join(wt, 'backend', 'data', 'price-pipeline', 'render-store')),
+      !existsSync(join(wt, 'backend', 'data', 'data-pipeline', 'render-store')),
       'still sparse before the widen',
     );
     // Corrupt the worktree's OWN coord.config.json (widenWorktree resolves it from `absWt`,
@@ -1959,7 +1975,7 @@ test('widenWorktree (real git): a MALFORMED coord.config.json in the worktree st
     // The widen itself must have happened despite the unreadable config.
     assert.equal(w.widened, true);
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the excluded store landed on disk even though the config could not be read for the message',
     );
   } finally {
@@ -1976,7 +1992,7 @@ test('narrowWorktree (real git): a worktree cut DENSE gets narrowed on demand --
     cutWorktree(s.A, '1235-DQ-y', { push: false, installDeps: false });
     const wt = join(s.A, '.claude', 'worktrees', '1235-DQ-y');
     assert.ok(
-      existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'dense: store on disk before narrowing',
     );
     const n = narrowWorktree(s.A, '1235-DQ-y');
@@ -1986,7 +2002,7 @@ test('narrowWorktree (real git): a worktree cut DENSE gets narrowed on demand --
     assert.ok(n.freedBytes > 0, 'freed nonzero bytes');
     assert.deepEqual(n.untracked, []);
     assert.ok(
-      !existsSync(join(wt, 'backend/data/price-pipeline/render-store')),
+      !existsSync(join(wt, 'backend/data/data-pipeline/render-store')),
       'excluded store off disk',
     );
     const g = (...a) => execFileSync('git', ['-C', wt, ...a], { encoding: 'utf8' });
@@ -2006,7 +2022,7 @@ test('narrowWorktree (real git): the slug-less {dir} entry point works with no m
     assert.equal(n.branch, null);
     assert.equal(n.worktreePath, wt);
     assert.equal(n.narrowed, true);
-    assert.ok(!existsSync(join(wt, 'backend/data/price-pipeline/render-store')));
+    assert.ok(!existsSync(join(wt, 'backend/data/data-pipeline/render-store')));
   } finally {
     s.cleanup();
   }
@@ -2029,14 +2045,14 @@ test('narrowWorktree (real git): round-trips with widenWorktree -- narrow then w
     const wt = join(s.A, '.claude', 'worktrees', '1234-Infra-x');
     const g = (...a) => execFileSync('git', ['-C', wt, ...a], { encoding: 'utf8' });
     assert.equal(widenWorktree(s.A, '1234-Infra-x').widened, true);
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     assert.equal(g('status', '--porcelain').trim(), '');
     assert.equal(narrowWorktree(s.A, '1234-Infra-x').narrowed, true);
-    assert.ok(!existsSync(join(wt, 'backend/data/price-pipeline/render-store')));
+    assert.ok(!existsSync(join(wt, 'backend/data/data-pipeline/render-store')));
     assert.equal(g('status', '--porcelain').trim(), '');
     const w = widenWorktree(s.A, '1234-Infra-x');
     assert.equal(w.widened, true);
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')));
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')));
     assert.equal(g('status', '--porcelain').trim(), '');
   } finally {
     s.cleanup();
@@ -2078,7 +2094,7 @@ test('cutWorktree (real git): a DQ plan, a body naming render-store, --dense and
       if (rule instanceof RegExp) assert.match(r.modeRule, rule);
       else assert.equal(r.modeRule, rule);
       assert.ok(
-        existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+        existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
         `${slug}: dense tree on disk`,
       );
       const g = (...a) => execFileSync('git', ['-C', wt, ...a], { encoding: 'utf8' });
@@ -2107,13 +2123,13 @@ test('cutWorktree (real git): a sparse worktree survives a rebase onto a master 
     writeFileSync(join(wt, 'docs', 'ours.md'), 'ours\n');
     g('add', 'docs/ours.md');
     g('commit', '-qm', 'ours');
-    s.B && landNested(s, s.B, 'backend/data/price-pipeline/render-store/r0.json', '{"sibling":1}');
+    s.B && landNested(s, s.B, 'backend/data/data-pipeline/render-store/r0.json', '{"sibling":1}');
     s.B && landNested(s, s.B, 'backend/data/new-study/x.json', '[]');
     g('fetch', '-q', 'origin');
     g('rebase', '-q', 'origin/master');
     assert.equal(g('status', '--porcelain').trim(), '', 'clean after a non-conflicting rebase');
     assert.ok(
-      !existsSync(join(wt, 'backend', 'data', 'price-pipeline', 'render-store')),
+      !existsSync(join(wt, 'backend', 'data', 'data-pipeline', 'render-store')),
       'excluded store still off disk',
     );
     assert.ok(
@@ -2130,9 +2146,9 @@ test('cutWorktree (real git): a sparse worktree survives a rebase onto a master 
     // helper checks git's own pattern list, so the hand widening is seen and undone), the sibling
     // edits the same file. git materialises the conflicted path outside the cone; the resolution
     // is ordinary; the rest of the store never comes in.
-    g('sparse-checkout', 'add', 'backend/data/price-pipeline/render-store');
-    writeFileSync(join(wt, 'backend/data/price-pipeline/render-store/r1.json'), '{"ours":1}\n');
-    g('add', 'backend/data/price-pipeline/render-store/r1.json');
+    g('sparse-checkout', 'add', 'backend/data/data-pipeline/render-store');
+    writeFileSync(join(wt, 'backend/data/data-pipeline/render-store/r1.json'), '{"ours":1}\n');
+    g('add', 'backend/data/data-pipeline/render-store/r1.json');
     g('commit', '-qm', 'ours-r1');
     const admin = g('rev-parse', '--absolute-git-dir').trim();
     assert.ok(existsSync(join(admin, PLAN_SPARSE_MARKER)), 'marker untouched by the hand widen');
@@ -2142,34 +2158,34 @@ test('cutWorktree (real git): a sparse worktree survives a rebase onto a master 
       're-narrowed after the hand widen',
     );
     assert.ok(
-      !existsSync(join(wt, 'backend/data/price-pipeline/render-store')),
+      !existsSync(join(wt, 'backend/data/data-pipeline/render-store')),
       'store off disk again',
     );
-    s.B && landNested(s, s.B, 'backend/data/price-pipeline/render-store/r1.json', '{"theirs":1}');
+    s.B && landNested(s, s.B, 'backend/data/data-pipeline/render-store/r1.json', '{"theirs":1}');
     g('fetch', '-q', 'origin');
     assert.throws(() => g('rebase', 'origin/master'), /CONFLICT|conflict/i);
     // The conflicted file is on disk and resolvable; the rest of the cone holds. The ONE
     // difference from a dense resolution: staging a path outside the cone needs `add --sparse`
     // (a plain `add` refuses it) -- the runbook's resolution recipe carries that flag.
-    assert.ok(existsSync(join(wt, 'backend/data/price-pipeline/render-store/r1.json')));
-    writeFileSync(join(wt, 'backend/data/price-pipeline/render-store/r1.json'), '{"merged":1}\n');
+    assert.ok(existsSync(join(wt, 'backend/data/data-pipeline/render-store/r1.json')));
+    writeFileSync(join(wt, 'backend/data/data-pipeline/render-store/r1.json'), '{"merged":1}\n');
     assert.throws(
-      () => g('add', 'backend/data/price-pipeline/render-store/r1.json'),
+      () => g('add', 'backend/data/data-pipeline/render-store/r1.json'),
       /sparse/i,
       'a plain add refuses an out-of-cone path',
     );
-    g('add', '--sparse', 'backend/data/price-pipeline/render-store/r1.json');
+    g('add', '--sparse', 'backend/data/data-pipeline/render-store/r1.json');
     execFileSync('git', ['-C', wt, '-c', 'core.editor=true', 'rebase', '--continue'], {
       encoding: 'utf8',
     });
     g('sparse-checkout', 'reapply');
     assert.equal(g('status', '--porcelain').trim(), '');
     assert.ok(
-      !existsSync(join(wt, 'backend/data/price-pipeline/render-store/r0.json')),
+      !existsSync(join(wt, 'backend/data/data-pipeline/render-store/r0.json')),
       'the rest of the store never came in',
     );
     assert.ok(
-      !existsSync(join(wt, 'backend/data/price-pipeline/render-store/r1.json')),
+      !existsSync(join(wt, 'backend/data/data-pipeline/render-store/r1.json')),
       'reapply drops the resolved file off disk again',
     );
   } finally {

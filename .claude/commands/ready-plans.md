@@ -50,7 +50,7 @@ Then lead with one line: "N takeable now (sonnet X, fable Y, sol Z); the rest ar
 | `✅ ELIGIBLE` | A cloud drain can take it right now | Nothing — it's in the pool |
 | `🔒 CLAIMED` | A live session already holds `refs/claims/<id>` | Nothing. Not a block; hands off |
 | `⛔ unstamped` | `cloudExec` unset — never adjudicated | Needs a spec-pass / board-pass to stamp it |
-| `⛔ cloud-false` | Stamped local-only (rubric #1–#6) | Route it to a local drain, not the cloud |
+| `⛔ cloud-false` | Stamped local-only (rubric #1–#8) | Route it to a local drain, not the cloud |
 | `⛔ unspecced` | Still a stub — a stub can't drain | Needs a spec-pass |
 | `⛔ blocked-by` | A real upstream plan is still in flight | Wait for the upstream to archive |
 | `⛔ operator-gated` | The plan routes a decision to the operator | `/unblock-lane` or a direct ruling |
@@ -58,7 +58,7 @@ Then lead with one line: "N takeable now (sonnet X, fable Y, sol Z); the rest ar
 
 `execModel: sol` (plan 3461) carries no lane-specific cell of its own anymore — a `sol` row hits the same rows above as any other lane. `queue-drain.mjs` still knows `⛔ sol-env-trusted` (a permanent refusal on a trusted/limited-egress cloud env) and the presently-unreachable `⛔ sol-env-full-unproven`, but this command’s invocations are all full-egress (`--env full` and `--env browser`), so neither is ever triggered — see the note under the sample table above.
 
-`CLAIMED` takes precedence over a block: once a session holds the plan, its cloud verdict is moot. Rubric numbering for the `cloud-false` parentheticals: `docs/runbooks/cloud-drain-autonomy.md` § cloudExec stamping rubric.
+`CLAIMED` takes precedence over a block: once a session holds the plan, its cloud verdict is moot. Rubric numbering for the `cloud-false` parentheticals: `docs/coord/cloud-drains.md` § The cloudExec stamping rubric.
 
 ## Rules
 

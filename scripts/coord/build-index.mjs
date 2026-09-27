@@ -160,7 +160,7 @@ export function collectPlans({
 }
 
 function gitLsSpecs() {
-  // `git ls-files docs/superpowers/specs/*.md`: git's `*` matches `/`, so the one
+  // `git ls-files <the project's specs dir>*.md`: git's `*` matches `/`, so the one
   // glob enumerates BOTH the top-level (active) specs AND everything under
   // archive/ (incl. the nested investigation/redesign sub-folders) — every spec
   // file, tracked-only. An untracked foreign spec another session dropped in is

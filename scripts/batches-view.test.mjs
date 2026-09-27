@@ -70,7 +70,7 @@ const FIXTURE_WITH_DEPS = `# Proposed execution batches
 
 \`\`\`dependencies
 100 blocked-by 200
-batch-alpha overlaps batch-beta : clinic-034 shard collision
+batch-alpha overlaps batch-beta : record-034 shard collision
 # a comment line, ignored
 101 order-after 999
 this line is junk and must not crash the parser
@@ -234,7 +234,7 @@ test('parseDependenciesBlock parses edges, a reason suffix, skips comments and j
       left: 'batch-alpha',
       relation: 'overlaps',
       right: 'batch-beta',
-      reason: 'clinic-034 shard collision',
+      reason: 'record-034 shard collision',
     },
     { left: '101', relation: 'order-after', right: '999', reason: '' },
   ]);
@@ -297,10 +297,10 @@ test('renderDepsCell renders "—" for no edges, else joined edge text with reas
   );
   assert.equal(
     renderDepsCell([
-      { left: 'a', relation: 'overlaps', right: 'b', reason: 'clinic-034' },
+      { left: 'a', relation: 'overlaps', right: 'b', reason: 'record-034' },
       { left: 'c', relation: 'order-after', right: 'd', reason: '' },
     ]),
-    'a overlaps b (clinic-034); c order-after d',
+    'a overlaps b (record-034); c order-after d',
   );
 });
 
@@ -978,7 +978,7 @@ function makeFolderFixture() {
   const batchesDir = join(root, 'docs', 'superpowers', 'batches');
   writeFileSync(
     join(batchesDir, 'dependencies.md'),
-    '## Dependencies\n\n```dependencies\n100 blocked-by 200\nbatch-alpha overlaps batch-beta : clinic-034\n```\n',
+    '## Dependencies\n\n```dependencies\n100 blocked-by 200\nbatch-alpha overlaps batch-beta : record-034\n```\n',
   );
   writeFileSync(
     join(batchesDir, 'README.md'),

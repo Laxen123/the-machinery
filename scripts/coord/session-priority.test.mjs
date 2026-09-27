@@ -613,15 +613,10 @@ test(`${TIER_ENV} override wins over the landing-queue head too (axis 1 ordering
 // Acceptance 2 is verified live on Windows (Get-Process … PriorityClass); these pin the CONTRACT:
 // demote only, never elevate, never throw.
 
-test('applyCpuClass: only a low tier steps down from the ambient class to idle', () => {
-  const calls = [];
-  const setPriority = (p, v) => calls.push([p, v]);
-  assert.equal(applyCpuClass(4242, 'low', { setPriority }), true);
-  assert.deepEqual(calls, [[4242, CPU_CLASS_DEMOTED]]);
-  assert.equal(applyCpuClass(4242, 'medium', { setPriority }), false);
-  assert.equal(applyCpuClass(4242, 'high', { setPriority }), false);
-  assert.equal(applyCpuClass(4242, undefined, { setPriority }), false);
-  assert.equal(calls.length, 1, 'no tier but `low` may touch the process at all');
+test('plan 4236 T4: no tier demotes an admitted job on its own — priority orders admission only', () => {
+  const setPriority = () => assert.fail('no tier may touch the process without yieldToHead');
+  for (const tier of ['low', 'medium', 'high', undefined])
+    assert.equal(applyCpuClass(4242, tier, { setPriority }), false, `tier ${tier}`);
 });
 
 test('applyCpuClass: yieldToHead demotes ANY tier (axis 2, plan 3226) — a bare tier check alone would not', () => {
@@ -629,6 +624,9 @@ test('applyCpuClass: yieldToHead demotes ANY tier (axis 2, plan 3226) — a bare
   const setPriority = (p, v) => calls.push([p, v]);
   assert.equal(applyCpuClass(4242, 'high', { yieldToHead: true, setPriority }), true);
   assert.deepEqual(calls, [[4242, CPU_CLASS_DEMOTED]]);
+  // plan 4236 T4: the head yield is untouched for every tier, `low` included
+  assert.equal(applyCpuClass(4243, 'low', { yieldToHead: true, setPriority }), true);
+  calls.pop();
   assert.equal(applyCpuClass(4242, 'medium', { setPriority }), false, 'yieldToHead defaults false');
   assert.equal(calls.length, 1);
 });
@@ -643,6 +641,7 @@ test('applyCpuClass: the demotion target is IDLE and elevation is impossible by 
 test('applyCpuClass: a failed demotion warns and proceeds — it never breaks the heavy run', () => {
   const warnings = [];
   const ok = applyCpuClass(4242, 'low', {
+    yieldToHead: true,
     setPriority: () => {
       throw new Error('EPERM');
     },
@@ -656,7 +655,7 @@ test('applyCpuClass: a failed demotion warns and proceeds — it never breaks th
 
 test('applyCpuClass: a bogus pid is a no-op, not a throw', () => {
   const setPriority = () => assert.fail('must not be called for a bogus pid');
-  assert.equal(applyCpuClass(undefined, 'low', { setPriority }), false);
-  assert.equal(applyCpuClass(0, 'low', { setPriority }), false);
-  assert.equal(applyCpuClass(-1, 'low', { setPriority }), false);
+  assert.equal(applyCpuClass(undefined, 'low', { yieldToHead: true, setPriority }), false);
+  assert.equal(applyCpuClass(0, 'low', { yieldToHead: true, setPriority }), false);
+  assert.equal(applyCpuClass(-1, 'low', { yieldToHead: true, setPriority }), false);
 });

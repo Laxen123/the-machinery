@@ -18,7 +18,7 @@
 #
 # Resolved RELATIVE TO CWD, not from `$0` and not via git — same reasoning as
 # .husky/pre-push's own header comment (git runs hooks from the worktree top level;
-# scripts/pre-push-hook.test.mjs runs this under a fake git whose catch-all makes
+# The pre-push hook's test suite runs this under a fake git whose catch-all makes
 # `git rev-parse --show-toplevel` resolve to nothing).
 #
 # Project file sourced BEFORE core: sourcing only DEFINES pre-push-project.sh's
@@ -79,7 +79,7 @@
 #     the push is REFUSED rather than guessed into a silent core-only run. This is the one
 #     behavior change from round 2's documented "errored read as untracked is deliberate
 #     fail-open" — a probe failure is no longer indistinguishable from a genuinely untracked path.
-# The test harness's fake git (scripts/pre-push-hook.test.mjs) answers BOTH probes with a
+# The test harness's fake git (the pre-push hook test suite) answers BOTH probes with a
 # non-zero/errored result by default, so every pre-existing core-only fixture keeps taking the
 # same continue-as-before path unless a fixture explicitly opts into one of the tracked cases.
 PP_PROJECT_PRESENT=0

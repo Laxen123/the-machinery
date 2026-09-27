@@ -643,7 +643,7 @@ export function applyExecutionBranchRename({
           log(
             `stamp-exec-model: WARNING — origin kept leftover ref ${source.name} after ` +
               `${destination.name} was installed at the same sha; run ` +
-              '`node scripts/reap-dead-claims.mjs --gc-refs --apply` during the coordination-ref ' +
+              "this project's dead-claims reaper with `--gc-refs --apply` during the coordination-ref " +
               'cleanup chore.',
           );
         } else {
@@ -916,7 +916,7 @@ export function ensureExecModelForCategory(content, category) {
 // plan that already carries `execModel: sol` stays drain-claimable and executes per
 // `coord/skills/pickup-plan/SKILL.md` § 8.7. History of the value itself (2026-08-20
 // lane minted, 2026-08-26 Sol default, 2026-09-01 suspended, 2026-09-03 restored) is
-// in `docs/runbooks/plans-workflow.md` § Sol executor lane; the CURRENT value is only
+// in `docs/coord/plan-lanes.md` § Executor lanes and model allocation; the CURRENT value is only
 // ever in the JSON.
 export const EXEMPT_MECHANICAL_DEFAULT_LANE = execModelDefaultLane();
 

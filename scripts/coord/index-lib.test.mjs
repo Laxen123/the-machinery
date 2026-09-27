@@ -371,11 +371,11 @@ const longSummary = `Render frontend egress is 7.08 GB/30d. ${'word '.repeat(200
 
 test('clampArchiveNote: a short note passes through byte-identical (no clamp, no whitespace touch)', () => {
   const note = 'archived 2026-06-15 (session 9), merged `def5678`. Shipped the thing.';
-  assert.equal(clampArchiveNote('641-Perf-clinic-photo-bandwidth.md', note), note);
+  assert.equal(clampArchiveNote('641-Perf-record-photo-bandwidth.md', note), note);
 });
 
 test('clampArchiveNote: a long note is clamped so the RENDERED bullet line stays <= CAP, ending with an ellipsis', () => {
-  const slug = '641-Perf-clinic-photo-bandwidth.md';
+  const slug = '641-Perf-record-photo-bandwidth.md';
   const note = `archived 2026-06-15 (session 563), merged \`8679c79\`. ${longSummary}`;
   assert.ok(note.length > CAP, 'fixture note must exceed CAP to exercise the clamp');
   const clamped = clampArchiveNote(slug, note);
@@ -418,10 +418,10 @@ test('insertArchiveNarrativeLine clamps a long note under CAP (length-only — c
   const note = `archived 2026-06-15 (session 563), merged \`8679c79\`. ${longSummary}`;
   const out = insertArchiveNarrativeLine(
     FIXTURE_WITH_SENTINEL,
-    '641-Perf-clinic-photo-bandwidth.md',
+    '641-Perf-record-photo-bandwidth.md',
     note,
   );
-  const line = out.split('\n').find((l) => l.includes('`641-Perf-clinic-photo-bandwidth.md`'));
+  const line = out.split('\n').find((l) => l.includes('`641-Perf-record-photo-bandwidth.md`'));
   assert.ok(line.length <= CAP, 'the clamp keeps the rendered bullet length under CAP');
   assert.ok(line.endsWith('…'));
   // plan 3971 review r1 (A): insertArchiveNarrativeLine stays a plain, unopinionated
@@ -465,7 +465,7 @@ test('archiveBullet (index.mjs path) drops a long note entirely (condensed, not 
 // Forge an over-CAP archive bullet directly in the region (simulating a stale-worktree
 // write that bypassed clampArchiveNote), then prove the belt brings it back ≤ CAP.
 test('clampOverlongArchiveBullets: hard-caps an over-CAP archive bullet → lint clean', () => {
-  const overlong = `- \`641-Perf-clinic-photo-bandwidth.md\` — ${longSummary}`;
+  const overlong = `- \`641-Perf-record-photo-bandwidth.md\` — ${longSummary}`;
   assert.ok(overlong.length > CAP, 'fixture bullet is genuinely over CAP');
   const lines = FIXTURE_WITH_SENTINEL.split('\n');
   const headerIdx = lines.findIndex((l) => ACTIVE_END_RX.test(l));
@@ -475,10 +475,10 @@ test('clampOverlongArchiveBullets: hard-caps an over-CAP archive bullet → lint
 
   const { content, fixed } = clampOverlongArchiveBullets(forged);
   assert.equal(fixed.length, 1, 'one bullet reported fixed');
-  assert.equal(fixed[0].slug, '641-Perf-clinic-photo-bandwidth.md');
+  assert.equal(fixed[0].slug, '641-Perf-record-photo-bandwidth.md');
   assert.ok(fixed[0].after <= CAP && fixed[0].before > CAP, 'before>CAP, after<=CAP');
   assert.equal(findOverlongArchiveBullets(content).length, 0, 'region is lint-clean after belt');
-  const capped = content.split('\n').find((l) => l.includes('641-Perf-clinic-photo-bandwidth.md'));
+  const capped = content.split('\n').find((l) => l.includes('641-Perf-record-photo-bandwidth.md'));
   assert.ok(capped.length <= CAP && capped.endsWith('…'));
 });
 
@@ -506,7 +506,7 @@ test('clampOverlongArchiveBullets (review r3, finding f81505): CRLF-safe — an 
 test('clampOverlongArchiveBullets: no-op on an already-clean region (byte-identical)', () => {
   const clean = insertArchiveNarrativeLine(
     FIXTURE_WITH_SENTINEL,
-    '641-Perf-clinic-photo-bandwidth.md',
+    '641-Perf-record-photo-bandwidth.md',
     'archived 2026-06-15 (session 563), merged `8679c79`. Short note.',
   );
   const { content, fixed } = clampOverlongArchiveBullets(clean);
@@ -572,11 +572,11 @@ test('clampArchiveNote: hard-cut strips a trailing terminator so the ellipsis re
 test('clampArchiveNote: a realistic >CAP multi-sentence summary clamps to a coherent boundary (plan 440 scenario)', () => {
   const slug = '440-Infra-some-realistic-plan-slug.md';
   const summary =
-    'Render frontend egress hit 7.08 GB over 30 days, dominated by clinic-photo ' +
+    'Render frontend egress hit 7.08 GB over 30 days, dominated by record-photo ' +
     'thumbnails served at full resolution rather than the responsive size each card ' +
     'actually needs. The fix downscales every photo to a responsive srcset at build ' +
     'time and serves AVIF with a WebP fallback, cutting the median payload by roughly ' +
-    'four-fifths across the directory, the map cards, and the clinic detail page. A ' +
+    'four-fifths across the directory, the map cards, and the record detail page. A ' +
     'follow-up audits the remaining hero images, which are still shipped uncompressed ' +
     'on the landing page today and dwarf every other asset in the critical path.';
   const note = `archived 2026-06-15 (session 566), merged \`abc1234\`. ${summary}`;

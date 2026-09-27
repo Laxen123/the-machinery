@@ -73,7 +73,7 @@ import {
 } from '../coord/check-coordination-branch.mjs';
 import { normalizeRel } from '../coord/main-checkout-allowlist.mjs';
 import { loadCoordConfig } from '../coord/coord-config.mjs';
-import { readStdin } from './lib/loader-common.mjs';
+import { denyEnvelope, runHookCli } from './lib/loader-common.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -340,36 +340,22 @@ export function formatHitMessage(hit) {
     : formatBlockMessage(hit.res, hit.branch).join('\n');
 }
 
-function main() {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
+// The hook's whole outcome as DATA (plan 4238): the deny envelope it would print, or
+// null for silence. The in-process PreToolUse dispatcher (pretool-dispatch.mjs) calls
+// this; the CLI below is a thin wrapper that prints it.
+export function evaluateHook(payload) {
   const cmd = String(payload?.tool_input?.command ?? '');
-  if (!cmd) return;
+  if (!cmd) return null;
 
   const hit = evaluate(cmd);
-  if (!hit) return;
+  if (!hit) return null;
 
-  const reason = formatHitMessage(hit);
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    }),
-  );
+  return denyEnvelope(formatHitMessage(hit));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await runHookCli(evaluateHook);
   } catch {
     // fail open — a tool hook must never break the turn
   }

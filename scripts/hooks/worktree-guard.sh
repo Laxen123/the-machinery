@@ -8,13 +8,13 @@
 #   - docs/handoff/board.md                   (plan 169 board, relocated under docs/handoff/ — plan 857)
 #   - docs/handoff/sessions/**                (plan 205 per-session entries, relocated — plan 857)
 #   - docs/handoff/infra-debt.md              (plan 2531 rolling debt list — one of the TWO plain-doc carve-outs from the docs/handoff/** coordWrite rule; hand-edited on master by design)
-#   - docs/handoff/grammar-debt.md            (plan 3944; operator-chartered 2026-08-10 grammar/tags one-off ledger — the OTHER plain-doc carve-out, same hand-edited-on-master contract as infra-debt.md above)
+#   - docs/handoff/grammar-debt.md            (dangling-ok: documents the live ALLOWED_RE entry, inert where the optional ledger is absent; plan 3944; operator-chartered 2026-08-10 grammar/tags one-off ledger — the OTHER plain-doc carve-out, same hand-edited-on-master contract as infra-debt.md above)
 #   - .claude/settings.json                   (hook config edits)
 #   - docs/INDEX.md                           (pickup-plan path-pointer rewrite, atomic with CLAIM)
 #   - docs/superpowers/plans/**               (pickup-plan step 4d: git mv to in-progress/, atomic with CLAIM)
 #   - docs/superpowers/specs/**               (brainstorming/strategy spec docs land straight to master; sibling of plans/)
 #   - docs/superpowers/batches/**             (plan-1467 batch-folder bookkeeping; doc-only, sibling of plans/ — plan 1684)
-#   - docs/runbooks/**.md                     (procedure prose; doc-only, lands straight to master so a same-session correction isn't deferred — plan 2692. `.md` ONLY: the committed cloud-drain-setup-script.sh under runbooks is executable, not prose)
+#   - docs/runbooks/ (.md files)             (procedure prose; doc-only, lands straight to master so a same-session correction isn't deferred — plan 2692. `.md` ONLY: the committed cloud-drain-setup-script.sh under runbooks is executable, not prose)
 #   - wiki/**                                 (live subject-synthesis wiki; doc-only, lands straight to master — plan 934)
 #   - WIKI.md                                 (wiki schema / Layer 3 — plan 934)
 #
@@ -90,7 +90,7 @@
 # idle dirt — an accident, not a flow. It's coord bookkeeping doc-only, same
 # risk profile as plans/**/specs/**, so it joins the straight-to-master set.
 #
-# Widened 2026-09-11 (plan 3944) — docs/handoff/grammar-debt.md is CLAUDE.md's
+# Widened 2026-09-11 (plan 3944) — the grammar-debt ledger beside infra-debt.md is CLAUDE.md's
 # OTHER plain-doc carve-out (alongside infra-debt.md above), hand-edited on
 # master by the same standing rule since it was chartered 2026-08-10, but this
 # allow-list only ever listed infra-debt.md. With a worktree alive (near-always
@@ -158,8 +158,8 @@ fi
 # Scope decided EXPLICITLY (T4 required the call, either way): WORKTREE gitdirs
 # only. The MAIN checkout's own `.git/index.lock` is NOT denied here — the named
 # fix would be wrong for it, since clear-stale-worktree-lock.mjs deliberately
-# never touches the shared main lock (docs/runbooks/branch-hygiene.md § Stale
-# worktree `index.lock` self-heal); a MAIN wedge is heal-main.mjs's business, and
+# never touches the shared main lock (docs/coord/worktrees.md § Stale index.lock
+# self-heal); a MAIN wedge is heal-main.mjs's business, and
 # the warn-only guard already points there. Widening is a separate decision.
 #
 # ONE parser, not two. The first cut of this block re-implemented the matching in
@@ -196,7 +196,7 @@ case "$cmd" in
     stale_scope=$(printf '%s' "$raw" | node "$hook_dir/hand-rolled-step-guard.mjs" --stale-lock-rm-json 2>/dev/null | grep -o '"scope":"worktree"' | head -1 || true)
     if [ -n "$stale_scope" ]; then
       cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Do NOT clear a stale worktree git lock with a raw `rm`. Run `node scripts/clear-stale-worktree-lock.mjs` instead, then retry the git command. It clears ONLY a provably stale lock (a blind `rm -f` also deletes a lock a live git operation is holding), it sweeps every linked worktree when run from the main checkout, and — the reason this is a deny and not a warning — it is already in the committed .claude/settings.json allow-list, so it auto-approves. A hand-rolled `VAR=…; rm -f \"$VAR\"/index.lock` can match no allow rule at all (they are prefix rules anchored on a command word), so it stops for a permission prompt; that parked an unattended cloud drain for 8h24m on 2026-09-05 and 3h40m on 2026-09-07. See docs/runbooks/branch-hygiene.md § Stale worktree `index.lock` self-heal. A MAIN-checkout wedge is a different tool: `node scripts/heal-main.mjs`. To force the raw form anyway, prefix the command with DONE_WORKTREE_AUTHORIZED=1."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Do NOT clear a stale worktree git lock with a raw `rm`. Run `node scripts/clear-stale-worktree-lock.mjs` instead, then retry the git command. It clears ONLY a provably stale lock (a blind `rm -f` also deletes a lock a live git operation is holding), it sweeps every linked worktree when run from the main checkout, and — the reason this is a deny and not a warning — it is already in the committed .claude/settings.json allow-list, so it auto-approves. A hand-rolled `VAR=…; rm -f \"$VAR\"/index.lock` can match no allow rule at all (they are prefix rules anchored on a command word), so it stops for a permission prompt; that parked an unattended cloud drain for 8h24m on 2026-09-05 and 3h40m on 2026-09-07. See docs/coord/worktrees.md § Stale index.lock self-heal. A MAIN-checkout wedge is a different tool: `node scripts/heal-main.mjs`. To force the raw form anyway, prefix the command with DONE_WORKTREE_AUTHORIZED=1."}}
 JSON
       exit 0
     fi
@@ -205,7 +205,7 @@ esac
 
 # ── Unqueued pytest sweep: DENY (plan 3969) ──────────────────────────────────
 # Measured 2026-09-12 (plan 3941): one session ran the full
-# backend/scripts/price-pipeline pytest sweep FOUR times SERIALLY through a
+# backend/scripts/data-pipeline pytest sweep FOUR times SERIALLY through a
 # bare `node scripts/queued-run.mjs python -X utf8 -m pytest -q <dir>` — about
 # 40 minutes each — while THIS repo's own pre-push.sh printed the parallel
 # form (`-n 9 --dist loadfile`, ~8 minutes) in the push log twice in that same
@@ -246,7 +246,56 @@ case "$cmd" in
     sweep_hit=$(printf '%s' "$raw" | node "$hook_dir/hand-rolled-step-guard.mjs" --unqueued-pytest-sweep-json 2>/dev/null | grep -o '"segment"' | head -1 || true)
     if [ -n "$sweep_hit" ]; then
       cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Do NOT launch an unwrapped pytest sweep. Run it through the wrapper instead: `node scripts/queued-run.mjs -- python -m pytest <dir>` — it injects the `-n <workers> --dist loadfile` flags itself from scripts/pytest-workers.mjs, so do NOT type them yourself. A single `.py` file is allowed bare (not sweep-shaped, ticket-free by design). Serial is still reachable on purpose, but only through the wrapper: pass `-p no:xdist` yourself. See vetapp/CLAUDE.md § Pre-commit / pre-land checks and docs/runbooks/branch-hygiene.md § Stale worktree `index.lock` self-heal for the plan-3752 pattern this mirrors. To force the raw form anyway, prefix the command with DONE_WORKTREE_AUTHORIZED=1."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Do NOT launch an unwrapped pytest sweep. Run it through the wrapper instead: `node scripts/queued-run.mjs -- python -m pytest <dir>` — it injects the `-n <workers> --dist loadfile` flags itself from scripts/pytest-workers.mjs, so do NOT type them yourself. A single `.py` file is allowed bare (not sweep-shaped, ticket-free by design). Serial is still reachable on purpose, but only through the wrapper: pass `-p no:xdist` yourself. See your project's `CLAUDE.md` § Pre-commit / pre-land checks and docs/coord/worktrees.md § Stale index.lock self-heal for the plan-3752 pattern this mirrors. To force the raw form anyway, prefix the command with DONE_WORKTREE_AUTHORIZED=1."}}
+JSON
+      exit 0
+    fi
+    ;;
+esac
+
+# ── Unqueued heavy single-file test run: DENY (plan 4241) ───────────────────
+# Single-file `node --test` runs are ticket-free BY RULE (vetapp/CLAUDE.md §
+# Pre-commit / pre-land checks) — right for a 5s file, wrong for one measured
+# at 1,499,615 ms (scripts/pre-push-hook.test.mjs, before plan 4228 shrank it). # dangling-ok: dated measurement of a project test file
+# 2026-09-26: one session ran 4-5 concurrent ticket-free single-file
+# `node --test` runs beside two full batteries and a full pytest sweep — in
+# load terms, a small sweep of its own, and nothing capped it. This DENY makes
+# a file on the MEASURED heavy list (scripts/coord/heavy-test-files.json,
+# regenerated from the battery ledger's per-file `durationMs` by
+# `node scripts/heavy-test-files.mjs regenerate`) take the wrapper instead of
+# running bare — the same "advice is not enough" fix plan 3969 applied to an
+# unwrapped pytest sweep above.
+#
+# A DENY, not a warn, for the same reason as the pytest-sweep block: the
+# companion scripts/hooks/hand-rolled-step-guard.mjs's own single-file
+# exemption for pattern 1 (`heavy-test-unqueued`) already stays SILENT on a
+# single test file by design — a warning would contradict that WARN twin
+# rather than reinforce it — so this DENY lives here, on data the warn path
+# cannot see (a MEASURED per-file duration, not a shape rule).
+#
+# ONE parser, not two: `--unqueued-heavy-test-json` asks
+# hand-rolled-step-guard.mjs's `unqueuedHeavyTestFileHits`, which owns the
+# match shape (S4 on the plan) and the heavy-list load (fail OPEN — a
+# missing/unreadable/empty scripts/coord/heavy-test-files.json means nothing
+# is heavy and this block never fires). The wrapped form
+# (`node scripts/queued-run.mjs -- node --test <file>`) is allowed on
+# STRUCTURAL grounds, exactly like the pytest sweep's wrapped form above: the
+# OUTER `node`'s first positional argument is `scripts/queued-run.mjs`, not
+# the literal `--test` flag, so the classifier reports no hit for that
+# command position. An unlisted file, and a `$( … )`/glob-hidden target, stay
+# allowed too — see that classifier's own doc comment for the full match
+# shape and its accepted misses.
+#
+# `case` pre-filter: NO spawn at all unless the command even mentions `--test`
+# (node's own flag spelling, always lowercase — unlike pytest/lock above there
+# is no case-folding to do here).
+case "$cmd" in
+  *--test*)
+    hook_dir=$(dirname "$0")
+    heavy_hit=$(printf '%s' "$raw" | node "$hook_dir/hand-rolled-step-guard.mjs" --unqueued-heavy-test-json 2>/dev/null | grep -o '"segment"' | head -1 || true)
+    if [ -n "$heavy_hit" ]; then
+      cat <<'JSON'
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Do NOT run this KNOWN-HEAVY test file bare. Run it through the wrapper instead: `node scripts/queued-run.mjs -- node --test <file>`. The file is on scripts/coord/heavy-test-files.json because its last recorded run took at least 600,000 ms (10 min) on this box, per scripts/heavy-test-files.mjs regenerate. An unlisted single file stays ticket-free by design, and the wrapped form above is always allowed. See vetapp/CLAUDE.md § Pre-commit / pre-land checks and docs/coord/hooks.md. To force the raw form anyway, prefix the command with DONE_WORKTREE_AUTHORIZED=1."}}
 JSON
       exit 0
     fi
@@ -482,5 +531,5 @@ fi
 
 # Default: deny
 cat <<'JSON'
-{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Worktree(s) detected under .claude/worktrees/. Do NOT git merge or git push to master by hand — land via the done-worktree spine (node scripts/done-worktree.mjs <slug>), which sessions self-invoke once the plan is complete and the review verdict is recorded (operator done-signal gate retired 2026-06-12). Pushes touching ONLY docs/handoff/current.md / docs/handoff/board.md / docs/handoff/sessions/** / docs/INDEX.md / docs/superpowers/plans/** / docs/superpowers/specs/** / docs/superpowers/batches/** / docs/runbooks/**.md / wiki/** / WIKI.md / .claude/settings.json are auto-allowed (pickup-plan claim lock + plan/spec/batch/runbook/wiki bookkeeping). Hook logic lives at scripts/hooks/ since plan 3765 and is ordinary review-gated app source: it lands through the spine like any other scripts/ change, and an urgent one-liner takes the explicit DONE_WORKTREE_AUTHORIZED=1 prefix rather than a silent auto-allow. To authorize anything else, prefix the bash command with DONE_WORKTREE_AUTHORIZED=1."}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Worktree(s) detected under .claude/worktrees/. Do NOT git merge or git push to master by hand — land via the done-worktree spine (node scripts/done-worktree.mjs <slug>), which sessions self-invoke once the plan is complete and the review verdict is recorded (operator done-signal gate retired 2026-06-12). Pushes touching ONLY docs/handoff/current.md / docs/handoff/board.md / docs/handoff/sessions/** / docs/INDEX.md / docs/superpowers/plans/** / docs/superpowers/specs/** / docs/superpowers/batches/** / docs/runbooks/ (.md files) / wiki/** / WIKI.md / .claude/settings.json are auto-allowed (pickup-plan claim lock + plan/spec/batch/runbook/wiki bookkeeping). Hook logic lives at scripts/hooks/ since plan 3765 and is ordinary review-gated app source: it lands through the spine like any other scripts/ change, and an urgent one-liner takes the explicit DONE_WORKTREE_AUTHORIZED=1 prefix rather than a silent auto-allow. To authorize anything else, prefix the bash command with DONE_WORKTREE_AUTHORIZED=1."}}
 JSON

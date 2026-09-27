@@ -889,10 +889,12 @@ test('testReadsRealTreeSegment: a nested prefix attributes the ".." traversal li
 // change. Prove the N=1 half directly: each REAL_TREE_JOIN_IDIOMS regex's source is exactly
 // `repoRootAlt(...)` spliced into the shape it names in its own comment — not a re-typed copy.
 test('REAL_TREE_JOIN_IDIOMS is built from the shared repoRootAlt, not a re-typed alias list', () => {
-  assert.equal(REAL_TREE_JOIN_IDIOMS[0].source, `\\bjoin\\(\\s*${repoRootAlt()}\\s*,\\s*'([^']+)'`);
+  const quoted = '[\'"`]([^\'"`$]+)[\'"`]';
+  const traversal = '[\'"`]\\.\\.[\'"`]';
+  assert.equal(REAL_TREE_JOIN_IDIOMS[0].source, `\\bjoin\\(\\s*${repoRootAlt()}\\s*,\\s*${quoted}`);
   assert.equal(
     REAL_TREE_JOIN_IDIOMS[1].source,
-    `\\bjoin\\(\\s*${repoRootAlt(true)}\\s*,\\s*'\\.\\.'\\s*,\\s*'([^']+)'`,
+    `\\bjoin\\(\\s*${repoRootAlt(true)}\\s*,\\s*${traversal}\\s*,\\s*${quoted}`,
   );
 });
 

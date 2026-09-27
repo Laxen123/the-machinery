@@ -927,3 +927,37 @@ test('partitionBatches: the oracle skippedBatches list is carried through, lane-
   assert.equal(out.skippedBatches[0].lane, 'fable');
   assert.match(out.skippedBatches[0].reason, /blocked-under-hold/);
 });
+
+test('partitionPools (plan 4255): a land-only /cloud-land hand-off is left for the cloud drains, even when cloudExec is false', () => {
+  const pools = [
+    [
+      'fable',
+      {
+        eligible: [
+          {
+            slug: '4255-A-handed-off',
+            path: 'docs/superpowers/plans/ready/4255-A-handed-off.md',
+            cloudExec: 'false',
+            lane: 'fable',
+            landOnly: true,
+          },
+          {
+            slug: '4256-B-plain',
+            path: 'docs/superpowers/plans/ready/4256-B-plain.md',
+            cloudExec: 'false',
+            lane: 'fable',
+          },
+        ],
+      },
+    ],
+  ];
+  const out = partitionPools(pools, { exists: () => true });
+  assert.deepEqual(
+    out.localOnly.map((e) => e.slug),
+    ['4256-B-plain'],
+  );
+  assert.deepEqual(
+    out.droppedCloudEligible.map((e) => e.slug),
+    ['4255-A-handed-off'],
+  );
+});

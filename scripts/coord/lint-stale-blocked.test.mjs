@@ -52,7 +52,7 @@ test('flags all-archived-and-shipped-plus-gate as REVIEW (not auto-promotable)',
 
 test('does NOT flag a pure trip/calendar gate (no plan-id blocker)', () => {
   const entries = [
-    wb('213-P07-x.md', 'first natural price-page change — cron surfaces ≥1 changed clinic'),
+    wb('213-P07-x.md', 'first natural price-page change — cron surfaces ≥1 changed record'),
   ];
   assert.deepEqual(findStaleBlocked(entries, corpus({}), shippedAll), []);
 });

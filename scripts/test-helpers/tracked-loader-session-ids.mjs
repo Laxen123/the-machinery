@@ -7,7 +7,7 @@
 // test files built that id from `process.pid` alone (`t${pid}`, `pw-${pid}`, `pp-${pid}`,
 // `sw-${pid}`, `cr-${pid}`, `stop-t${pid}`, `codex-<thing>-${pid}`, `relay-t${pid}`) and
 // swept it by hand — each `after` naming ONE cache root, or naming the ids one by one, or
-// (build-codex-hooks, special-clinic-loader) sweeping inline at the end of a test / not at
+// (build-codex-hooks, a per-record loader test) sweeping inline at the end of a test / not at
 // all. Both halves were wrong in the same way:
 //
 //   1. A pid is not unique over time. Windows recycles pids in a small space, so a later

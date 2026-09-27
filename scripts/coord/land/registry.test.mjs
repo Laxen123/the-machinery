@@ -1321,12 +1321,12 @@ function commentPortionsOf(text) {
 
 const LAND_CORE_DIR = dirname(fileURLToPath(import.meta.url));
 // plan 3961 review fix (FIX 4a): the plan's OWN acceptance criterion names ten words —
-// clinic, seed, price, railway, render, wiki, market, akut, pytest, mobile — four of which
+// clinic, seed, price, railway, render, wiki, market, akut, pytest, mobile — four of which // project-word-ok: describes the real word list below, not a leak
 // (price, market, akut, mobile) were missing here. `vetapp`, `backend/`, `frontend/`, and
 // `omnibus` are additional words this test has always scanned for beyond that list; they stay.
 const PROJECT_NOUN_WORDS = [
   'vetapp',
-  'clinic',
+  'clinic', // project-word-ok: this is the pre-existing land-core project-noun gate's OWN word list, not a leak
   'wiki',
   'backend/',
   'frontend/',

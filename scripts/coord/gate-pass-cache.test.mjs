@@ -41,6 +41,7 @@ import {
   parseStatusPaths,
   parseBatchCheck,
   computeGateKey,
+  gateKeyAtRev,
   deriveSelectionKey,
   parseEntry,
   isLive,
@@ -442,7 +443,7 @@ test('plan 2491: the mobile gate is cached ONLY as a probe-gated entry', () => {
 test('plan 2491: the mobile-gate closure keys what the WebKit run actually reads', () => {
   const p = GATES[MOBILE_GATE].paths;
   // The dev server compiles the whole frontend (harness included) and shared; `predev` runs
-  // generate-clinic-index.ts over the sharded seed, so seed content decides whether the server
+  // generate-record-index.ts over the sharded seed, so seed content decides whether the server
   // even starts. Missing any of these would be a stale green, not just a missed hit.
   for (const need of ['frontend', 'shared', 'backend/src/data', 'pnpm-lock.yaml'])
     assert.ok(p.includes(need), `mobile-gate closure is missing ${need}`);
@@ -1098,7 +1099,7 @@ test('gateVerdict (plan 4088): the two frontend vitest gates scope to different 
   // rightly so — but this is a path FIXTURE for the dirty-set, not a seed read, so the
   // grandfather allowlist (which means "this script genuinely opens the seed by path") would
   // be the wrong home for it and would read as a false claim about this file.
-  const seedShard = ['backend/src/data/seed', 'clinics', 'SE', 'clinic-001.json'].join('/');
+  const seedShard = ['backend/src/data/seed', 'records', 'SE', 'rec-001.json'].join('/');
   const seedEdit = stateOf({ oids: FULL_OIDS, dirty: [seedShard] });
   assert.equal(
     gateVerdict(seedEdit, 'vitest-frontend-seed-sanity', GATES).reason,
@@ -1693,3 +1694,36 @@ test('plan 2491: VERIFY_MOBILE_SKIP=1 (the documented bypass) is uncacheable at 
 // a gate is a legitimate change and updates both sides in the same diff (plan 4088 added
 // `vitest-frontend-full`), which is the point — the guard catches an UNINTENDED divergence, it
 // does not freeze the roster.
+
+// plan 4192: the land's closure key at a committed revision — same computeGateKey, oids read at
+// `<rev>:<path>`, and the same all-closure-paths-present refusal gateVerdict applies.
+test('gateKeyAtRev keys a gate at a revision, moves only with its own closure, and refuses a partial closure', () => {
+  const gates = {
+    g: { desc: 'g', paths: ['frontend', 'shared/src'], envUncacheable: [] },
+  };
+  const oidsAt = {
+    r1: { frontend: 'a'.repeat(40), 'shared/src': 'b'.repeat(40) },
+    r2: { frontend: 'a'.repeat(40), 'shared/src': 'b'.repeat(40) }, // a rebase that left g alone
+    r3: { frontend: 'c'.repeat(40), 'shared/src': 'b'.repeat(40) }, // master touched frontend
+    r4: { frontend: 'a'.repeat(40) }, // shared/src absent
+  };
+  const git = (args, input) => {
+    if (args[0] === 'version') return 'git version 2.45.0\n';
+    assert.deepEqual(args, ['cat-file', '--batch-check']);
+    return input
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const [rev, p] = line.split(':');
+        const oid = oidsAt[rev][p];
+        return oid ? `${oid} tree 1` : `${line} missing`;
+      })
+      .join('\n');
+  };
+  const k1 = gateKeyAtRev(git, gates, 'g', 'r1', { nodeMajor: 22 });
+  assert.match(k1, /^[0-9a-f]{32}$/);
+  assert.equal(gateKeyAtRev(git, gates, 'g', 'r2', { nodeMajor: 22 }), k1);
+  assert.notEqual(gateKeyAtRev(git, gates, 'g', 'r3', { nodeMajor: 22 }), k1);
+  assert.equal(gateKeyAtRev(git, gates, 'g', 'r4', { nodeMajor: 22 }), null);
+  assert.equal(gateKeyAtRev(git, gates, 'nope', 'r1', { nodeMajor: 22 }), null);
+});

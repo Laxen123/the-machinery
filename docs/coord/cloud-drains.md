@@ -44,6 +44,9 @@ each one names a concrete missing capability rather than a vague discomfort:
 | 7   | The work writes to a configuration path whose edit would trigger an unattended safety prompt with no approver present                                                                      | Ordinary application code, however sensitive its content                                                                            |
 | 8   | The work performs a destructive or gate-bypassing action that an automated safety classifier will refuse without a direct human instruction naming that exact action                       | The classifier being over-cautious in general — that is the classifier working as intended, not a reason to route around it         |
 
+These numbers are the same numbers the stamping rubric uses (§ The cloudExec stamping rubric, which
+carries each reason's adjudication detail), and they are stable.
+
 Some observed anti-patterns are worth naming explicitly, because each one has been used, wrongly, to
 exclude work that should have run unattended: "this needs reasoning" is not a reason — the whole
 point of an unattended session with a capable model is that it _can_ reason; a task touching a
@@ -67,6 +70,203 @@ needs a human vantage point. The reachable portion executes and completes on its
 unreachable remainder becomes its own new, explicitly-parked work item carrying the exact residue.
 Never hold the reachable majority hostage to the unreachable minority, and never silently fold the
 minority into the majority and hope nobody notices the gap.
+
+**How the flag is carried.** It is a dedicated frontmatter key, `cloudExec: true | false`, stamped at
+review time by the heavy model that already read the whole item — the only reader positioned to
+judge the item's actual work. Before the key existed, eligibility was re-derived inside each
+unattended prompt from a keyword grep over the item body, and it misfired both ways: an item needing
+tooling the sandbox lacks got picked and stalled, and an item that merely _mentioned_ an excluded
+tool in passing prose got skipped. The unattended session selects work by calling the oracle, never
+by grepping frontmatter itself (§ Why the eligibility oracle must be a program, below):
+`node scripts/queue-drain.mjs --cloud` EXCLUDES every item not explicitly stamped `true` — a `false`
+item and an unstamped one alike — and that safety gate fires first, ahead of every other gate. An
+absent stamp therefore means "never picked unattended": the conservative direction, since a missed
+stamp only defers an item to an attended lane. Local drains omit `--cloud` and see the whole pool.
+
+## The cloudExec stamping rubric
+
+This section is the single source every stamper adjudicates against — an unattended review sweep
+and an attended review pass alike. Rubric changes are made here, never inline in a prompt, so a rule
+change propagates without re-syncing every scheduled job's configuration.
+
+**The tool.** `node scripts/stamp-cloud-exec.mjs <id> true|false [--env <rung>] [--reason "…"]`
+writes the key atomically, the same way the other stamp tools do. A `false` stamp **requires**
+`--reason`, recorded as a body banner (`> ☁️ **cloudExec: false** — #<n> <evidence>`) beside the
+mutation and cost banners, so the WHY survives; stamping `true` strips a stale reason banner. The
+tool refuses `in-progress/` and `archive/`, and is meant to run at verdict time whatever the item's
+route, so a later objective promotion into `ready/` finds the stamp already present. The review
+pass's stamp tool can fold the same stamp into its one verdict commit.
+
+**The burden of proof is inverted: the default stamp is `true`.** Unattended-ineligibility must be
+PROVEN, not presumed. A `false` stamp is valid only when it cites a numbered reason below AND the
+reason text names the concrete missing capability with its evidence — a probe result, a registry
+entry, a named withheld credential, a named machine-local dependency. When the stamper is unsure, the
+safe stamp is `true` with the most capable plausible environment rung (§ The cloudEnv axis): a wrong
+`true` fails fast and visibly in the drain, while a wrong `false` silently exiles the item to the
+attended lane forever. Never valid as `false` on their own: "needs a browser" (apply the engine check
+in #1 and route a rung instead), "not proven in the sandbox yet" (an unproven capability gets proven
+once, not defaulted away), a bare "writes the shared dataset" banner, or a stamp with no written
+reason at all.
+
+**An inherited `false` reason is not an adjudication.** A reason sentence copied from a predecessor
+item carries that item's evidence, not this one's — and if it was never true, the copy propagates a
+wrong exclusion down a whole lineage unchallenged. Before honouring an existing `false`, grep its
+reason text across the item tree; an exact hit elsewhere means re-adjudicate from the rubric, never
+re-affirm. In the same spirit: a store of artifacts committed to the repository is not a machine-local
+dependency (a drain clones it), and neither is work on an unlanded branch that has been pushed to the
+remote (a drain fetches it — check the remote's branch list first).
+
+**The ONLY valid `false` reasons — a concrete capability the sandbox lacks.** The numbers are
+stable: shipped code, banners and command docs cite them as "rubric #N", so a reason is never
+renumbered or reused for a different meaning.
+
+1. **A real rendered browser needed for the work itself, beyond what the most capable environment
+   provides.** A restricted environment's browser cannot reach arbitrary hosts, but a full-egress
+   environment's can, so those blockers ROUTE a rung rather than excluding the item. Still `false`:
+   a specific human's logged-in browser session, or anything needing a real display. **Engine-first
+   check:** a browser-verification step is never `false` by itself. Acceptance that consumes DOM,
+   HTML or URL assertions routes to the headless-engine rung even when the page under test is a
+   sandbox-local server pulling live resources; only pixel or vision acceptance, a real display, or a
+   human's logged-in browser forces the top rung or `false`. The classic mis-stamp is a step written
+   around one browser tool when its actual method (a scripted stub plus URL assertions) was
+   engine-agnostic.
+2. **Target hosts that must be reached from a local vantage.** The project's host-reachability
+   registry marks a host as reachable only from a local vantage when even a residential fetch fails
+   and a real browser there is required. A host merely blocked by a restricted environment's proxy
+   routes the full-egress rung, plain fetches are otherwise fine unattended, and a host blocked only
+   from datacenter addresses but reachable through a configured scraping vantage is not a reason
+   either.
+3. **An external credential deliberately withheld from the unattended environment.** The withheld
+   set is a short, deliberate list — email-sending, production deploy control, a production database
+   credential, DNS and domain control, social posting — and it never grows without a fresh human
+   go-ahead. A credential that is merely missing today but could reasonably be provisioned is not a
+   reason: provision it into every unattended environment and restamp `true`. A nested model-CLI
+   call from inside the sandbox is not a blocker on its own; it authenticates from the sandbox's own
+   credentials.
+4. **Files in a repository outside the clone that is not in the extra-repo registry.** An unattended
+   sandbox holds one clone. A repository registered in `coord.config.json`'s `cloudRepos` (read by
+   `scripts/coord/cloud-repos-lib.mjs`) is cloned beside it on demand, so an item whose only
+   outside-the-clone surface is a registered repository is stamped `true --repos <key>`, never
+   `false`. This retires the recurring class of policy and coordination text that lives one level up
+   from the repository a drain checks out.
+5. **Machine-wide state on a human's own workstation** — local resource mutexes, machine-wide
+   telemetry, the human's running dev servers or parallel local sessions.
+6. **Human-as-oracle.** A decision the item explicitly routes to a human, or an action needing that
+   human's own credentials or logged-in accounts. **Front-load first:** if the human's input depends
+   only on a cheap read-only computation, the review pass computes it and asks (or parks) with the
+   result attached, and the routed mid-run decision disappears. `false` under #6 is for exchanges
+   that genuinely depend on mid-implementation state.
+7. **Work that writes under `.claude/**`** — settings, commands, workflows. The harness raises a
+safety ask with no approver in an unattended run, and the session freezes until its window dies
+(observed freezes ran for hours). Do not rely on remembering this one: the stamp tool REFUSES a
+`true`stamp (exit 2) when the item body names a`.claude/`path, naming the matched line. It skips
+the frontmatter, fenced code blocks, and any`## Do NOT touch`section, but inline backticked
+paths are scanned — that is where a scope section declares its real file surface. The override is`--claude-dir-ok "<justification>"`, recorded as a banner in the same slot, for two cases only:
+the item merely MENTIONS the path and no step writes there; or its only writes are workflow files
+routed through `node scripts/apply-workflow-file.mjs`, a tool call that raises no safety ask.
+   Settings and command files stay hard-forbidden regardless. The durable escape when the surface is
+   doctrine prose inside a command body is relocation: move the mutable text into an in-repo file and
+   leave the command a thin "read this file and follow it" stub, so later items never touch the
+   gated path. Hook logic belongs in a non-gated scripts directory for the same reason.
+8. **Work needing an action the unattended safety classifier denies** — the general class #7 is one
+   instance of: writes to shared git hooks (`.husky/**`, which the stamp tool also refuses, with its
+   own separate `--husky-ok "<justification>"` override so one flag never silently clears the
+   other), remote-branch deletes, a `--no-verify` / guard-override prefix, or a one-off change to a
+   live shared service (the hosting platform, DNS or CDN, the code host's settings) by any path other
+   than an allow-listed committed tool — a raw API mutation, a REST call, a dashboard step (plan 4256
+   parked on exactly this: a staging build-command update refused as "Modify Shared Resources").
+   Where the repository ships a narrowly scoped tool for such a change and allow-lists exactly that
+   tool in the committed `.claude/settings.json`, an item whose only live-infra step goes through it
+   stays `true`; the project's own staging runbook names the instance (plan 4261). Do NOT weaken the
+   classifier to route around this — it blocking these writes is correct, and the attended lane is
+   the design. Three facts about the classifier worth budgeting for: delegated authority does not
+   clear it (only a direct human instruction naming that exact action does — design around it, or
+   surface a one-line ask); its verdict is not a stable function of the command text (identically
+   shaped launches in one batch can split admitted and denied, so plan a fallback for a partial
+   fan-out); and a dispatch prompt's own WORDING is judged — a prohibition list of destructive verbs
+   reads as intent and gets a benign command denied, where a positive recipe is admitted.
+
+**A `false` stamp cites its number(s) in the banner**, for example
+`false — #3 <which credential>, #6 <which decision>`. Adjudication is a checklist pass against these reasons and nothing else: a rationale
+that maps to no number is not a reason, and the item is `true`.
+
+**Never valid `false` reasons**, each over-applied once and corrected:
+
+- "Judgment work" or heavy-model reasoning — the heavy unattended lane exists for exactly that.
+- Writes to the shared authoritative dataset — the scoped landing mutex covers an unattended land
+  like any other.
+- Plain HTTP fetches — unattended environments have egress.
+- "Validation needs live multi-session machinery" — check the item's OWN acceptance criteria;
+  criteria that name tests or fixtures are headless. Only a criterion that irreducibly needs live
+  concurrent sessions counts, and then prefer splitting.
+- Editing drain-adjacent repository code, the eligibility oracle included — a reviewed, gated land
+  carries the same risk from any host. (Live scheduled-job configurations stay human-attended.)
+
+**Split, don't sink.** An item that is mostly headless with an attended tail — a per-account apply,
+one config line, a live validation step — has its body restructured, the tail carved out as an
+explicit close-out follow-up, and is stamped `true`. Never stamp a whole item `false` for its tail.
+**Split by reach, too:** for a per-record pass, the split axis is the cohort, measured up front — the
+rows an unattended vantage can reach are the unattended part (stamped `true` with its rung), the rows
+that need a local vantage are a COUNTED remainder. The unattended part executes and lands on its own;
+its close-out mints the remainder as a new `false` (#2) item carrying the exact residue roster. When
+the split cannot be measured in advance, the first unattended batch IS the measurement, and its
+failure ledger is the remainder.
+
+**Re-adjudication duty, every sweep.** For each `ready/` item already stamped `false`, compare its
+cited reason against the current list; a reason no longer valid, or a body since restructured, is
+re-adjudicated and restamped. Stale stamps die at the next sweep, not at the next human challenge. And
+**a fix only clears the reason it targets** — provisioning a credential clears a #3 banner, but the
+same item may also do work that trips #2; a restamp is a whole-item judgment, never a per-reason
+patch.
+
+**Probe the environment you think you are probing.** A dispatch that claims to run in a remote
+sandbox can silently fall back to running on the local machine. Any probe whose conclusion depends on
+WHERE it ran (tool availability, network posture, browser pairing) reports its hostname and kernel
+string, and is void if they match the local workstation.
+
+## The cloudEnv axis
+
+`cloudExec` answers whether an item may run unattended at all (safety). A second, independent axis
+answers **which kind of environment** it needs (routing). The key is `cloudEnv:`, one of
+`trusted`, `full`, `webkit` or `browser` — a superset ladder where each rung can run everything below it. Absent means `trusted`, the
+base pool. It exists because the two biggest "the sandbox cannot do this" classes — a headless-engine
+test gate and live fetches of arbitrary hosts — turned out to be artifacts of the RESTRICTED
+environment, and both work outright in a full-egress one. So those items ROUTE to a rung instead of
+sinking to `false`.
+
+| Rung      | What the environment provides                                                                                                                                                           |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `trusted` | Restricted egress through a host allowlist; engines cannot be installed; plain repository work, tests and allowlisted fetches.                                                          |
+| `full`    | Unrestricted egress: fetches to arbitrary hosts, and engine installs.                                                                                                                   |
+| `webkit`  | A headless engine whose own TLS handshakes to live hosts are proven to work from the sandbox — for acceptance that consumes DOM, HTML, anchors or status codes from a live page.        |
+| `browser` | The top rung: the specific browser engine the project's pixel-level acceptance is pinned to, reaching live hosts — for screenshots, crops, vision grading or structural-hash freshness. |
+
+- **Stamp** with the same tool, `stamp-cloud-exec.mjs <id> true --env <rung>`, so both keys land in
+  ONE atomic commit. `--env` is legal only beside `true` (a `false` item runs nowhere unattended, so
+  routing it is meaningless — the tool refuses). A bare `cloudExec` restamp leaves an existing
+  `cloudEnv` untouched: independent axes, so a safety flip never silently clears routing.
+- **The oracle is a superset ladder.** Plain `queue-drain.mjs --cloud` (the restricted lane)
+  excludes every item above `trusted`. `--cloud --env full` excludes NOTHING on this axis — a
+  full-egress environment admits the whole unattended-eligible pool — so an intermediate rung that
+  a full-egress lane already satisfies needs no lane value of its own. `--env` composes with the
+  lane selection; attended local drains never read the axis. The intended end state is full-only
+  draining; while two lanes overlap, the claim compare-and-swap makes the overlap safe (two drains
+  cannot both win one claim) if wasteful.
+- **Split on what the acceptance CONSUMES, never on "does it launch a browser".** DOM, HTML, anchors
+  and status codes from a live page route the engine rung. Pixels, crops, vision grades and
+  screenshot-freshness hashes route the top rung, because swapping engines changes font
+  rasterization and layout, which silently invalidates a cached screenshot corpus and changes what a
+  vision judge sees. A capture on one engine may feed text extraction while the pixel of record
+  stays pinned to the other; never let an engine swap quietly become the screenshot of record.
+- **Anti-downgrade guard.** Restamping a top-rung item to any lower rung REFUSES — a lower lane still
+  cannot run pixel acceptance. Downgrades among the lower rungs are deliberately not guarded: the
+  full lane admits all of them, so such a downgrade is lossy on meaning but strands nothing.
+- **A rung is a per-environment MEASURED verdict, never an assumption.** "Full egress, therefore
+  every browser reaches live hosts" has been false in practice: one engine's TLS handshake reset
+  mid-tunnel from a full-egress sandbox while plain fetches and a different engine succeeded against
+  the same hosts. A small egress probe per engine records which environment it measured and whether
+  it passed; an environment the probe passes on is a candidate for the rung, one it fails on is not,
+  and neither is assumed without measuring.
 
 ## The prompt-template shape
 
@@ -211,6 +411,40 @@ to that report is mechanical: push the same, unchanged commit again, which resum
 previous pass stopped rather than restarting from zero. A handful of such rounds converging cleanly
 is normal; only a check that is not actually making progress across rounds is a real problem, worth
 escalating through the normal escape hatch instead of repeating forever.
+
+The details that make this safe rather than a loop:
+
+- **Three outcomes, told apart by a marker line, not by prose.** A chunked round prints a
+  machine-readable marker naming the outcome and the gate (for example
+  `MARKER prepush-outcome=CHUNKED gate=<gate>`) followed by a plain instruction to re-push the SAME
+  commit — no rebase, no hook bypass, no diagnosis, because a content-keyed ledger already recorded
+  what that round proved. A genuinely failing check prints no marker at all; its absence is the
+  third state.
+- **Non-convergence is bounded in code.** Each chunked round is scored against the ledger: two
+  consecutive rounds that bank ZERO new units of work on the same content print a different marker
+  (`NON_CONVERGENT`) and an explicit STOP — do not push the same commit again, it will bank nothing.
+  Isolate or fix the one unit that cannot finish inside a single window, or raise the window for one
+  push if the work is healthy but too big, then push a DIFFERENT commit. The tally is keyed on a hash
+  of the check's own input closure, never on the commit id: a commit that changes the check's inputs
+  starts a fresh tally, while an unrelated commit keeps the old one — otherwise a stuck check could be
+  laundered back to "chunked" by a commit that never touched the unit causing it.
+- **The same loop runs at land time**, through the landing spine rather than the push hook: the land
+  reports a chunked seam and the session re-invokes the same land. A chunk-resume is progress, never a
+  proof — it does not count as the check having passed.
+- **The deadline is anchored at process start, not at the first chunked step.** A land spends real
+  time on earlier phases (preflight, a build, other gates) before its first chunkable check; a
+  deadline stamped only when that check starts leaves those phases uncounted, and the window can then
+  expire AFTER the tool's own hard cap has already killed the call, so the chunk report never speaks.
+  The shared budget covers everything up to and including the chunked checks, deliberately leaving
+  headroom under the hard cap for the bookkeeping that follows. Earlier phases derive their own
+  timeouts from what is left of the same budget and report "chunked" instead of "failed" when they
+  run out, and a phase that retires nothing twice on the same commit reports non-convergence naming
+  the real cause — the phases before it are eating the window, or the check cannot fit inside one.
+- **The binding instruction lives in the unattended prompt itself.** If the prompt's hard-limits
+  paragraph says "hand the job back when it overruns one foreground call" and overrides any
+  conflicting instruction elsewhere, then a chunking rule written only in a separate doc is, by
+  construction, overridden. State the chunk-and-repeat rule inside the prompt, ahead of the hand-back
+  rule, and narrow the hand-back to an overrun with NO chunk report.
 
 ## The hard limit: never end a turn with live background work
 

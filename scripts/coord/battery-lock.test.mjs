@@ -56,6 +56,8 @@ import {
   holderPidTrustworthy,
   decideWaitStep,
   effectiveAdmissionWaitSec,
+  HARD_STALE_MIN,
+  holderProvedLive,
 } from './battery-lock.mjs';
 
 const CLI = resolve(import.meta.dirname, 'battery-lock.mjs');
@@ -1279,4 +1281,116 @@ test('plan 2734: --tier is refused where it cannot be honoured, never silently i
   assert.equal(bare.status, EXIT_ERROR, `a valueless --tier must be refused, got ${bare.status}`);
   assert.match(bare.stderr, /--tier is missing its value \(end of arguments\)/);
   assert.doesNotMatch(bare.stdout, new RegExp(LOCK_TIERS.serialized));
+});
+
+// ── plan 4236 T3 (H3): a provably-live holder outlasts the 120-min age gate, up to HARD_STALE_MIN ──
+// The 2026-09-26 incident: a second land reaped a LIVE holder's lock by age at 127 min. Every probe
+// is injected — no real process is spawned, killed or start-time-read here.
+function liveHolderLock({ startToken = 'T-4242' } = {}) {
+  const p = tmpLock();
+  tryCreate(p, {
+    token: 'land-holder',
+    label: 'dw-battery-4242',
+    nowIso: ISO,
+    pid: 999,
+    host: 'h',
+    holderPid: 4242,
+    holderStartToken: startToken,
+  });
+  return p;
+}
+const waiter = (nowMs, { alive = true, token = 'T-4242' } = {}) => ({
+  token: 't2',
+  label: 'l',
+  nowMs,
+  pid: 1,
+  host: 'h',
+  _pidAlive: () => alive,
+  _startToken: () => token,
+});
+
+test('plan 4236 T3: the entry records holderStartToken beside holderPid (and never without one)', () => {
+  const p = liveHolderLock();
+  const e = readEntry(p);
+  assert.equal(e.holderPid, 4242);
+  assert.equal(e.holderStartToken, 'T-4242');
+  const q = tmpLock();
+  tryCreate(q, { token: 'x', label: 'l', nowIso: ISO, pid: 1, host: 'h', holderStartToken: 'T' });
+  assert.equal('holderStartToken' in readEntry(q), false, 'no declared holder ⇒ no identity field');
+});
+
+test('plan 4236 T3: live holder + matching identity at 127 min → BUSY (not reaped by age)', () => {
+  const p = liveHolderLock();
+  const r = acquireOnce(p, waiter(at(127)));
+  assert.equal(r.action, 'BUSY');
+  assert.equal(existsSync(p), true);
+});
+
+test('plan 4236 T3: live pid but MISMATCHED identity (recycled) at 127 min → REAPED reason=age', () => {
+  const p = liveHolderLock();
+  const r = acquireOnce(p, waiter(at(127), { token: 'T-someone-else' }));
+  assert.equal(r.action, 'REAPED');
+  assert.equal(r.reason, 'age');
+});
+
+test('plan 4236 T3: dead holder → REAPED reason=dead-pid (the fast reap is unchanged)', () => {
+  const p = liveHolderLock();
+  const r = acquireOnce(p, waiter(at(1), { alive: false }));
+  assert.equal(r.action, 'REAPED');
+  assert.equal(r.reason, 'dead-pid');
+});
+
+test('plan 4236 T3: live + matching identity past HARD_STALE_MIN (361 min) → REAPED reason=age', () => {
+  assert.equal(HARD_STALE_MIN, 360);
+  const p = liveHolderLock();
+  const r = acquireOnce(p, waiter(at(361)));
+  assert.equal(r.action, 'REAPED');
+  assert.equal(r.reason, 'age');
+});
+
+test('plan 4236 T3: an entry with no recorded identity keeps the plain 120-min age gate', () => {
+  const p = tmpLock();
+  tryCreate(p, { token: 'old', label: 'l', nowIso: ISO, pid: 999, host: 'h', holderPid: 4242 });
+  let tokenProbed = false;
+  const r = acquireOnce(p, {
+    ...waiter(at(127)),
+    _startToken: () => {
+      tokenProbed = true;
+      return 'T-4242';
+    },
+  });
+  assert.equal(r.action, 'REAPED');
+  assert.equal(r.reason, 'age');
+  assert.equal(tokenProbed, false, 'no recorded token ⇒ the identity probe is never run');
+});
+
+test('plan 4236 T3: a fresh entry never pays for the identity probe', () => {
+  const p = liveHolderLock();
+  let tokenProbed = false;
+  const r = acquireOnce(p, {
+    ...waiter(at(5)),
+    _startToken: () => {
+      tokenProbed = true;
+      return 'T-4242';
+    },
+  });
+  assert.equal(r.action, 'BUSY');
+  assert.equal(tokenProbed, false);
+});
+
+test('plan 4236 T3: holderProvedLive refuses a foreign host, an unprovable probe and a corrupt entry', () => {
+  const entry = {
+    token: 'x',
+    iso: ISO,
+    host: 'h',
+    holderPid: 4242,
+    holderStartToken: 'T-4242',
+  };
+  const opts = { host: 'h', _pidAlive: () => true, _startToken: () => 'T-4242' };
+  assert.equal(holderProvedLive(entry, at(127), opts), true);
+  assert.equal(holderProvedLive(entry, at(127), { ...opts, host: 'other' }), false);
+  assert.equal(holderProvedLive(entry, at(127), { ...opts, _pidAlive: () => null }), false);
+  assert.equal(holderProvedLive(entry, at(127), { ...opts, _startToken: () => null }), false);
+  assert.equal(holderProvedLive(null, at(127), opts), false);
+  assert.equal(holderProvedLive({ ...entry, iso: 'garbage' }, at(127), opts), false);
 });

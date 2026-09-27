@@ -2179,7 +2179,7 @@ test('claudeArmPrompt (round 5, write containment): with a repoRoot, the prompt 
   // Round-4 real-run finding (reported by team-lead): `--allowedTools
   // "Bash(git show:*)"` is a command-PREFIX match, not a sandbox — a
   // `git show <ref>:<path> > file.json` redirect still writes, and the arm
-  // wrote a 34MB copy of the retired seed-clinics.json monolith straight into
+  // wrote a 34MB copy of the retired seed monolith straight into
   // the worktree root. The fix is a disposable scratch cwd (runClaudeArm) +
   // this prompt paragraph telling the model to always go through
   // `-C <repoRoot>` for git, matching the `git -C <repoRoot> <subcommand>`

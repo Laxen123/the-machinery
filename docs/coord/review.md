@@ -32,7 +32,34 @@ reviewer's default settings:
 Re-running every finder against the entire change on every fix round is the single most common way
 calibration gets wasted in practice: one measured audit of a real review pipeline found roughly a
 third of all fan-out runs were repeat runs re-confirming a tiny follow-up rather than a genuine
-first pass. Scope the re-review to exactly what changed since the last one.
+first pass. Scope the re-review to exactly what changed since the last one. A follow-up that is docs,
+config, or the verbatim nit fixes the review asked for needs no re-run at all: the review marker is
+pinned to a commit, so record a pass at the new commit and move on.
+
+A few rules keep the ladder honest in practice:
+
+- **Pin delta ranges to explicit commits (`<sha>..<sha>`), never `..HEAD`,** whenever a review might
+  run or resume outside the worktree. Resumed from a shared root checkout, `HEAD` is the trunk, the
+  range resolves backwards, and the finders confidently report your own additions as reverts. If a
+  delta round's findings read like your change being undone, suspect the baseline first.
+- **A finding about a file the diff never touches is evidence about the branch's BASE, not about
+  trunk.** A long-lived branch shows every untouched file as its merge-base left it, so a finder can
+  cite perfectly accurate lines that are already false on trunk. The tell is the subject file's
+  absence from the diff's own changed-file list; re-check it against trunk before dispositioning.
+- **Committed data artifacts stay out of the finder diff.** Generated data, report output and lock
+  files are cut when the diff is assembled — one exclude list, owned by
+  `scripts/review-diff-scope.mjs` and imported by every lane, never restated in any of them — and
+  the count and roots excluded are stated in the scope block every finder reads, so "data moved but
+  is out of scope" stays distinguishable from "data did not change". Without the cut, one large data
+  commit can blow every finder's context budget and force a full re-fan-out. A review running long is
+  a scoping problem, not a timeout to raise: narrow the paths.
+- **Before re-running a review that exited oddly, check its output directory first.** A complete
+  findings file and stats file on disk mean the review finished — adopt it rather than paying for a
+  second run.
+- **An environment that cannot run the full fan-out records the downgrade honestly.** A dispatched
+  worker that has no way to launch a multi-agent workflow records a single-reviewer `substitute`
+  pass, labeled as exactly that; for a diff that warrants a full fan-out, the top-level session runs
+  it instead.
 
 ## The fan-out shape
 
@@ -128,6 +155,80 @@ to a different, separate piece of work — record it there, not as an obligation
 front of you. Expanding a change's scope to fix every adjacent thing a reviewer happens to notice is
 how a small, well-bounded change grows into an unreviewable one.
 
+## Disposition policy
+
+Three layers decide what happens to anything surfaced mid-work — a review finding, an incident, a
+side discovery. The fix-now test decides whether it is a deferral AT ALL; the severity floor and the
+debt ledger decide where a small deferral goes; the evidence floor (`plan-lanes.md` § The evidence
+floor) decides whether it may become its own tracked item.
+
+**Step 0 — the fix-now cost test, before any deferral.** Provenance is explicitly irrelevant, in both
+directions: pre-existing versus introduced-by-this-diff neither obliges a new item nor excuses a
+fix. The only question is total cost. Fixing now, on context already loaded, costs on the order of
+tens of thousands of tokens plus a delta re-review. A separate small item costs a mint, a body, a
+review pass, a cold pickup that re-acquires all of that context, its own review fan-out and its own
+land — on the order of a few hundred thousand tokens, an hour of wall clock, and a human's
+attention. Fix it in the current change, riding the current land, when ALL of:
+
+- **(a) Context in hand** — the session already knows the file, the cause and the fix shape; no new
+  investigation beyond what surfaced it.
+- **(b) It rides the current land** — no extra land cycle; review cost is at most a delta re-review
+  (and a verbatim nit fix costs nothing: record a pass at the new commit).
+- **(c) It does not change the land's risk class** — no flip of the mutation banner, no escalation
+  of the landing mutex scope, no gate the land would not otherwise run, no human ruling needed, no
+  blast-radius jump.
+
+Deferring an item that passes all three is the anti-pattern this test exists to kill, so **every
+deferral names the failed clause in one line** — in the disposition reason, the debt line, or the
+new item's provenance. Report-don't-fix scope discipline for dispatched workers is unchanged: the
+test runs one layer up, where the orchestrating session triages what its workers report.
+
+**From round 2 on, optional findings default to a deferral.** Inside a review loop, once the
+recorded round is 2 or higher, a finding tagged pre-existing or not-blocking-the-land defaults to a
+deferral disposition, not a fix: fixing it inline is new code the next round's reviewers then
+scrutinize, and on one measured sample over forty percent of findings dispositioned "fixed" were of
+this optional kind. Must-fix findings keep "fixed" as the default at every round, and a round-1
+finding of any tag still takes the plain fix-now test. The recording tool prints one warning when a
+"fixed" disposition targets an optional finding at round 2 or later — a warning, never a denial.
+
+**The deferral dispositions**, once the test fails, are exactly these: fold the work into the
+current item's own scope; close it explicitly (`--wontfix "<reason>"`); file a new item
+(`--plan <id>`, observed-evidence rules per the evidence floor); or one line in the running debt
+ledger.
+
+**The severity floor and the debt ledger.** A coordination or infrastructure item may be minted only
+when the issue **blocks lands or corrupts data**. Everything below that floor which fails the fix-now
+test goes as ONE LINE into the committed debt ledger `docs/handoff/infra-debt.md` — dated, one line,
+pointing at its origin — which a board-wide review pass sweeps periodically. The report
+`node scripts/coord/infra-debt-report.mjs --check` gives its size, oldest line, time since the last
+sweep, shape violations and duplicate clusters, and says `SWEEP DUE` when a sweep or a batch drain of
+clustered lines is warranted. Writing a debt line is pre-authorized, never a question for a human.
+Until the disposition tool grows a first-class flag for it, point a finding at its debt line through
+the decline reason: `disposition <key> --wontfix "sub-floor → infra-debt.md <date> <slug>"`.
+
+**Disposition the whole round in ONE call.** Each disposition invocation is one coordination write,
+and dispositioning findings one at a time pays a full lock-commit-push cycle per key — measured as
+the single largest class of coordination writes in one busy repository. The tool is N-ary:
+
+```bash
+node scripts/record-review.mjs disposition <key1> <key2> <key3> --fixed        # shared disposition
+node scripts/record-review.mjs disposition --batch <file.json>                  # mixed round
+```
+
+`--batch` takes `[{key, kind, value?}, …]` with `kind` one of `fixed | plan | wontfix | reopen`.
+Application is all-or-nothing: every key is validated before anything is written, so one bad key
+applies none of them and a retry is always safe.
+
+**Version skew when a change adds disposition vocabulary.** The recording tool and the land gate
+share one "would this finding block a land" predicate, so they agree on a MATCHED pair of versions.
+But the recording tool runs from the branch while the land gate runs from trunk, so a change that
+adds a disposition type (or changes which tags the predicate trusts) is live on the branch before it
+lands: the recorder reports "0 findings still open" under the new vocabulary while the land gate,
+still running the old code, halts naming findings the new vocabulary already excused. That is
+version skew, not predicate drift. Recipe: disposition the blocking findings with the PRE-EXISTING
+vocabulary (`--fixed` / `--wontfix` / `--plan`), land, and the new vocabulary becomes available to
+every later round once it is on trunk.
+
 ## Severity and evidence floors
 
 Not every surfaced concern deserves the same weight, and the deciding axis is **how the problem was
@@ -186,6 +287,97 @@ a later round with no new supporting evidence, is itself a sign the loop has con
 reason to keep arguing it. And a single "run it for real" exit used twice in a row on the same
 disputed point is itself a signal the loop is not actually converging; treat a second consecutive
 instance of that exit as a forced move to one of the other two.
+
+## Stopping rule
+
+The first review round stays exactly as calibrated — first passes find real bugs often enough to
+earn themselves. What is capped is the loop after it: **at most three fix → delta-re-review rounds
+per item.** Why three: a bench over clean multi-round histories found that findings past round two
+still fix real bugs about two thirds of the time (against roughly five in six in the first two
+rounds), with the decline rate doubling — noisier, but not noise. Past that, findings are dominated
+by regressions the previous round's own fix introduced; a review is a prediction about the code, and
+dueling predictions do not settle anything.
+
+**The cap is enforced at launch, on every lane.** A tool-call hook
+(`scripts/hooks/review-round-cap-guard.mjs`) and the review runner itself consult one ledger: a
+LOCAL git ref, `refs/review-rounds/<item-id>`, with one commit per launch (the logic lives in
+`scripts/coord/review-round-cap.mjs`). Launches one through four are permitted — the first review
+plus three delta rounds — and the fifth is denied. The only escape is a recorded `--past-cap` reason
+that starts with the ground-truth exit it takes: `run:`, `simplify:` or `park:`. A round is charged
+by its IDENTITY (the resolved range, the reviewed end commit, and the path scope), not by
+invocation: a review that must be resumed across several capped foreground calls reuses its round
+and is never cap-denied, while a real new commit mints a fresh round the cap governs as usual.
+
+**Record after EVERY round, immediately — never once at the end of the loop.** The round counter
+lives in the recorded review marker, so a session that plans to record one final verdict "once the
+reviews converge" has disarmed the only warning that would stop it. Observed: a loop ran to nine
+rounds with both the cap and its warning on the books, because nothing was ever recorded. Clean
+passing rounds count exactly like rounds with findings. Reuse one output directory per review across
+its rounds rather than minting one per round.
+
+**At the cap, stop reviewing and pick one, in this order:**
+
+1. **Run it.** Verify on the real surface and count the result — re-run the affected cohort, run the
+   staged-failure test, exercise the feature end to end. A run is a measurement; prefer it over any
+   third opinion. Record the run's scope and result, then record a pass at the verified commit with
+   the run named in the marker notes.
+2. **Simplify or delete the fragile construct** instead of patching it again. If every round breaks
+   what the previous round fixed, the design is the finding.
+3. **Park it** — hand the item to a human with the live disagreement stated: what the reviewers
+   claim, what you believe, what a run would prove.
+
+**The exit is a change of mode, not another round.** `simplify:` and `park:` commit to stopping;
+`run:` does not, and a session can keep choosing it, one individually defensible round at a time. So
+`run:` is bounded to ONE consecutive use: a second `run:` in a row is DENIED, not warned; a
+`simplify:` or `park:` breaks the streak. When that denial fires, exactly two exits remain —
+disposition the remainder (decline it, or route it to an item) and land, or park. Reaching for `run:`
+twice in a row is itself the tell that the loop stopped converging; the decision to stop fixing and
+start dispositioning is made once, not re-litigated each round.
+
+**Three signals end the loop early** (they never extend it):
+
+- **Blast-radius floor.** Match rounds to what a residual bug costs. A warn-only hook, a docs
+  generator or a report builder fails into noise, and rarely deserves more than round one plus one
+  delta; spend the cap's headroom where a bug corrupts data or blocks work. On a deterministic,
+  mechanical, human-attended tool, round one plus at most one delta is the whole budget.
+- **A re-raised decline is a stop signal.** A finding already declined, re-raised by a later round
+  with no new evidence, is evidence of convergence.
+- **Fixes that generate their own findings mean simplify.** When round N's findings are mostly about
+  the mechanism round N−1 added, delete the mechanism. The worked shape: a staleness check grew a
+  sub-millisecond comparison, the next round found three scaling bugs in it, and the durable answer
+  was replacing the whole comparison with an exact content fingerprint.
+
+**Counting:** only rounds that re-review new logic count toward the cap. A pass re-recorded at a
+new commit for docs, config or a verbatim nit fix does not.
+
+**Fix rounds are dispatched, not done inline.** A must-fix finding is one the adjudicator tags as
+blocking the land and not pre-existing (with an absent or confirmed verdict).
+`node scripts/review-fix-brief.mjs <slug> --round <n>` reads that subset from the review's output
+directory (or an explicit `--round-dir` / `--sidecar`) and emits ONLY that subset, the file
+allowlist derived from it, and the prior rounds' decline reasons — so a worker fixing from the brief
+never sees an optional finding as work. Write it to the review directory as `review-fix-brief.md`,
+dispatch it to a fresh worker with its model pinned and worktree isolation (or use it as the fresh
+prompt on the alternate-vendor lane), then check the returned scope diff and run the delta re-review
+yourself — the orchestrator never fixes the findings inline. The brief also carries two numbered
+rules for the two commonest regression shapes past round one: a **sibling-site sweep** (fix every
+other call site of the changed function and every other place the same pattern appears, or name it
+as deliberately untouched) and a **keep-the-old-case test** (one test for the input the pre-fix code
+handled correctly, so an over-correction turns red). If the fix would add a lock, a cache, a parser,
+a comparison algebra, a retry loop, or more than about forty lines, the worker stops with
+`SIMPLIFY: <what to delete instead>` rather than building another mechanism. **Launching round 2 or
+later without the previous round's brief is denied** unless the fix delta (previous reviewed commit
+to current commit, never the whole reviewed range) is ten changed lines or fewer; the denial names
+the brief command, and producing the brief is the escape.
+
+**Concurrency primitives invert part of this.** For a lock, mutex or queue, every fix round gets its
+own delta re-review on the widest lane — measured, the majority of purpose-defeating bugs in such a
+primitive were regressions the previous round's fix created, and they were environment facts (a
+wrapper process id, a permission error, a working-directory dependence) that a heavier reasoning
+model re-reading the code passes clean. Past the cap there too, the verifier of record is a test
+that STAGES the failure property (a vanished root, a busy file, a queue timeout, resolving from
+outside the repository as well as inside), never another read. And a tidiness cleanup on a
+fail-open path is not free: it needs the same justification as a behavioral change and is a
+standing candidate to decline.
 
 ## Hard failure: zero changed files is never a pass
 

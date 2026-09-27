@@ -403,7 +403,7 @@ test('classifyPlanSpend: the durable spendClass frontmatter stamp wins over the 
         '',
         '## Tasks',
         '',
-        '- edit `backend/scripts/price-pipeline/run.py`',
+        '- edit `backend/scripts/data-pipeline/run.py`',
         '',
       ].join('\n'),
     );
@@ -419,7 +419,7 @@ test('classifyPlanSpend: path-heuristic fallback — a Tasks section naming a co
   try {
     const rel = 'plan.md';
     for (const codeRoot of [
-      'backend/scripts/price-pipeline/run.py',
+      'backend/scripts/data-pipeline/run.py',
       'backend/src/location/geocoding/google-provider.ts',
       'shared/src/schemas.ts',
       'scripts/move-plan.mjs',
@@ -488,7 +488,7 @@ test('classifyPlanSpend: no spendClass stamp and no code-root path in Tasks ⇒ 
         // A path OUTSIDE all four code roots (backend/scripts/**, backend/src/**, shared/src/**,
         // scripts/**) — the seed/store trees live under backend/data/, not backend/src/data/seed/
         // (which itself would match backend/src/** and is deliberately NOT used here).
-        '1. Re-run the national price refresh over `backend/data/price-pipeline/render-store/`.',
+        '1. Re-run the national price refresh over `backend/data/data-pipeline/render-store/`.',
         '',
       ].join('\n'),
     );
@@ -515,7 +515,7 @@ test('classifyPlanSpend (round 3, item 2): an unreadable/missing plan file class
 });
 
 // Fix round 1 (finding E): four concrete defects in the path-heuristic fallback.
-test('classifyPlanSpend (finding E.1): the sharded seed root is clinic DATA, not code — stays data-pass', () => {
+test('classifyPlanSpend (finding E.1): the sharded seed root is record DATA, not code — stays data-pass', () => {
   const dir = makeSpendTestDir();
   try {
     const rel = 'plan.md';
@@ -612,7 +612,7 @@ test('classifyPlanSpend (round 3, item 1): no ## Tasks heading ⇒ data-pass, ev
         '',
         '## What to delete',
         '',
-        '1. Remove `backend/scripts/price-pipeline/legacy-run.py`.',
+        '1. Remove `backend/scripts/data-pipeline/legacy-run.py`.',
         '',
       ].join('\n'),
     );
@@ -1396,7 +1396,7 @@ test('runDrain triage: a sketch block NEVER prompts (no auto-dispatched fan-outs
     },
     claim: () => {},
     runner: async (p) => ({
-      result: { status: 'blocked', slug: p.slug, notes: 'needs price-pipeline fan-out' },
+      result: { status: 'blocked', slug: p.slug, notes: 'needs data-pipeline fan-out' },
       spendUsd: 0,
     }),
     quarantineToOperator: (p, sha) => parked.push(`${p.slug}@${sha}`),
@@ -4307,4 +4307,84 @@ test('buildPlanPrompt (round-2 finding 7): adopt mode fetches origin/master befo
     p,
     /git fetch origin master && git log --oneline origin\/master\.\.origin\/worktree-203-UI-x/,
   );
+});
+
+// ── plan 4237 review 4153a4: syncIndexOnMaster's own rebase-retry carries the replay guard ────
+import { syncIndexOnMaster } from './drain-run.mjs';
+
+test('plan 4237: syncIndexOnMaster refuses a rebase whose replay carries a clobbered index', () => {
+  const root = mkdtempSync(join(tmpdir(), 'drain-idxsync-'));
+  try {
+    const origin = join(root, 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'master', origin]);
+    const dir = join(root, 'main');
+    execFileSync('git', ['clone', '-q', origin, dir]);
+    const g = (d, ...a) => execFileSync('git', ['-C', d, ...a], { encoding: 'utf8' }).trim();
+    g(dir, 'config', 'user.email', 'm@m.m');
+    g(dir, 'config', 'user.name', 'M');
+    mkdirSync(join(dir, 'docs'), { recursive: true });
+    writeFileSync(join(dir, 'docs', 'INDEX.md'), 'index v0\n');
+    g(dir, 'add', '-A');
+    g(dir, 'commit', '-qm', 'base');
+    g(dir, 'push', '-q', 'origin', 'master');
+    // two OTHER local commits ahead of origin (the ones the rebase replays)
+    writeFileSync(join(dir, 'one.md'), '1\n');
+    g(dir, 'add', 'one.md');
+    g(dir, 'commit', '-qm', 'local one');
+    writeFileSync(join(dir, 'two.md'), '2\n');
+    g(dir, 'add', 'two.md');
+    g(dir, 'commit', '-qm', 'local two');
+    const preTip = g(dir, 'rev-parse', 'HEAD');
+    // origin moves: a sibling lands paths the local commits never touched
+    const sib = join(root, 'sib');
+    execFileSync('git', ['clone', '-q', origin, sib]);
+    g(sib, 'config', 'user.email', 's@s.s');
+    g(sib, 'config', 'user.name', 'S');
+    for (let i = 0; i < 5; i++) writeFileSync(join(sib, `sib-${i}.md`), `${i}\n`);
+    g(sib, 'add', '-A');
+    g(sib, 'commit', '-qm', 'sibling');
+    g(sib, 'push', '-q', 'origin', 'master');
+    const sibTip = g(sib, 'rev-parse', 'HEAD');
+    // a stub build-index that always rewrites INDEX, so the loop commits + pushes (non-ff)
+    const scriptsDir = join(root, 'scripts');
+    mkdirSync(scriptsDir, { recursive: true });
+    writeFileSync(
+      join(scriptsDir, 'build-index.mjs'),
+      "import { writeFileSync } from 'node:fs';\n" +
+        "writeFileSync('docs/INDEX.md', `index ${process.hrtime.bigint()}\\n`);\n",
+    );
+    // the clobber: after the rebase's first pick, rewrite the index to the pre-rebase tip
+    const hooks = join(root, 'hooks');
+    mkdirSync(hooks, { recursive: true });
+    const fired = join(hooks, 'fired').replace(/\\/g, '/');
+    writeFileSync(
+      join(hooks, 'post-commit'),
+      `#!/bin/sh\nif [ -f "${hooks.replace(/\\/g, '/')}/armed" ] && [ ! -f "${fired}" ]; then touch "${fired}"; git read-tree ${preTip}; fi\n`,
+      { mode: 0o755 },
+    );
+    g(dir, 'config', 'core.hooksPath', hooks.replace(/\\/g, '/'));
+    // Arm the clobber only for the rebase: the loop's own INDEX commit comes first (unarmed); a
+    // pre-push hook arms it right before the rejected push, so every later commit is a pick.
+    writeFileSync(
+      join(hooks, 'pre-push'),
+      `#!/bin/sh\ntouch "${hooks.replace(/\\/g, '/')}/armed"\nexit 0\n`,
+      { mode: 0o755 },
+    );
+    assert.throws(
+      () => syncIndexOnMaster(dir, scriptsDir, 'idx', { retries: 2 }),
+      (e) => e.code === 'PUSH_REBASE_REPLAY_MISMATCH',
+    );
+    assert.equal(
+      g(origin, 'rev-parse', 'master'),
+      sibTip,
+      'the clobbered replay never reached origin',
+    );
+    assert.equal(g(dir, 'rev-parse', 'master'), preTip, 'local master back at the pre-rebase tip');
+    assert.ok(
+      readCoordOpJournal(dir).some((e) => e.tool === 'push-rebase-replay-mismatch'),
+      'journaled',
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });

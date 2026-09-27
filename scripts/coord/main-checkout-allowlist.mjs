@@ -15,7 +15,7 @@
 // The three classes encode the operator decision (2026-06-22):
 //   'doc'    — bookkeeping docs that already land straight to master and are SAFE
 //              to auto-commit+push: plans, specs, batches, handoff, INDEX, wiki,
-//              runbook PAGES (plan 2692 — `docs/runbooks/**.md` only: prose with
+//              runbook PAGES (plan 2692 — `docs/runbooks/**.md` only: prose with (dangling-ok: classification glob, not a literal path)
 //              no lock/race hazard, and a stale runbook actively misleads sessions
 //              reading it as ground truth; the committed .sh under runbooks stays
 //              'other', see the DOC_RX note).
@@ -28,7 +28,7 @@
 //              classifies 'other' — edited in a worktree like every other scripts/ module,
 //              never directly on the shared main checkout.
 //   'other'  — everything else (app code, arbitrary docs like docs/research/**,
-//              CLAUDE.md, docs/runbooks/*.sh): Tier 1 DENIES on master, Tier 2 stashes.
+//              CLAUDE.md, docs/runbooks/*.sh): Tier 1 DENIES on master, Tier 2 stashes. (dangling-ok: classification glob, not a literal path)
 //
 // Related but deliberately NOT identical to worktree-guard.sh's ALLOWED_RE, the
 // PUSH-side allowlist: the two answer different questions and are not enforced equal by
@@ -71,8 +71,8 @@ export const CONFIG_RX = [/^\.claude\/settings\.json$/, SETTINGS_LOCAL_RX];
 // Plan 3962 P1: this module is a PURE, ZERO-IMPORT leaf (Rule 3 — scripts/coord/** carries
 // no project knowledge, and this leaf must not import coord-config.mjs either), so the
 // prefix list itself is no longer a module-load constant here — it is project data that
-// lives in coord.config.json's `jobOutputPrefixes` key (core default `[]`; vetapp's row is
-// `["backend/data/price-pipeline/"]`). The CALLER resolves that list (via
+// lives in coord.config.json's `jobOutputPrefixes` key (core default `[]`; the adopting
+// project's own row names its real job-output directory). The CALLER resolves that list (via
 // `loadCoordConfig(mainDir).jobOutputPrefixes`) and passes it into the three functions
 // below, which derive classification and stash exclusions from the SAME list so the two can
 // never drift apart — divergence would silently re-open the plan-3498 clobber by

@@ -38,6 +38,8 @@ import {
   ADVISORY_KINDS,
 } from './wiki-size-lint.mjs';
 
+const REC_PAGE = 'wiki/entities/records/rec-001.md';
+
 // Write `rel` (forward-slash, repo-relative) under `root`, padded to `size` bytes.
 // Padding is chunked into 100-char lines (plan 2618) so sheer fixture bulk never trips
 // the long-line advisory — a fixture that WANTS a long line writes its body explicitly.
@@ -53,8 +55,13 @@ function page(root, rel, { size = 1 * KB, frontmatter = '' } = {}) {
   writeFileSync(abs, body);
 }
 
+// plan 4172: the per-record page dir is config (coord.config.json `wikiRecordDir`), so every
+// fixture repo declares one — the lint reads it through the same seam a real checkout does.
+const RECORD_DIR = 'wiki/entities/records';
+
 function makeRepo() {
   const root = mkdtempSync(join(tmpdir(), 'wiki-size-lint-'));
+  writeFileSync(join(root, 'coord.config.json'), JSON.stringify({ wikiRecordDir: RECORD_DIR }));
   return { root, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -76,9 +83,9 @@ test('frontmatterOf extracts the block; missing block → empty', () => {
 });
 
 test('hasNonEmptyListKey: inline, single-quoted, block, waiver, bare', () => {
-  assert.equal(hasNonEmptyListKey('aliases: ["provet cloud", "provet"]', 'aliases'), true);
-  assert.equal(hasNonEmptyListKey("aliases: ['provet cloud']", 'aliases'), true); // prettier rewrite
-  assert.equal(hasNonEmptyListKey('aliases:\n  - provet cloud\n  - provet', 'aliases'), true);
+  assert.equal(hasNonEmptyListKey('aliases: ["acme cloud", "acme"]', 'aliases'), true);
+  assert.equal(hasNonEmptyListKey("aliases: ['acme cloud']", 'aliases'), true); // prettier rewrite
+  assert.equal(hasNonEmptyListKey('aliases:\n  - acme cloud\n  - acme', 'aliases'), true);
   assert.equal(hasNonEmptyListKey('aliases: []', 'aliases'), false); // explicit waiver
   assert.equal(hasNonEmptyListKey('aliases:\nupdated: 2026-07-02', 'aliases'), false); // bare key
   assert.equal(hasNonEmptyListKey('updated: 2026-07-02', 'aliases'), false); // absent
@@ -88,9 +95,9 @@ test('hasNonEmptyListKey: inline, single-quoted, block, waiver, bare', () => {
 test('hasNonEmptyListKey: YAML comments are not values (sonnet-review finding 1)', () => {
   assert.equal(hasNonEmptyListKey('aliases: # TBD, fill in later', 'aliases'), false); // comment-only
   assert.equal(hasNonEmptyListKey('aliases: [] # waived on purpose', 'aliases'), false); // waiver + comment
-  assert.equal(hasNonEmptyListKey("aliases: ['provet'] # note", 'aliases'), true); // list + comment
+  assert.equal(hasNonEmptyListKey("aliases: ['acme'] # note", 'aliases'), true); // list + comment
   // a comment-only key followed by a block list is still a non-empty block list
-  assert.equal(hasNonEmptyListKey('aliases: # see below\n  - provet cloud', 'aliases'), true);
+  assert.equal(hasNonEmptyListKey('aliases: # see below\n  - acme cloud', 'aliases'), true);
 });
 
 test('exempt pages never warn or fail, whatever their size', () => {
@@ -108,20 +115,20 @@ test('exempt pages never warn or fail, whatever their size', () => {
   }
 });
 
-test('clinics pages are injected (file-derived): >16 KB fails, 8–16 KB warns, ≤8 KB clean', () => {
+test('per-record pages are injected (file-derived): >16 KB fails, 8–16 KB warns, ≤8 KB clean', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_FAIL + 1 });
-    page(root, 'wiki/entities/clinics/clinic-002.md', { size: INJECTED_WARN + 1 });
-    page(root, 'wiki/entities/clinics/clinic-003.md', { size: 2 * KB });
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_FAIL + 1 });
+    page(root, 'wiki/entities/records/rec-002.md', { size: INJECTED_WARN + 1 });
+    page(root, 'wiki/entities/records/rec-003.md', { size: 2 * KB });
     const res = lintWikiSizes(root);
     assert.deepEqual(
       res.failures.map((f) => f.rel),
-      ['wiki/entities/clinics/clinic-001.md'],
+      ['wiki/entities/records/rec-001.md'],
     );
     assert.deepEqual(
       sizeWarns(res.warns).map((w) => w.rel),
-      ['wiki/entities/clinics/clinic-002.md'],
+      ['wiki/entities/records/rec-002.md'],
     );
   } finally {
     cleanup();
@@ -331,17 +338,17 @@ test('a page named in a hook source is injected; an unnamed sibling is pull', ()
     mkdirSync(join(root, 'scripts', 'hooks'), { recursive: true });
     writeFileSync(
       join(root, 'scripts', 'hooks', 'fake-loader.mjs'),
-      "const CHAINS = [{ file: 'evidensia.md' }];\nconst PAGE = 'price-inspector.md';\n",
+      "const CHAINS = [{ file: 'chaina.md' }];\nconst PAGE = 'price-inspector.md';\n",
     );
-    page(root, 'wiki/entities/chains/evidensia.md', { size: INJECTED_FAIL + 1 });
+    page(root, 'wiki/entities/chains/chaina.md', { size: INJECTED_FAIL + 1 });
     page(root, 'wiki/entities/inspectors/price-inspector.md', { size: INJECTED_FAIL + 1 });
     page(root, 'wiki/entities/chains/unregistered.md', { size: INJECTED_FAIL + 1 });
     const basenames = collectHookReferencedBasenames(root);
-    assert.ok(basenames.has('evidensia.md'));
+    assert.ok(basenames.has('chaina.md'));
     assert.ok(basenames.has('price-inspector.md'));
     const res = lintWikiSizes(root);
     assert.deepEqual(res.failures.map((f) => f.rel).sort(), [
-      'wiki/entities/chains/evidensia.md',
+      'wiki/entities/chains/chaina.md',
       'wiki/entities/inspectors/price-inspector.md',
     ]);
     // unregistered chains page → pull class → same size only WARNS (plan 2618: the injected
@@ -360,9 +367,9 @@ test('a page named in a hook source is injected; an unnamed sibling is pull', ()
 test('non-empty aliases:/triggerPaths: frontmatter makes an entities page injected; [] waiver does not', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/platforms/provet-cloud.md', {
+    page(root, 'wiki/entities/platforms/acme-cloud.md', {
       size: INJECTED_FAIL + 1,
-      frontmatter: "aliases: ['provet cloud', 'provetcloud']",
+      frontmatter: "aliases: ['acme cloud', 'acmecloud']",
     });
     page(root, 'wiki/entities/platforms/waived.md', {
       size: INJECTED_FAIL + 1,
@@ -375,7 +382,7 @@ test('non-empty aliases:/triggerPaths: frontmatter makes an entities page inject
     const res = lintWikiSizes(root);
     assert.deepEqual(
       res.failures.map((f) => f.rel),
-      ['wiki/entities/platforms/provet-cloud.md'],
+      ['wiki/entities/platforms/acme-cloud.md'],
     );
     // waived.md classifies pull, so its over-cap size warns instead of failing (plan 2618:
     // injected cap == pull warn — see the hook-source test's comment)
@@ -438,12 +445,12 @@ test('classifyPage precedence: exempt beats entities rules', () => {
 test('checkPages: an over-cap injected page fails; an unlisted sibling page is ignored', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_FAIL + 1 });
-    page(root, 'wiki/entities/clinics/clinic-002.md', { size: INJECTED_FAIL + 1 }); // not passed
-    const { fails, warns } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_FAIL + 1 });
+    page(root, 'wiki/entities/records/rec-002.md', { size: INJECTED_FAIL + 1 }); // not passed
+    const { fails, warns } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     assert.deepEqual(
       fails.map((f) => f.rel),
-      ['wiki/entities/clinics/clinic-001.md'],
+      ['wiki/entities/records/rec-001.md'],
     );
     assert.equal(sizeWarns(warns).length, 0);
   } finally {
@@ -469,10 +476,10 @@ test('checkPages: a warn-only pull page passes (warns, not fails)', () => {
 test('checkPages: an under-cap page is clean (no fail, no warn); a missing path is skipped', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-003.md', { size: 2 * KB });
+    page(root, 'wiki/entities/records/rec-003.md', { size: 2 * KB });
     const { fails, warns } = checkPages(root, [
-      'wiki/entities/clinics/clinic-003.md',
-      'wiki/entities/clinics/never-written.md',
+      'wiki/entities/records/rec-003.md',
+      'wiki/entities/records/never-written.md',
     ]);
     assert.equal(fails.length, 0);
     assert.equal(warns.length, 0);
@@ -487,26 +494,38 @@ test('checkPages: an under-cap page is clean (no fail, no warn); a missing path 
 test('classifyAndBucketPage: buckets fail/warn/clean and returns null for an unreadable page', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-fail.md', { size: INJECTED_FAIL + 1 });
-    page(root, 'wiki/entities/clinics/clinic-warn.md', { size: INJECTED_WARN + 1 });
-    page(root, 'wiki/entities/clinics/clinic-clean.md', { size: 2 * KB });
+    page(root, 'wiki/entities/records/rec-fail.md', { size: INJECTED_FAIL + 1 });
+    page(root, 'wiki/entities/records/rec-warn.md', { size: INJECTED_WARN + 1 });
+    page(root, 'wiki/entities/records/rec-clean.md', { size: 2 * KB });
     const hookBasenames = collectHookReferencedBasenames(root);
-    const fail = classifyAndBucketPage(root, 'wiki/entities/clinics/clinic-fail.md', hookBasenames);
+    const fail = classifyAndBucketPage(
+      root,
+      'wiki/entities/records/rec-fail.md',
+      hookBasenames,
+      RECORD_DIR,
+    );
     assert.equal(fail.bucket, 'fail');
     assert.equal(fail.page.limit, INJECTED_FAIL);
-    const warn = classifyAndBucketPage(root, 'wiki/entities/clinics/clinic-warn.md', hookBasenames);
+    const warn = classifyAndBucketPage(
+      root,
+      'wiki/entities/records/rec-warn.md',
+      hookBasenames,
+      RECORD_DIR,
+    );
     assert.equal(warn.bucket, 'warn');
     const clean = classifyAndBucketPage(
       root,
-      'wiki/entities/clinics/clinic-clean.md',
+      'wiki/entities/records/rec-clean.md',
       hookBasenames,
+      RECORD_DIR,
     );
     assert.equal(clean.bucket, null);
     assert.equal(clean.page.cls, 'injected');
     const missing = classifyAndBucketPage(
       root,
-      'wiki/entities/clinics/never-written.md',
+      'wiki/entities/records/never-written.md',
       hookBasenames,
+      RECORD_DIR,
     );
     assert.equal(missing, null);
   } finally {
@@ -517,7 +536,7 @@ test('classifyAndBucketPage: buckets fail/warn/clean and returns null for an unr
 test('fold budgets: a small head with a 100 KB tail warns but does not fail', () => {
   const { root, cleanup } = makeRepo();
   try {
-    const rel = 'wiki/entities/clinics/clinic-folded.md';
+    const rel = 'wiki/entities/records/rec-folded.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, `# head\n<!-- fold -->\n${'t'.repeat(100 * KB)}`);
@@ -533,7 +552,7 @@ test('fold budgets: a small head with a 100 KB tail warns but does not fail', ()
 test('fold budgets: a frontmatter-less thematic break does not hide a body fold marker', () => {
   const { root, cleanup } = makeRepo();
   try {
-    const rel = 'wiki/entities/clinics/thematic-break.md';
+    const rel = 'wiki/entities/records/thematic-break.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(
@@ -541,7 +560,7 @@ test('fold budgets: a frontmatter-less thematic break does not hide a body fold 
       `---\nintro prose\nkey: value\n---\nintro\n<!-- fold -->\n${'t'.repeat(PULL_WARN + 1)}\n`,
     );
 
-    const result = classifyAndBucketPage(root, rel, new Set());
+    const result = classifyAndBucketPage(root, rel, new Set(), RECORD_DIR);
     assert.ok(result.extras.some((w) => w.kind === 'tail'));
     assert.equal(result.page.size, Buffer.byteLength('---\nintro prose\nkey: value\n---\nintro\n'));
   } finally {
@@ -558,13 +577,16 @@ test('an unreadable page THROWS; only a vanished one is skipped as a race', () =
   const { root, cleanup } = makeRepo();
   try {
     // (1) VANISHED: never written. The tree walk raced a delete -> skip, no verdict.
-    assert.equal(classifyAndBucketPage(root, 'wiki/entities/clinics/gone.md', new Set()), null);
+    assert.equal(
+      classifyAndBucketPage(root, 'wiki/entities/records/gone.md', new Set(), RECORD_DIR),
+      null,
+    );
 
     // (2) PRESENT but unreadable: a directory sitting where a page should be. statSync
     // succeeds, so this is NOT a race and must not be swallowed.
-    const rel = 'wiki/entities/clinics/is-a-dir.md';
+    const rel = 'wiki/entities/records/is-a-dir.md';
     mkdirSync(join(root, ...rel.split('/')), { recursive: true });
-    assert.throws(() => classifyAndBucketPage(root, rel, new Set()));
+    assert.throws(() => classifyAndBucketPage(root, rel, new Set(), RECORD_DIR));
   } finally {
     cleanup();
   }
@@ -579,7 +601,7 @@ test('the long-line advisory is measured RAW; the updated: cap deliberately is n
   // NBSP and UNDER-count, and would diverge from the UTF-8 `updated:` merge driver.
   const { root, cleanup } = makeRepo();
   try {
-    const rel = 'wiki/entities/clinics/raw-longline.md';
+    const rel = 'wiki/entities/records/raw-longline.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     const bad = Buffer.alloc(200, 0x80); // never a valid UTF-8 lead byte
@@ -590,7 +612,7 @@ test('the long-line advisory is measured RAW; the updated: cap deliberately is n
       Buffer.concat([Buffer.from('---\nname: b\ntype: entity\n---\n'), line, Buffer.from('\n')]),
     );
 
-    const result = classifyAndBucketPage(root, rel, new Set());
+    const result = classifyAndBucketPage(root, rel, new Set(), RECORD_DIR);
     assert.ok(!result.extras.some((e) => e.kind === 'longLine'));
   } finally {
     cleanup();
@@ -605,7 +627,7 @@ test('injected head/tail bytes are measured RAW - an invalid UTF-8 byte must not
   // class 2434 exists to stop. Found by the landed-work-reversion reviewer, plan 3531.
   const { root, cleanup } = makeRepo();
   try {
-    const rel = 'wiki/entities/clinics/invalid-utf8.md';
+    const rel = 'wiki/entities/records/invalid-utf8.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     const fm = Buffer.from('---\nname: probe\ntype: entity\n---\n', 'utf8');
@@ -614,7 +636,7 @@ test('injected head/tail bytes are measured RAW - an invalid UTF-8 byte must not
     const buf = Buffer.concat([fm, invalid, filler]);
     writeFileSync(abs, buf);
 
-    const result = classifyAndBucketPage(root, rel, new Set());
+    const result = classifyAndBucketPage(root, rel, new Set(), RECORD_DIR);
     assert.equal(buf.length, INJECTED_FAIL - 1);
     assert.equal(result.page.size, INJECTED_FAIL - 1);
     assert.notEqual(result.bucket, 'fail');
@@ -633,14 +655,14 @@ test('frontmatter keys are read from the SAME span the canonical fence parser pi
   // really is inside the frontmatter the span parser chose.
   const { root, cleanup } = makeRepo();
   try {
-    const rel = 'wiki/entities/clinics/inner-dash-line.md';
+    const rel = 'wiki/entities/records/inner-dash-line.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     const updated = 'x'.repeat(UPDATED_MAX + 1);
     const fm = '---\nname: x\n--- not a fence\nupdated: ' + updated + '\n---\n';
     writeFileSync(abs, fm + 'body\n');
 
-    const result = classifyAndBucketPage(root, rel, new Set());
+    const result = classifyAndBucketPage(root, rel, new Set(), RECORD_DIR);
     assert.equal(result.bucket, 'fail');
     assert.equal(result.page.kind, 'updated');
     assert.equal(result.page.updatedBytes, Buffer.byteLength(updated));
@@ -656,13 +678,13 @@ test('fold budgets: LF/CRLF frontmatter with closing-fence whitespace uses the s
       ['lf', '\n'],
       ['crlf', '\r\n'],
     ]) {
-      const rel = `wiki/entities/clinics/frontmatter-${label}.md`;
+      const rel = `wiki/entities/records/frontmatter-${label}.md`;
       const abs = join(root, ...rel.split('/'));
       mkdirSync(dirname(abs), { recursive: true });
       const head = `---${eol}description: <!-- fold -->${eol}--- \t${eol}# head${eol}`;
       writeFileSync(abs, `${head}<!-- fold -->${eol}${'t'.repeat(PULL_WARN + 1)}`);
 
-      const result = classifyAndBucketPage(root, rel, new Set());
+      const result = classifyAndBucketPage(root, rel, new Set(), RECORD_DIR);
       assert.equal(result.page.size, lfNormalizedByteLength(Buffer.from(head)));
       assert.ok(result.extras.some((w) => w.kind === 'tail' && w.size === PULL_WARN + 1));
     }
@@ -674,8 +696,8 @@ test('fold budgets: LF/CRLF frontmatter with closing-fence whitespace uses the s
 test('fold budgets: a head over 32 KB fails and NEAR-CAP measures the head', () => {
   const { root, cleanup } = makeRepo();
   try {
-    const overRel = 'wiki/entities/clinics/clinic-over-head.md';
-    const nearRel = 'wiki/entities/clinics/clinic-near-head.md';
+    const overRel = 'wiki/entities/records/rec-over-head.md';
+    const nearRel = 'wiki/entities/records/rec-near-head.md';
     for (const [rel, headBytes] of [
       [overRel, INJECTED_FAIL + 1],
       [nearRel, INJECTED_NEAR_CAP],
@@ -706,16 +728,16 @@ test('fold budgets: tail and total warnings fire only above their respective cei
       const tail = 't'.repeat(tailBytes ?? totalBytes - Buffer.byteLength(prefix));
       writeFileSync(abs, prefix + tail);
     };
-    writeFoldedAtTotal('wiki/entities/clinics/tail-at.md', 0, PULL_WARN);
-    writeFoldedAtTotal('wiki/entities/clinics/tail-over.md', 0, PULL_WARN + 1);
-    writeFoldedAtTotal('wiki/entities/clinics/total-at.md', ONE_READ_CEILING);
-    writeFoldedAtTotal('wiki/entities/clinics/total-over.md', ONE_READ_CEILING + 1);
+    writeFoldedAtTotal('wiki/entities/records/tail-at.md', 0, PULL_WARN);
+    writeFoldedAtTotal('wiki/entities/records/tail-over.md', 0, PULL_WARN + 1);
+    writeFoldedAtTotal('wiki/entities/records/total-at.md', ONE_READ_CEILING);
+    writeFoldedAtTotal('wiki/entities/records/total-over.md', ONE_READ_CEILING + 1);
 
     const rels = [
-      'wiki/entities/clinics/tail-at.md',
-      'wiki/entities/clinics/tail-over.md',
-      'wiki/entities/clinics/total-at.md',
-      'wiki/entities/clinics/total-over.md',
+      'wiki/entities/records/tail-at.md',
+      'wiki/entities/records/tail-over.md',
+      'wiki/entities/records/total-at.md',
+      'wiki/entities/records/total-over.md',
     ];
     const { warns } = checkPages(root, rels);
     assert.ok(!warns.some((w) => w.rel.endsWith('tail-at.md') && w.kind === 'tail'));
@@ -743,7 +765,7 @@ test('classifyAndBucketPage: exempt page → bucket null, page.cls exempt (never
   const { root, cleanup } = makeRepo();
   try {
     page(root, 'wiki/log.md', { size: 200 * KB });
-    const result = classifyAndBucketPage(root, 'wiki/log.md', new Set());
+    const result = classifyAndBucketPage(root, 'wiki/log.md', new Set(), RECORD_DIR);
     assert.equal(result.bucket, null);
     assert.equal(result.page.cls, 'exempt');
   } finally {
@@ -791,13 +813,13 @@ for (const [label, numLines, expectFail] of [
       const crlfBody = lfBody.replace(/\n/g, '\r\n');
       assert.ok(crlfBody.length > INJECTED_FAIL, 'fixture must be over the cap as raw CRLF bytes');
 
-      const rel = `wiki/entities/clinics/clinic-crlf-${numLines}.md`;
+      const rel = `wiki/entities/records/rec-crlf-${numLines}.md`;
       const abs = join(root, ...rel.split('/'));
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, crlfBody);
 
       const hookBasenames = collectHookReferencedBasenames(root);
-      const result = classifyAndBucketPage(root, rel, hookBasenames);
+      const result = classifyAndBucketPage(root, rel, hookBasenames, RECORD_DIR);
       assert.equal(result.page.cls, 'injected');
       assert.equal(result.bucket === 'fail', expectFail);
       assert.equal(
@@ -816,15 +838,15 @@ for (const [label, numLines, expectFail] of [
 test('lintWikiSizes and checkPages agree on the same page (the DRY-dedup contract)', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_FAIL + 1 });
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_FAIL + 1 });
     page(root, 'wiki/concepts/big.md', { size: PULL_WARN + 1 });
     // plan 2618: a long-line page pins the extras channel into the contract too — a caller
     // that forgets to drain `extras` (the finding-[5] divergence risk) diverges HERE.
-    const longRel = 'wiki/entities/clinics/clinic-longline.md';
+    const longRel = 'wiki/entities/records/rec-longline.md';
     const longAbs = join(root, ...longRel.split('/'));
     mkdirSync(dirname(longAbs), { recursive: true });
     writeFileSync(longAbs, `# fixture\n${'y'.repeat(LONG_LINE_WARN + 1)}\n`);
-    const rels = ['wiki/entities/clinics/clinic-001.md', 'wiki/concepts/big.md', longRel];
+    const rels = ['wiki/entities/records/rec-001.md', 'wiki/concepts/big.md', longRel];
     const full = lintWikiSizes(root);
     const scoped = checkPages(root, rels);
     assert.deepEqual(full.failures.map((f) => f.rel).sort(), scoped.fails.map((f) => f.rel).sort());
@@ -888,8 +910,8 @@ test('NEAR-CAP: the threshold is exactly 90% of the hard cap, floored', () => {
 test('NEAR-CAP: an injected page at >=90% of the cap warns as near-cap, never fails', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_NEAR_CAP });
-    const { fails, warns } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_NEAR_CAP });
+    const { fails, warns } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     assert.equal(fails.length, 0, 'near-cap must not block — it is advisory');
     const near = sizeWarns(warns);
     assert.equal(near.length, 1);
@@ -904,8 +926,8 @@ test('NEAR-CAP: an injected page at >=90% of the cap warns as near-cap, never fa
 test('NEAR-CAP: one byte below the band is an ordinary 8 KB warn, not near-cap', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_NEAR_CAP - 1 });
-    const { warns } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_NEAR_CAP - 1 });
+    const { warns } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     const ordinary = sizeWarns(warns);
     assert.equal(ordinary.length, 1);
     assert.equal(ordinary[0].nearCap, undefined);
@@ -918,8 +940,8 @@ test('NEAR-CAP: one byte below the band is an ordinary 8 KB warn, not near-cap',
 test('NEAR-CAP: over the cap still FAILS — the band never softens the hard refusal', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', { size: INJECTED_FAIL + 1 });
-    const { fails, warns } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_FAIL + 1 });
+    const { fails, warns } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     assert.equal(fails.length, 1);
     assert.equal(fails[0].limit, INJECTED_FAIL);
     assert.equal(sizeWarns(warns).length, 0, 'a fail is not also reported as a warn');
@@ -993,11 +1015,11 @@ test('updatedValueLength: measures the trimmed value bytes off full page text; a
 test('updated: over the cap FAILS an injected page, with the updated kind', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', {
+    page(root, REC_PAGE, {
       size: 2 * KB,
       frontmatter: `updated: ${'h'.repeat(UPDATED_MAX + 1)}`,
     });
-    const { fails, warns } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    const { fails, warns } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     assert.equal(fails.length, 1);
     assert.equal(fails[0].kind, 'updated');
     assert.equal(fails[0].updatedBytes, UPDATED_MAX + 1);
@@ -1026,7 +1048,7 @@ test('updated: over the cap FAILS a pull page too (the 8.3 KB appendix-chain sha
 test('updated: exactly at the cap passes; exempt pages skip the rule entirely', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', {
+    page(root, REC_PAGE, {
       size: 2 * KB,
       frontmatter: `updated: ${'h'.repeat(UPDATED_MAX)}`,
     });
@@ -1034,10 +1056,7 @@ test('updated: exactly at the cap passes; exempt pages skip the rule entirely', 
       size: 2 * KB,
       frontmatter: `updated: ${'h'.repeat(2 * KB)}`,
     });
-    const { fails, warns } = checkPages(root, [
-      'wiki/entities/clinics/clinic-001.md',
-      'wiki/log.md',
-    ]);
+    const { fails, warns } = checkPages(root, ['wiki/entities/records/rec-001.md', 'wiki/log.md']);
     assert.equal(fails.length, 0);
     assert.equal(warns.length, 0);
   } finally {
@@ -1048,11 +1067,11 @@ test('updated: exactly at the cap passes; exempt pages skip the rule entirely', 
 test('a size FAIL outranks the updated: fail — one fail per page, biggest problem first', () => {
   const { root, cleanup } = makeRepo();
   try {
-    page(root, 'wiki/entities/clinics/clinic-001.md', {
+    page(root, REC_PAGE, {
       size: INJECTED_FAIL + 1,
       frontmatter: `updated: ${'h'.repeat(UPDATED_MAX + 1)}`,
     });
-    const { fails } = checkPages(root, ['wiki/entities/clinics/clinic-001.md']);
+    const { fails } = checkPages(root, ['wiki/entities/records/rec-001.md']);
     assert.equal(fails.length, 1);
     assert.equal(fails[0].kind, undefined);
     assert.equal(fails[0].limit, INJECTED_FAIL);
@@ -1077,18 +1096,18 @@ test('a long body line on an INJECTED page warns (LONG-LINE) without blocking; p
   const { root, cleanup } = makeRepo();
   try {
     const body = `# fixture\n${'y'.repeat(LONG_LINE_WARN + 100)}\nshort line\n`;
-    for (const rel of ['wiki/entities/clinics/clinic-001.md', 'wiki/concepts/notes.md']) {
+    for (const rel of [REC_PAGE, 'wiki/concepts/notes.md']) {
       const abs = join(root, ...rel.split('/'));
       mkdirSync(dirname(abs), { recursive: true });
       writeFileSync(abs, body);
     }
     const { fails, warns } = checkPages(root, [
-      'wiki/entities/clinics/clinic-001.md',
+      'wiki/entities/records/rec-001.md',
       'wiki/concepts/notes.md',
     ]);
     assert.equal(fails.length, 0, 'advisory only — never blocks');
     assert.equal(warns.length, 1, 'injected page only');
-    assert.equal(warns[0].rel, 'wiki/entities/clinics/clinic-001.md');
+    assert.equal(warns[0].rel, 'wiki/entities/records/rec-001.md');
     assert.equal(warns[0].kind, 'longLine');
     assert.equal(warns[0].longLines, 1);
     assert.equal(warns[0].firstLongLine.line, 2);
@@ -1104,8 +1123,8 @@ test('an injected page long-line advisory scans only the head above the fold', (
   const { root, cleanup } = makeRepo();
   try {
     const long = 'y'.repeat(900);
-    const aboveRel = 'wiki/entities/clinics/above-fold.md';
-    const belowRel = 'wiki/entities/clinics/below-fold.md';
+    const aboveRel = 'wiki/entities/records/above-fold.md';
+    const belowRel = 'wiki/entities/records/below-fold.md';
     for (const [rel, body] of [
       [aboveRel, `# fixture\n${long}\n<!-- fold -->\ntail\n`],
       [belowRel, `# fixture\n<!-- fold -->\n${long}\n`],
@@ -1131,7 +1150,7 @@ test('the long-line advisory rides BESIDE the size bucket — a near-cap page re
     while (body.length < INJECTED_NEAR_CAP) {
       body += 'x'.repeat(Math.min(100, INJECTED_NEAR_CAP - body.length - 1) || 1) + '\n';
     }
-    const rel = 'wiki/entities/clinics/clinic-001.md';
+    const rel = 'wiki/entities/records/rec-001.md';
     const abs = join(root, ...rel.split('/'));
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, body);
@@ -1151,7 +1170,7 @@ test('the long-line advisory rides BESIDE the size bucket — a near-cap page re
 
 test('formatBudgetFailure: the updated: refusal names the rule; the size refusal names the cap', () => {
   const updated = formatBudgetFailure({
-    rel: 'wiki/entities/chains/vetathome.md',
+    rel: 'wiki/entities/chains/chainb.md',
     size: 10 * KB,
     cls: 'injected',
     kind: 'updated',
@@ -1163,7 +1182,7 @@ test('formatBudgetFailure: the updated: refusal names the rule; the size refusal
   assert.match(updated, /wiki\/log\.md/);
 
   const size = formatBudgetFailure({
-    rel: 'wiki/entities/clinics/clinic-001.md',
+    rel: 'wiki/entities/records/rec-001.md',
     size: INJECTED_FAIL + KB,
     cls: 'injected',
     limit: INJECTED_FAIL,
@@ -1193,10 +1212,10 @@ function foldPage(root, rel, { lines, foldAfter = null, frontmatter = '' } = {})
 
 test('isFoldable: entities/** is in scope, appendices and non-entities are not', () => {
   assert.equal(isFoldable('wiki/entities/chains/anicura.md'), true);
-  assert.equal(isFoldable('wiki/entities/clinics/clinic-004.md'), true);
+  assert.equal(isFoldable('wiki/entities/records/rec-004.md'), true);
   // the fold's DESTINATION is never asked to fold itself (WIKI.md § Page budgets rules 5-6)
   assert.equal(isFoldable('wiki/entities/inspectors/price-inspector' + APPENDIX_SUFFIX), false);
-  assert.equal(isFoldable('wiki/entities/platforms/provet-cloud-appendix.md'), false);
+  assert.equal(isFoldable('wiki/entities/platforms/acme-cloud-appendix.md'), false);
   // no loader reaches concepts/ or the vault root
   assert.equal(isFoldable('wiki/concepts/pipeline-phases.md'), false);
   assert.equal(isFoldable('wiki/hot.md'), false);
@@ -1336,7 +1355,7 @@ test('formatBudgetWarning: the fold advisory names the right remedy for each sha
   assert.match(unmarked.message, /WHOLE page is injected as current truth/);
 
   const marked = formatBudgetWarning({
-    rel: 'wiki/entities/platforms/provet-cloud.md',
+    rel: 'wiki/entities/platforms/acme-cloud.md',
     cls: 'injected',
     kind: 'foldHead',
     aboveFoldLines: 142,
@@ -1405,4 +1424,16 @@ test('ADVISORY_KINDS is the single list the size tests filter on', () => {
   assert.ok(ADVISORY_KINDS.has('foldMarkers'));
   assert.ok(!ADVISORY_KINDS.has('tail'), 'tail is a size warn, not an advisory');
   assert.ok(!ADVISORY_KINDS.has('total'), 'total is a size warn, not an advisory');
+});
+
+test('plan 4172 review 498d8a: an UNREADABLE coord.config.json fails the lint loudly instead of dropping the record-page cap', () => {
+  const { root, cleanup } = makeRepo();
+  try {
+    writeFileSync(join(root, 'coord.config.json'), '{ not json');
+    page(root, 'wiki/entities/records/rec-001.md', { size: INJECTED_FAIL + 1 });
+    assert.throws(() => lintWikiSizes(root));
+    assert.throws(() => checkPages(root, ['wiki/entities/records/rec-001.md']));
+  } finally {
+    cleanup();
+  }
 });

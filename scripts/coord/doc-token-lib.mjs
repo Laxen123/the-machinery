@@ -5,8 +5,8 @@
 // are themselves generic (no vetapp semantics of their own — they check docs/, wiki/, WIKI.md,
 // CLAUDE.md for dead path references and stale "plan N" claims), but until this extraction they
 // imported their brace-expander / glob-matcher / gitignore-batcher / word-splitter / token-trimmer
-// from `scripts/lint-pipeline-doc.mjs`, which hard-imports `scripts/pipeline-doc.mjs` (the
-// docs/PIPELINE.md market-template parser — vetapp-only) for its OWN stage-heading grammar. That
+// from the project's pipeline-doc lint, which hard-imports the project's pipeline-doc parser (the
+// project's own stage-map parser, project-only) for its OWN stage-heading grammar. That
 // coupling put a vetapp-only module in the doc-pointer lints' import closure even though they
 // never call anything PIPELINE.md-specific, which is why coord-kit's build routed them through a
 // project seam (`pp_project_doc_pointer_lints` in a project's own pre-push hook, commit
@@ -14,7 +14,7 @@
 // two lints actually need, with no import of `pipeline-doc.mjs` or anything else project-shaped,
 // so their closure can go clean and the check can move back into `pre-push-core.sh`.
 //
-// SHIP CONSTRAINT (docs/runbooks/scripts-module-layout.md § Rule 3): this module lives under
+// SHIP CONSTRAINT (docs/coord/scripts-layout.md § Rule 3): this module lives under
 // scripts/coord/, which the kit ships verbatim, so it may import ONLY node: builtins and
 // scripts/coord/** siblings.
 //
@@ -48,7 +48,7 @@ export function trimToken(word) {
 /**
  * Split a backtick span's contents into candidate words. Whitespace is the primary
  * separator, but a comma OUTSIDE a `{a,b}` brace group also separates: two real paths
- * written comma-adjacent (`` `docs/a.md,docs/b.md` ``) would otherwise fuse into one
+ * written comma-adjacent (`` `docs/<a>.md,docs/<b>.md` ``) would otherwise fuse into one
  * always-missing token and WARN forever on two files that both exist (review finding,
  * 2026-07-30). Commas INSIDE braces are brace-group syntax and must survive.
  */

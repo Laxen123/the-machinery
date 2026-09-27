@@ -1481,7 +1481,7 @@ if __name__ == "__main__":
   assert.deepEqual(analyzePython(post), []);
 });
 
-// Verbatim from backend/scripts/price-pipeline/test_lib_detached.py (lines 32-41 as of
+// Verbatim from the project's data pipeline test_lib_detached.py (lines 32-41 as of
 // 2026-08-05) — the one other real corpus file that fakes the platform. Copied rather than READ
 // from the tree on purpose: select-battery-tests.test.mjs fails any battery test that reads a
 // real-tree path no EXTERNAL_TREE_PREFIXES entry covers, and covering `backend/scripts/` would
@@ -2097,7 +2097,7 @@ test('inScope: the Python test tree truth table', () => {
   assert.equal(inScope('backend/scripts/x/test_a.py'), true);
   assert.equal(inScope('backend/scripts/conftest.py'), true);
   assert.equal(inScope('backend/scripts/__tests__/_test_price_rows.py'), true);
-  assert.equal(inScope('backend/scripts/price-pipeline/_pp_proc.py'), false);
+  assert.equal(inScope('backend/scripts/data-pipeline/_pp_proc.py'), false);
   assert.equal(inScope('backend/src/foo.py'), false);
   // Existing JS cases unchanged.
   assert.equal(inScope('scripts/lock-path.test.mjs'), true);

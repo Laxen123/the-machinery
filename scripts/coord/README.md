@@ -1,7 +1,7 @@
 # scripts/coord/
 
 The generic coordination CORE — plan-lifecycle, review-marker, and claim/lock machinery that
-carries no vetapp-specific knowledge (no clinic/seed/deploy/market vocabulary). This is the half
+carries no vetapp-specific knowledge (no record/seed/deploy/market vocabulary). This is the half
 of `scripts/` the eventual public extraction (program plan 3958) takes as-is: a fresh checkout of
 `scripts/coord/` alone, with nothing under `scripts/project/`, must still load and run its own
 tests. `docs/runbooks/scripts-module-layout.md` § Rule 3 is what a pre-push gate enforces to keep

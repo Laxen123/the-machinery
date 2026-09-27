@@ -755,7 +755,7 @@ test('Rule 4: a genuine ENOENT stat failure is still the ordinary dead-import ca
 
 // Round-4 finding ff5240: the read of each tracked outside file swallowed EVERY failure as
 // "absent from this working tree". ENOENT really is ordinary — plan 3956 cuts plan worktrees
-// sparse, so a tracked file under a heavy price-pipeline store is legitimately not on disk — but
+// sparse, so a tracked file under a heavy data-pipeline store is legitimately not on disk — but
 // a permissions or IO error means the file was never examined, and calling that absent lets the
 // scan report a clean outside tree it never read. Both halves are pinned here, in one test, so
 // neither can be tightened into the other by a later edit.

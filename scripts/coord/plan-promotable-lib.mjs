@@ -216,7 +216,7 @@ export function findPromotionBlockers(
         `later waiting-* move has nothing to anchor its **Blocked-by:** header to without ` +
         `it. Add one as the first body line, exactly:\n` +
         `      > 🟩 **SEED-WRITE: NO** — <why it touches no seed shard>\n` +
-        `      > 🟥 **SEED-WRITE: YES** — <which clinics/shards it writes>\n` +
+        `      > 🟥 **SEED-WRITE: YES** — <which records/shards it writes>\n` +
         `    (A SEED-WRITE mention elsewhere in the prose does NOT count — move-plan anchors ` +
         `on this exact line shape.)`,
     });

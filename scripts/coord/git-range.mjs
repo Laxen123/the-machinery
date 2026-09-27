@@ -1,6 +1,6 @@
 // scripts/coord/git-range.mjs — the ONE git range/end-ref parser (plan 3618, finding d6a14d).
 //
-// Moved out of scripts/assert-frozen-evidence.mjs, which owned it first (plan 3306) and
+// Moved out of the frozen-evidence gate (a project-side script), which owned it first (plan 3306) and
 // re-exports it unchanged below for its own existing callers/tests. scripts/coord/review-round-cap.mjs
 // needed the exact same "which ref does this range actually land on" logic (a `..`/`...` range
 // is charged to its END ref) and importing assert-frozen-evidence.mjs directly would have pulled

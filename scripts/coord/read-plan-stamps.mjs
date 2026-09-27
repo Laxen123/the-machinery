@@ -150,8 +150,8 @@ export const DECORATED_EXECMODEL_VALUES_MEASURED = 44;
 // `priority` under plan 2520's vocabulary — `'high'` → ⚡, every other tier (including the
 // `'medium'` an unstamped plan reads as) unflagged — the same predicate `build-index-lib.mjs`
 // applies, so the board and the INDEX bullet cannot disagree about which plans are flagged.
-// `evidence` joined at plan 2943 — the evidence-floor class (docs/runbooks/plans-workflow.md
-// § Evidence floor: observed-wave | observed-live | observed-measured | operator | latent).
+// `evidence` joined at plan 2943 — the evidence-floor class (docs/coord/plan-lanes.md
+// § The evidence floor: observed-wave | observed-live | observed-measured | operator | latent).
 // Same shape as every scalar key here (the raw lower-cased frontmatter value, null when
 // absent — a MISSING key is the grandfathered-pool default, never a routing refusal by
 // itself); the promotion-time REFUSAL for a `latent` product-family plan lives at

@@ -43,7 +43,7 @@ const VETAPP_EXCLUDES = reviewDiffExcludesFor(['backend/data', 'backend/src/data
 // path from a real direct seed open — and it is right not to try. The guard's own header
 // names segment-wise builds as the sanctioned form, so this stays a fixture without
 // weakening the gate or growing its grandfather list (which may only shrink).
-const SEED_SHARD = ['backend', 'src', 'data', 'seed', 'clinics', 'SE', 'clinic-001.json'].join('/');
+const SEED_SHARD = ['backend', 'src', 'data', 'seed', 'records', 'SE', 'rec-001.json'].join('/');
 
 // ─── The core list + the merge ──────────────────────────────────────────────
 test('CORE_REVIEW_DIFF_EXCLUDES: exactly the three project-agnostic data-artifact roots', () => {
@@ -165,13 +165,13 @@ test('reviewDiffExcludesFor + isExcludedPath: the JS partition and a real git pa
   write(dir, 'scripts/keep.mjs', 'a\n');
   write(dir, 'scripts/data/nested.mjs', 'a\n');
   write(dir, 'backend/src/app.ts', 'a\n');
-  write(dir, 'backend/src/data/seed/clinic-001.json', 'a\n');
+  write(dir, 'backend/src/data/seed/rec-001.json', 'a\n');
   write(dir, 'backend/data/big.json', 'a\n');
   const base = commit(dir, 'base');
   write(dir, 'scripts/keep.mjs', 'b\n');
   write(dir, 'scripts/data/nested.mjs', 'b\n');
   write(dir, 'backend/src/app.ts', 'b\n');
-  write(dir, 'backend/src/data/seed/clinic-001.json', 'b\n');
+  write(dir, 'backend/src/data/seed/rec-001.json', 'b\n');
   write(dir, 'backend/data/big.json', 'b\n');
   const head = commit(dir, 'head');
 
@@ -454,12 +454,12 @@ test('materializeScopedDiff: a range mixing app source with data artifacts yield
   const dir = initRepo();
   write(dir, 'scripts/keep.mjs', 'export const a = 1;\n');
   write(dir, 'backend/data/big.json', '{"v":1}\n');
-  write(dir, SEED_SHARD, '{"id":"clinic-001"}\n');
+  write(dir, SEED_SHARD, '{"id":"rec-001"}\n');
   const base = commit(dir, 'base');
 
   write(dir, 'scripts/keep.mjs', 'export const a = 2;\n');
   write(dir, 'backend/data/big.json', '{"v":2}\n');
-  write(dir, SEED_SHARD, '{"id":"clinic-001","x":1}\n');
+  write(dir, SEED_SHARD, '{"id":"rec-001","x":1}\n');
   write(dir, 'output/reports/report.md', '# report\n');
   write(dir, 'docs/runbooks/note.md', 'docs stay in scope\n');
   const head = commit(dir, 'head');
@@ -479,7 +479,7 @@ test('materializeScopedDiff: a range mixing app source with data artifacts yield
   // reviewer's file read and the finder timeouts both see only reviewable bytes.
   assert.ok(!patch.includes('backend/data/big.json'), 'data artifact leaked into the patch');
   assert.ok(!patch.includes('output/reports/report.md'), 'output report leaked into the patch');
-  assert.ok(!patch.includes('clinic-001.json'), 'seed row leaked into the patch');
+  assert.ok(!patch.includes('rec-001.json'), 'seed row leaked into the patch');
 
   assert.deepEqual(res.files.sort(), ['docs/runbooks/note.md', 'scripts/keep.mjs']);
   assert.equal(res.excludedFiles, 3);

@@ -16,10 +16,10 @@ import { EXTENSION_POINTS, isExtensionPoint } from './land/registry.mjs';
 // A project opts INTO vetapp-style coordination via its own coord.config.json.
 // seedShardDir (plan 1300): the sharded seed layout's root (vetapp:
 // "backend/src/data/seed") — a diff touching it is a 🟥 seed land, and its
-// per-clinic shard paths carry the lock's narrowing SCOPE. null = no shard
+// per-record shard paths carry the lock's narrowing SCOPE. null = no shard
 // layout (pre-flip repos + siblings): the monolith seedLaneFile alone decides.
-// derivedShardDirs / derivedGlobalFiles (plan 1867): clinic-sharded DERIVED-DATA
-// roots (vetapp: render-fingerprints + render-store) whose per-clinic paths join
+// derivedShardDirs / derivedGlobalFiles (plan 1867): record-sharded DERIVED-DATA
+// roots (vetapp: render-fingerprints + render-store) whose per-record paths join
 // the landing-lock scope exactly like seed shards, and shared append-only data
 // files (the observations *.jsonl) that are global-on-touch. Empty = plan-1300
 // behavior (derived data invisible to the mutex) — siblings without a price
@@ -32,7 +32,7 @@ import { EXTENSION_POINTS, isExtensionPoint } from './land/registry.mjs';
 // validation lives in normalizeConfig below; nothing in this block — or in normalizeConfig's
 // handling of it — reads process.env.
 // CLOSED by plan 4071: the two vetapp-shaped core defaults this block left behind —
-// `DEFAULT_SHARD_ID_PATTERN` (was the literal `clinics/[A-Z]{2}/...` pattern) and
+// `DEFAULT_SHARD_ID_PATTERN` (was a literal `records/[A-Z]{2}/...` pattern) and
 // `DEFAULT_MUTATION_BANNER` (was `SEED-WRITE`/`--seed-write`) — are now project-neutral (`null`,
 // and the generic `DATA-WRITE`/`--data-write` pair); vetapp's own values live as explicit rows in
 // vetapp's `coord.config.json` (shardIdPattern already did; mutationBanner already had a row too).
@@ -46,12 +46,12 @@ import { EXTENSION_POINTS, isExtensionPoint } from './land/registry.mjs';
 // deployServices validation below exactly like any other project's override would be.
 const DEFAULT_DEPLOY_SERVICES = Object.freeze([]);
 
-// shardIdPattern — the per-clinic shard filename pattern, relative to the seed shard root
-// (plan 1300), with exactly ONE capture group (the clinic id). done-worktree-lib.mjs derives
+// shardIdPattern — the per-record shard filename pattern, relative to the seed shard root
+// (plan 1300), with exactly ONE capture group (the record id). done-worktree-lib.mjs derives
 // SHARD_REL_SRC / ORDER_MANIFEST_REL_SRC / DERIVED_SHARD_REL_SRC from this string at module
 // load (same anchors as before); see that module's own comments.
 // plan 4071: CORE default is now `null` ("no sharded records"), following seedShardDir's own
-// null-means-none contract — a config-less repo has no per-clinic shard filename shape to derive
+// null-means-none contract — a config-less repo has no per-record shard filename shape to derive
 // anything from. A consumer that dereferences a null shardIdPattern without checking for it first
 // is a wave-2/3 wiring bug, not this seam's — see the plan-4071 hand-off note.
 const DEFAULT_SHARD_ID_PATTERN = null;
@@ -190,12 +190,12 @@ const DEFAULT_LAND = Object.freeze({
 // the core defaults alone. Same posture as deployServices (plan 3960 R1) and for the same reason
 // — the generic core must not inherit any project's steps by default.
 //
-// This key holds PATHS only. Actually importing them lives in scripts/land-plugins.mjs
+// This key holds PATHS only. Actually importing them lives in the top-level land-plugins loader
 // (loadLandPlugins), NOT here, for two reasons: `await import()` is async and cannot happen
 // inside the sync normalizeConfig, and — the load-bearing one — a dynamic import with a computed
 // specifier makes select-battery-tests.mjs's closure analysis unresolvable, which would widen the
 // battery pass-cache to the full tree for every module that imports this one. That is nearly the
-// whole tree. See land-plugins.mjs's own header; scripts/battery-pass-cache.test.mjs is what
+// whole tree. See land-plugins.mjs's own header; scripts/coord/battery-pass-cache.test.mjs is what
 // catches a regression of it.
 const DEFAULT_PLUGINS = Object.freeze({});
 
@@ -206,13 +206,13 @@ const DEFAULT_PLUGINS = Object.freeze({});
 // knowledge, and this leaf must not import coord-config.mjs either) — the CALLER resolves this
 // list and passes it in. Default EMPTY, same posture as derivedShardDirs/deployServices: a
 // config-less repo has no job-output tree to protect from the pre-yield-guard park/stash.
-// vetapp's row reproduces its former hardcoded literal exactly: ["backend/data/price-pipeline/"].
+// vetapp's row reproduces its former hardcoded literal exactly: its own job-output directory.
 //
 // externalTreePrefixes[] (plan 3962 P1): project-specific ADDITIONS to
 // scripts/select-battery-tests.mjs's EXTERNAL_TREE_PREFIXES bail-out list (real-tree paths a
 // battery test reads directly, which the import-closure selector cannot scope). The module's own
 // generic default (wiki/, .husky/, node_modules/, …) always applies; this key adds project-only
-// entries on top — vetapp's is `backend/` (the price-pipeline stores + backend test fixtures no
+// entries on top — vetapp's is `backend/` (its data-pipeline stores + backend test fixtures no
 // scripts/*.mjs file imports). Default EMPTY: a config-less repo widens nothing.
 // dataDependencyMap (plan 3962 P1): project ADDITIONS to
 // scripts/select-battery-tests.mjs's own DATA_DEPENDENCY_MAP (test-basename -> glob[] rows for
@@ -273,7 +273,7 @@ export const DEFAULT_WIKI_SUBJECT_PATTERNS = Object.freeze([]);
 // coordCheckoutExcludedTopLevel[] / planWorktreeExcludedPaths[] (coord-git.mjs
 // COORD_CHECKOUT_EXCLUDED_TOP_LEVEL / PLAN_WORKTREE_EXCLUDED_PATHS): the sparse-checkout cones
 // for the shared coord checkout (top-level dirs never materialised) and a plan worktree (heavy
-// price-pipeline data stores never materialised). Default EMPTY: a config-less repo's coord
+// data-pipeline stores never materialised). Default EMPTY: a config-less repo's coord
 // checkout and plan worktrees are cut DENSE — no cone to apply.
 // reviewDiffExcludes[] (review-diff-scope.mjs REVIEW_DIFF_EXCLUDES): project ADDITIONS to that
 // module's own generic exclude list (`output`, `pnpm-lock.yaml` stay in the module — they apply
@@ -343,6 +343,33 @@ const DEFAULT_PYTEST_SELECTOR = Object.freeze({ prefix: null, script: null });
 // seam's.
 const DEFAULT_GATES = Object.freeze({});
 
+// ── plan 4172: the project-vocabulary literals the shipped core still hardcoded ─────────────────
+// Six keys, every one with a CORE default of `null` = "not configured", following seedShardDir's
+// own null-means-none contract (plan 4071). A config-less repo gets the generic behaviour; vetapp's
+// own values live as explicit rows in vetapp's coord.config.json.
+//
+// legacyScopeKeys — landing-lock scope keys that mean the SAME thing as `shards` (a record-id
+//   list). Read-both window for the plan-4172 wire rename: normalizeScope reads each legacy key as
+//   `shards`, and a holder entry is written with every legacy key mirrored beside `shards`, so a
+//   landing-lock copy on an older branch (which knows only the legacy key) still reads a new holder
+//   instead of throwing "malformed scope". null = no legacy key (a fresh project never had one).
+// wikiRecordDir — the wiki directory whose pages a file-derived loader injects per record (vetapp:
+//   the per-record entity pages). wiki-size-lint.mjs classifies a page under it as 'injected'.
+// worktreeExcludeBasenames — extra directory basenames cut-worktree.mjs keeps out of a sparse plan
+//   worktree beside the basenames of planWorktreeExcludedPaths.
+// sweepCheckpointPattern — regex SOURCE matching a committed sweep-checkpoint file path; compute-
+//   push-diff.mjs treats a diff of only such files as a checkpoint-only push.
+// wikiAliasDeny — extra normalized aliases subject-wiki-loader.mjs refuses to match on, beside its
+//   generic deny words (a project word that is also a common word in the project's language).
+// bulkItemNouns — extra nouns the bulk-work tripwire hook reads as "a counted batch of items"
+//   (digit + … + noun), beside its generic items/holdouts/battery.
+const DEFAULT_LEGACY_SCOPE_KEYS = null;
+const DEFAULT_WIKI_RECORD_DIR = null;
+const DEFAULT_WORKTREE_EXCLUDE_BASENAMES = null;
+const DEFAULT_SWEEP_CHECKPOINT_PATTERN = null;
+const DEFAULT_WIKI_ALIAS_DENY = null;
+const DEFAULT_BULK_ITEM_NOUNS = null;
+
 export const DEFAULTS = {
   seedLaneFile: null,
   seedShardDir: null,
@@ -374,7 +401,45 @@ export const DEFAULTS = {
   gates: DEFAULT_GATES,
   gitPatEnvVar: DEFAULT_GIT_PAT_ENV_VAR,
   codexAuthEnvVar: DEFAULT_CODEX_AUTH_ENV_VAR,
+  legacyScopeKeys: DEFAULT_LEGACY_SCOPE_KEYS,
+  wikiRecordDir: DEFAULT_WIKI_RECORD_DIR,
+  worktreeExcludeBasenames: DEFAULT_WORKTREE_EXCLUDE_BASENAMES,
+  sweepCheckpointPattern: DEFAULT_SWEEP_CHECKPOINT_PATTERN,
+  wikiAliasDeny: DEFAULT_WIKI_ALIAS_DENY,
+  bulkItemNouns: DEFAULT_BULK_ITEM_NOUNS,
 };
+
+// plan 4172: shared shape for the nullable token lists above — null stays null ("not
+// configured"), anything else must be an array of non-empty strings (loud-fail, same posture as
+// normList: a silently dropped entry would quietly change what the consumer matches).
+function normalizeNullableTokenList(raw, key) {
+  if (raw == null) return null;
+  if (!Array.isArray(raw)) throw new Error(`coord-config: ${key} must be null or an array`);
+  for (const entry of raw) {
+    if (typeof entry !== 'string' || !entry.trim())
+      throw new Error(`coord-config: ${key} has an empty/non-string entry — remove or fix it`);
+  }
+  return Object.freeze([...raw]);
+}
+
+function normalizeNullablePath(raw, key) {
+  if (raw == null) return null;
+  if (typeof raw !== 'string' || !raw.trim())
+    throw new Error(`coord-config: ${key} must be null or a non-empty string`);
+  return raw.replace(/\\/g, '/');
+}
+
+function normalizeNullablePattern(raw, key) {
+  if (raw == null) return null;
+  if (typeof raw !== 'string' || !raw.trim())
+    throw new Error(`coord-config: ${key} must be null or a non-empty regex source string`);
+  try {
+    new RegExp(raw);
+  } catch (err) {
+    throw new Error(`coord-config: ${key} does not compile as a regex: ${err.message}`);
+  }
+  return raw;
+}
 
 const VALID_LAYOUTS = new Set(['sessions', 'single']);
 
@@ -513,7 +578,7 @@ function normalizeCloudRepos(rows) {
 // the FIRST parenthesis regardless of type. That silently disagreed with the validator here the
 // instant a pattern's first group was non-capturing or a lookaround (exactly the shape this
 // validator deliberately ACCEPTS as valid): the validator would pass the pattern, then
-// deriveShardPatterns would extract the WRONG group's content as "the clinic id". Importing this
+// deriveShardPatterns would extract the WRONG group's content as "the record id". Importing this
 // scanner instead of re-deriving the rule means the two can no longer drift apart — see that
 // module's own comment at its call site.
 //
@@ -564,7 +629,7 @@ function countCaptureGroups(pattern) {
 
 function normalizeShardIdPattern(pattern) {
   // plan 4071: null means "no sharded records" — the same contract seedShardDir already has.
-  // A config-less repo has no per-clinic shard filename shape, and every consumer must degrade
+  // A config-less repo has no per-record shard filename shape, and every consumer must degrade
   // to that ("no shard layout"), never throw at load.
   if (pattern === null) return null;
   if (typeof pattern !== 'string' || !pattern.trim()) {
@@ -580,7 +645,7 @@ function normalizeShardIdPattern(pattern) {
   const groups = countCaptureGroups(pattern);
   if (groups !== 1) {
     throw new Error(
-      `coord-config: shardIdPattern must have exactly one capture group (the clinic id) — ` +
+      `coord-config: shardIdPattern must have exactly one capture group (the record id) — ` +
         `found ${groups} in ${JSON.stringify(pattern)}`,
     );
   }
@@ -766,7 +831,7 @@ function normalizeLand(raw) {
   // plan 3961 T2 review (key 3dc8da): the shape check above accepted ANY non-empty string. The
   // spine (done-worktree.mjs's teardown step 2) expands only a leading "~/" and otherwise passes
   // the value straight to PowerShell's `-File` argument, so a bare relative path — traversing
-  // ("../../outside.ps1") or not ("scripts/reclaim.ps1") — resolves against whatever directory
+  // ("../../outside.ps1") or not ("scripts/reclaim.ps1") — resolves against whatever directory dangling-ok: illustrative non-existent path for this validation edge case
   // happens to be the process cwd at teardown time: an implicit, unreviewable target. Constrain
   // to the three explicit forms the spine actually knows how to resolve unambiguously.
   if (
@@ -815,7 +880,7 @@ function normalizeLand(raw) {
 // plan 3961 T1: plugins is `{ <extension point>: [<repo-relative module path>, …] }`.
 //
 // Shape and PATH SAFETY only — whether the file exists, loads, or exports the right thing is
-// scripts/land-plugins.mjs's business (and registry.mjs's, for the entries themselves). Three refusals
+// the top-level land-plugins loader's business (and registry.mjs's, for the entries themselves). Three refusals
 // beyond the obvious type checks, each closing a way a wrong value would otherwise fail late and
 // unhelpfully:
 //
@@ -869,7 +934,7 @@ function normalizePlugins(raw) {
         );
       }
       // Canonicalize before the duplicate check (review round 1, findings 9ae61a/cecd6a/d48193/
-      // 915306): "./scripts/x.mjs", "scripts/./x.mjs" and "scripts/x.mjs" all resolve to the same
+      // 915306): "./scripts/<name>.mjs", "scripts/./<name>.mjs" and "scripts/<name>.mjs" all resolve to the same
       // module, so a raw-string comparison let two spellings of one path through and the module
       // registered every one of its entries twice. Lexical only, and that is enough here — the
       // ".." and absolute forms are already refused above, so the only segments left to fold are
@@ -1210,7 +1275,7 @@ export function normalizeConfig(raw) {
   if (merged.seedShardDir != null && !String(merged.seedShardDir).trim()) {
     throw new Error(
       'coord-config: seedShardDir is set but empty — either point it at the shard tree ' +
-        '(e.g. "backend/src/data/seed") or omit the key entirely',
+        '(e.g. "data/records") or omit the key entirely',
     );
   }
   const seedShardDir = merged.seedShardDir
@@ -1253,8 +1318,8 @@ export function normalizeConfig(raw) {
   const derivedGlobalFiles = normList('derivedGlobalFiles', false);
   // jobOutputPrefixes / externalTreePrefixes are matched with a leading-anchor regex / startsWith
   // against a full relative path — NEVER strip the trailing slash (plan 3962 P1): stripping it
-  // would let "backend/data/price-pipeline" match a sibling like "backend/data/price-pipeline-x/"
-  // that the trailing "/" was there specifically to exclude.
+  // would let "backend/data/job-output" match a sibling like "backend/data/job-output-x/" that
+  // the trailing "/" was there specifically to exclude.
   const jobOutputPrefixes = normList('jobOutputPrefixes', false);
   const externalTreePrefixes = normList('externalTreePrefixes', false);
   const dataDependencyMap = normalizeDataDependencyMap(merged.dataDependencyMap);
@@ -1351,6 +1416,18 @@ export function normalizeConfig(raw) {
     gates,
     gitPatEnvVar,
     codexAuthEnvVar,
+    legacyScopeKeys: normalizeNullableTokenList(merged.legacyScopeKeys, 'legacyScopeKeys'),
+    wikiRecordDir: normalizeNullablePath(merged.wikiRecordDir, 'wikiRecordDir'),
+    worktreeExcludeBasenames: normalizeNullableTokenList(
+      merged.worktreeExcludeBasenames,
+      'worktreeExcludeBasenames',
+    ),
+    sweepCheckpointPattern: normalizeNullablePattern(
+      merged.sweepCheckpointPattern,
+      'sweepCheckpointPattern',
+    ),
+    wikiAliasDeny: normalizeNullableTokenList(merged.wikiAliasDeny, 'wikiAliasDeny'),
+    bulkItemNouns: normalizeNullableTokenList(merged.bulkItemNouns, 'bulkItemNouns'),
     // Plan 1867 (xhigh review F3): the derived scope roots also constitute a lane —
     // seedScopeOf treats their diffs as lockable scope, so every seedLane consumer
     // (plan 🟥/🟩 banners, queue-drain's mutex sort, claim-plan) must agree, or a

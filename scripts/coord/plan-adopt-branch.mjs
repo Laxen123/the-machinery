@@ -42,7 +42,7 @@
 //                   confusion available here, which is why it returns before any read/write.
 //
 // Module layout: this is a non-test `.mjs` under `scripts/`, so it imports nothing outside
-// `scripts/` (docs/runbooks/scripts-module-layout.md). It reuses `originExecutedPlanIds` from
+// `scripts/` (docs/coord/scripts-layout.md). It reuses `originExecutedPlanIds` from
 // queue-drain.mjs rather than re-rolling the `ls-remote` — one definition of "what counts as
 // an execution branch for a plan id", including its id-canonicalisation discipline.
 

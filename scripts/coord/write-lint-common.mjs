@@ -4,7 +4,7 @@
 // its own rule logic and exports { lintableExtension, lintFile }; this module
 // owns the pieces that must never drift between them: the tokenizers, the
 // path-scope check, the CSS frame walker, and the hook main() harness.
-// scripts/frontend-write-lints.mjs is the single PostToolUse entry that runs
+// A project's own PostToolUse write-lint entry script runs
 // every lint in one process.
 
 import { readFileSync } from 'node:fs';

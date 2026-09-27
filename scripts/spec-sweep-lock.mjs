@@ -295,7 +295,7 @@ function readTokenFile(mainDir) {
 
 function writeTokenFile(mainDir, token) {
   try {
-    // atomicWriteJsonSync (scripts/atomic-write.mjs) is the crash-safe fsync+tmp-then-
+    // atomicWriteJsonSync (scripts/coord/atomic-write.mjs) is the crash-safe fsync+tmp-then-
     // rename writer, but it does not create parent directories — mkdirSync stays.
     mkdirSync(join(mainDir, '.scratch'), { recursive: true });
     atomicWriteJsonSync(tokenFilePath(mainDir), { token });

@@ -56,7 +56,7 @@
 //
 //   ```dependencies
 //   1373 blocked-by 1371
-//   batch-2026-07-05-seed-heavy overlaps batch-2026-07-05-seed-small : clinic-034
+//   batch-2026-07-05-seed-heavy overlaps batch-2026-07-05-seed-small : record-034
 //   1371 order-after 1362
 //   ```
 //

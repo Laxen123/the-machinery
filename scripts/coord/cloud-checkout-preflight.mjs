@@ -40,8 +40,8 @@
 //
 // Never: touches linked worktrees, deletes branches, force-pushes.
 //
-// ── shallow-clone guard (plan 3274) — a SEPARATE axis, not an extension of the
-// stale-master repair above ─────────────────────────────────────────────────────────
+// ── shallow-clone guard (plan 3274; cumulative-deepen repair, plan 4189) — a SEPARATE
+// axis, not an extension of the stale-master repair above ─────────────────────────────
 // A FULL-egress cloud container has also been observed booting on a SHALLOW checkout
 // (.git/shallow present, graft boundaries, only ~71 commits of origin/master visible).
 // In that state `git merge-base <older-branch> origin/master` returns EMPTY with rc=1
@@ -50,18 +50,36 @@
 // rebase of any older branch mid-flight instead of failing up front. Detection uses
 // `git rev-parse --is-shallow-repository` — git's own answer, which resolves the real
 // (common) git dir itself, so it is correct under a linked-worktree layout without this
-// script hand-resolving `.git/shallow`'s path. Repair is one `git fetch --unshallow`,
-// TIME-BOUNDED (execFileSync `timeout`, default UNSHALLOW_TIMEOUT_MS = 5 min, override
-// via env UNSHALLOW_TIMEOUT_ENV) — a wedged network/proxy fails loud instead of hanging
-// the whole firing, which would be worse than the shallow clone it repairs (that at
-// least fails fast); calling `--unshallow` on an already-complete repo is itself a git
-// error ("does not make sense"), so it runs ONLY when the shallow check is true, never
-// unconditionally. A repair that fails — including a timeout, named as such and never
-// conflated with an ordinary rejected fetch — or leaves the repo still shallow FAILS
-// LOUD (exit 1, named cause) rather than letting a corrupted merge-base surface later
-// mid-rebase. Runs after guards 1-4 (same disposability envelope) and before the
-// stale-master path, so a shallow boundary can never skew that path's own
-// rev-list/merge-base math.
+// script hand-resolving `.git/shallow`'s path.
+//
+// Repair (plan 4189) is BOUNDED, CUMULATIVE `git fetch --deepen=<n>` rounds, not one
+// all-or-nothing `git fetch --unshallow` — the earlier single-call design (plan 3274)
+// could not fit this repo's real history (~703k objects / ~520 MiB over ~84k commits,
+// measured 2026-08-28; a 2026-08-18 estimate of ~75k commits / ~2.4GB in this comment
+// was stale and wrong) inside any bound short enough not to hang a whole firing, and a
+// KILLED `--unshallow` keeps nothing (its objects sit in a discarded temporary pack), so
+// every retry restarted from zero and never converged — two dead cloud firings
+// (2026-08-28, 2026-09-25) before the fix. `--deepen=<n>` is different: a round that
+// COMPLETES moves `.git/shallow`'s boundary and keeps its objects, so progress survives
+// both a killed round and a rerun of this whole preflight in the same container. See the
+// DEEPEN_* constants below for the schedule (start/max depth, per-round and total-budget
+// timeouts) and `main()`'s shallow-clone block for the loop, the halve-on-timeout retry,
+// the "completed but no boundary movement" closer, and the PARTIAL-budget-exhaustion exit
+// (rerun-safe, not a dead end). Calling `--unshallow`/`--deepen` on an already-complete
+// repo is itself a git error ("does not make sense"), so this runs ONLY when the shallow
+// check is true, never unconditionally. Every repair fetch (and the orient fetch below)
+// names ORIGIN_MASTER_REFSPEC explicitly: the cloud clones' configured wildcard refspec
+// made each "250-commit" round also fetch all ~371 origin heads — the leading suspect for
+// not one round ever completing on a cloud box (2026-09-25, plan 4221). The repair fetches
+// also pass `--filter=blob:none` (REPAIR_FILTER), so the checkout ends as a non-shallow
+// PARTIAL clone: commits and trees are local, old blobs are fetched lazily. Success means
+// origin/master's history is whole — a leftover `.git/shallow` line that no origin/master
+// commit reaches (a boundary of some other, e.g. since-deleted, ref) is logged and
+// accepted, not a wedge. A repair that fails outright, or that exhausts every round
+// without completing origin/master's history, FAILS LOUD (exit 1, named cause)
+// rather than letting a corrupted merge-base surface later mid-rebase. Runs after guards
+// 1-4 (same disposability envelope) and before the stale-master path, so a shallow
+// boundary can never skew that path's own rev-list/merge-base math.
 //
 // ── HEAD-attachment check (plan 3813) — a THIRD, separate axis from both above ─────────
 // A FULL-egress cloud sandbox has also been observed booting with the MAIN checkout's HEAD
@@ -158,15 +176,47 @@ function readLocalHostDenylist(dir) {
   }
   return list.map((h) => h.trim().toUpperCase()).filter((h) => h !== '');
 }
-// Shallow-clone repair bound (plan 3274). This repo's full history is ~75k commits /
-// ~2.4GB packed (measured 2026-08-18) — a genuinely bounded amount of data, not
-// "forever" — so a few minutes is generous for a normal cloud-egress path while still
-// being a real bound: a wedged network/proxy now fails LOUD instead of hanging the
-// whole firing. Overridable per-run (tests use a sub-second value; a genuinely slow
-// environment can raise it) via the env var below — read through the same injectable
-// `env` param guard 2 already uses, never bare `process.env`.
-export const UNSHALLOW_TIMEOUT_MS = 300_000; // 5 minutes
+// Shallow-clone repair bounds (plan 4189, cumulative-deepen; plan 3274 original).
+// Measured 2026-08-28: this repo's full history is ~703k objects / ~520 MiB over ~84k
+// commits, and at the ~1.5 MiB/s cloud-egress rate observed the same day that is ~350s of
+// pure transfer plus server-side counting — too large for any single bounded
+// `git fetch --unshallow` call, which is why the repair now runs as rounds instead of one
+// all-or-nothing fetch:
+//   - DEEPEN_ROUND_TIMEOUT_MS bounds EACH round's `git fetch --deepen=<n>` (or the
+//     closer's `--unshallow`) call — a wedged network/proxy fails that one round loud
+//     instead of hanging the whole firing.
+//   - DEEPEN_TOTAL_BUDGET_MS bounds the WHOLE repair loop across all rounds; a healthy
+//     ~350s transfer fits in one run, a slower path finishes across a rerun (S5: budget
+//     exhaustion after real progress is reported PARTIAL, not a dead end — progress is
+//     kept in `.git/shallow` and a rerun in the same container picks up from there).
+//   - DEEPEN_START is the first round's `--deepen=<n>` depth (commits); it DOUBLES after
+//     every round that completes and moves the boundary, capped at DEEPEN_MAX. A round
+//     that TIMES OUT instead halves its depth (floor DEEPEN_FLOOR) and retries; a timeout
+//     AT the floor aborts as wedged rather than retrying forever.
+// Each round (and the closer) fetches master ONLY, via ORIGIN_MASTER_REFSPEC below — never
+// the configured `remote.origin.fetch`, whose wildcard pulled every origin head into every
+// round — and filtered by REPAIR_FILTER (plan 4221). Measured 2026-09-26 on a cloud-shaped
+// clone of GitHub: master's full history is ~1.8 GiB unfiltered but ~78 MiB / ~108k commits
+// with blob:none (49s), hence the larger START/MAX below. Never `tree:0`: path-limited
+// `git log` then timed out at 300s.
+// DEEPEN_TOTAL_BUDGET_MS is overridable per-run (tests use a sub-second value; a
+// genuinely slow environment can raise it) via the env var below — read through the same
+// injectable `env` param guard 2 already uses, never bare `process.env`. The env var's
+// NAME is unchanged from the original single-call design (plan 3274) — only its MEANING
+// changed, from "bound the one --unshallow call" to "bound the whole repair loop" — so no
+// existing caller or documented override string breaks.
+export const DEEPEN_ROUND_TIMEOUT_MS = 150_000; // 2.5 minutes per round
+export const DEEPEN_TOTAL_BUDGET_MS = 540_000; // 9 minutes total, across all rounds
+export const DEEPEN_START = 16_000; // first round's --deepen=<n> depth, in commits
+export const DEEPEN_MAX = 64_000; // per-round depth cap after doubling
+export const DEEPEN_FLOOR = 250; // per-round depth floor after halving on timeout
 export const UNSHALLOW_TIMEOUT_ENV = 'CLOUD_CHECKOUT_UNSHALLOW_TIMEOUT_MS';
+// The one refspec every fetch in this file names (plan 4221): nothing downstream reads a
+// remote-tracking ref other than origin/master.
+export const ORIGIN_MASTER_REFSPEC = '+refs/heads/master:refs/remotes/origin/master';
+// The partial-clone filter every repair fetch passes (plan 4221): commits and trees only,
+// blobs on demand — enough for merge-base and path-limited `git log`.
+export const REPAIR_FILTER = 'blob:none';
 
 const TAG = 'cloud-checkout-preflight';
 
@@ -180,6 +230,21 @@ export function main({
   // readLocalHostDenylist's header for why that read is inlined rather than routed through
   // coord-config.mjs).
   localHostDenylist = readLocalHostDenylist(dir),
+  // plan 4189 S1: the ONE injectable seam for the shallow-clone repair loop below — a
+  // function `(depthOrUnshallow, { timeoutMs }) => void` that either runs
+  // `git fetch --deepen=<depthOrUnshallow>` (a number) or, for the closer,
+  // `git fetch --unshallow` (the literal string `'unshallow'`), and throws the same
+  // `ETIMEDOUT`-coded error `execFileSync`'s own `timeout` option throws on a kill. Left
+  // undefined, the default below runs the real fetch through the same `runGit` closure
+  // every other git call in this file uses. Shallow-state and progress reads (is this
+  // still shallow; did `.git/shallow` change) are NEVER routed through this seam — they
+  // stay on the real `git` closure / a direct read of `.git/shallow`, so a test injecting
+  // a fake fetch still exercises the real detection logic.
+  deepenFetch,
+  // plan 4189: the injectable clock the repair loop's TOTAL-budget bookkeeping reads —
+  // never a real timer a test would have to wait on (vetapp CLAUDE.md's ambient-load-state
+  // rule). Defaults to the real wall clock.
+  now = Date.now,
 } = {}) {
   const log = (m) => console.log(`${TAG}: ${m}`);
   const err = (m) => console.error(`${TAG}: ${m}`);
@@ -260,77 +325,279 @@ export function main({
     return 1;
   }
   if (shallow) {
-    // Read the bound through the injectable `env` param (same guard-2 seam), never bare
-    // process.env — falls back to the default on anything unset/blank/non-positive.
+    // Read the TOTAL-budget bound through the injectable `env` param (same guard-2
+    // seam), never bare process.env — falls back to the default on anything
+    // unset/blank/non-positive. Same env var as the original single-call design (plan
+    // 3274); only its meaning changed (see the constants' header above).
     const rawTimeout = env[UNSHALLOW_TIMEOUT_ENV];
     const parsedTimeout = Number(rawTimeout);
-    const unshallowTimeoutMs =
+    const totalBudgetMs =
       rawTimeout !== undefined &&
       rawTimeout !== null &&
       String(rawTimeout).trim() !== '' &&
       Number.isFinite(parsedTimeout) &&
       parsedTimeout > 0
         ? parsedTimeout
-        : UNSHALLOW_TIMEOUT_MS;
-    log(
-      `SHALLOW CLONE detected (.git/shallow) — attempting one-time repair: git fetch ` +
-        `--unshallow, bounded to ${unshallowTimeoutMs}ms (override via ${UNSHALLOW_TIMEOUT_ENV}).`,
-    );
-    try {
-      runGit(undefined, { timeout: unshallowTimeoutMs, killSignal: 'SIGTERM' })(
-        'fetch',
-        '--unshallow',
-        '-q',
-        'origin',
-      );
-    } catch (e) {
-      // A real execFileSync timeout kill reports `code: 'ETIMEDOUT'` with `signal` set to
-      // the killSignal above and `status: null` — distinct from an ordinary non-zero exit
-      // (status set, code undefined). Verified empirically (plan 3274) on this platform.
-      // That distinction is the point: an operator or an unattended drain reading this
-      // output must be able to tell "the network was too slow" apart from "the fetch was
-      // rejected" — so a timeout gets its OWN cause line, never the generic one below.
-      if (e && e.code === 'ETIMEDOUT') {
-        err(
-          `ABORT — shallow-clone repair TIMED OUT after ${unshallowTimeoutMs}ms (cause: ` +
-            'git fetch --unshallow origin exceeded its time bound — the network path is ' +
-            'too slow or wedged, the fetch was never rejected).',
-        );
-        err(
-          `Raise the bound with ${UNSHALLOW_TIMEOUT_ENV}=<ms> if this environment's ` +
-            'network path is genuinely slower than the default; otherwise this points at ' +
-            'a wedged proxy/network — do not just retry blindly.',
-        );
-      } else {
-        err('ABORT — shallow-clone repair failed (cause: git fetch --unshallow origin).');
-        err(`${e.message}`);
+        : DEEPEN_TOTAL_BUDGET_MS;
+
+    // Progress reads are NEVER routed through the injectable `deepenFetch` seam (S1/S2) —
+    // a direct read of the real `.git/shallow` file under `dir`. `null` means either
+    // "never was shallow" (not reached here) or "fully unshallowed" (the file is removed
+    // once no boundary remains); a non-null Buffer is compared byte-for-byte across
+    // rounds to detect a moved boundary, never via string coercion (shallow-file content
+    // is a list of 40-char shas, one per line — a byte compare is exact and cheap).
+    const shallowFilePath = join(dir, '.git', 'shallow');
+    const readShallowRaw = () => {
+      try {
+        return readFileSync(shallowFilePath);
+      } catch {
+        return null;
       }
+    };
+
+    // The default seam (S1): a real `git fetch --deepen=<n>` (or, for the closer, the
+    // literal string 'unshallow' → `git fetch --unshallow`), bounded by the caller's
+    // `timeoutMs` and reusing the same `runGit`/ETIMEDOUT contract the rest of this file
+    // relies on. A test overrides this by passing its own `deepenFetch` to `main()`.
+    const runDeepenFetch =
+      deepenFetch ||
+      ((depthOrUnshallow, { timeoutMs }) => {
+        const arg =
+          depthOrUnshallow === 'unshallow' ? '--unshallow' : `--deepen=${depthOrUnshallow}`;
+        runGit(undefined, { timeout: timeoutMs, killSignal: 'SIGTERM' })(
+          'fetch',
+          arg,
+          `--filter=${REPAIR_FILTER}`,
+          '-q',
+          'origin',
+          ORIGIN_MASTER_REFSPEC,
+        );
+      });
+
+    // Is origin/master's history whole? A filtered repair leaves a partial (promisor) clone
+    // that is simply not shallow, so it counts as whole. True when git no longer reports
+    // shallow, OR when no `.git/shallow` line is an ancestor of (or equal to) origin/master — the leftover
+    // boundaries then belong to other refs' history only. `--is-ancestor` exits 1 for a
+    // clean "no"; any other failure is an error and throws, never read as "not ancestor".
+    // An unreadable or empty shallow file while git says shallow proves nothing: not whole.
+    const originMasterHistoryWhole = () => {
+      if (git('rev-parse', '--is-shallow-repository').trim() !== 'true') {
+        return { whole: true, remaining: 0 };
+      }
+      const raw = readShallowRaw();
+      const boundaries = (raw === null ? '' : raw.toString('utf8'))
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      if (boundaries.length === 0) return { whole: false, remaining: 0 };
+      for (const b of boundaries) {
+        try {
+          git('merge-base', '--is-ancestor', b, 'refs/remotes/origin/master');
+          return { whole: false, remaining: boundaries.length };
+        } catch (e) {
+          if (e.status !== 1) throw e;
+        }
+      }
+      return { whole: true, remaining: boundaries.length };
+    };
+
+    log(
+      `SHALLOW CLONE detected (.git/shallow) — repairing in bounded, cumulative ` +
+        `\`git fetch --deepen\` rounds (start ${DEEPEN_START}, max ${DEEPEN_MAX} ` +
+        `commits/round, ${DEEPEN_ROUND_TIMEOUT_MS}ms/round, ${totalBudgetMs}ms total ` +
+        `budget, override via ${UNSHALLOW_TIMEOUT_ENV}).`,
+    );
+
+    const startTime = now();
+    let depth = DEEPEN_START;
+    let rounds = 0;
+    // Completed rounds that actually MOVED the boundary — the only progress a rerun keeps
+    // (S2), and so the one thing that turns a budget/closer stop into a PARTIAL (S5).
+    let progressRounds = 0;
+    let fullyRepaired = false;
+    let noProgressRound = false;
+    // S5: real progress was made and is kept in `.git/shallow` — a rerun, not a dead end.
+    // Exit code stays 1 (the prompts' "on ANY non-zero exit do not proceed" contract is
+    // untouched); the distinct `PARTIAL —` line is what tells the drain prompt (see
+    // CHECKOUT_PREFLIGHT_BLOCK) to rerun instead of giving up.
+    const partial = () => {
       err(
-        'This checkout cannot be trusted for merge-base/rebase against origin/master — ' +
-          'do not proceed to land. Fix the fetch path (network/credentials/proxy) and rerun.',
+        `PARTIAL — shallow-clone repair made progress (${progressRounds} rounds, boundary ` +
+          `moved) but ran out of its ${totalBudgetMs}ms budget; rerun the same ` +
+          'command once, progress is kept.',
       );
       return 1;
+    };
+
+    while (true) {
+      const elapsedMs = now() - startTime;
+      const remainingMs = totalBudgetMs - elapsedMs;
+      if (remainingMs <= 0) break; // total budget exhausted — handled below the loop
+      const roundTimeoutMs = Math.min(DEEPEN_ROUND_TIMEOUT_MS, remainingMs);
+      const before = readShallowRaw();
+      log(`round ${rounds + 1}: git fetch --deepen=${depth} (bounded to ${roundTimeoutMs}ms).`);
+      try {
+        runDeepenFetch(depth, { timeoutMs: roundTimeoutMs });
+      } catch (e) {
+        // A real execFileSync timeout kill reports `code: 'ETIMEDOUT'` with `signal` set
+        // to the killSignal and `status: null` — distinct from an ordinary non-zero exit
+        // (status set, code undefined). Verified empirically (plan 3274) on this
+        // platform. That distinction is the point: an operator or an unattended drain
+        // reading this output must be able to tell "this one round was too slow" apart
+        // from "the fetch was rejected" — so a timeout gets its own cause line, never the
+        // generic one below. S2: a killed round does not reliably keep its pack (the
+        // objects sit in a discarded temporary pack), so it is NEVER counted as progress
+        // — only a round that RETURNS is read for a moved boundary.
+        if (e && e.code === 'ETIMEDOUT') {
+          if (depth <= DEEPEN_FLOOR) {
+            err(
+              `ABORT — shallow-clone repair TIMED OUT after ${roundTimeoutMs}ms at the ` +
+                `floor depth (${DEEPEN_FLOOR} commits) — the network path is too slow or ` +
+                'wedged even at the smallest round this repair will attempt.',
+            );
+            err(
+              'This checkout cannot be trusted for merge-base/rebase against ' +
+                'origin/master — do not proceed to land. Fix the fetch path ' +
+                '(network/credentials/proxy) and rerun.',
+            );
+            return 1;
+          }
+          const halved = Math.max(DEEPEN_FLOOR, Math.floor(depth / 2));
+          log(
+            `round at depth ${depth} TIMED OUT after ${roundTimeoutMs}ms — halving to ` +
+              `${halved} and retrying.`,
+          );
+          depth = halved;
+          continue;
+        }
+        err('ABORT — shallow-clone repair failed (cause: git fetch --deepen origin).');
+        err(`${e.message}`);
+        err(
+          'This checkout cannot be trusted for merge-base/rebase against origin/master — ' +
+            'do not proceed to land. Fix the fetch path (network/credentials/proxy) and rerun.',
+        );
+        return 1;
+      }
+      rounds++;
+      const after = readShallowRaw();
+      if (after === null) {
+        fullyRepaired = true;
+        break;
+      }
+      if (before === null || before.equals(after)) {
+        // A round that reports success but never moved the boundary — the closer below
+        // owns this shape (S4), not another identical round. An unreadable pre-round
+        // snapshot (`before === null` while git still reports shallow) proves nothing
+        // moved, so it is never counted as progress either.
+        noProgressRound = true;
+        break;
+      }
+      progressRounds++;
+      depth = Math.min(DEEPEN_MAX, depth * 2);
     }
-    let stillShallow;
+
+    if (!fullyRepaired) {
+      if (noProgressRound) {
+        // S4: the closer. The boundary is presumably at or near the roots by now, so one
+        // plain `git fetch --unshallow` bounded by whatever budget remains is cheap.
+        const elapsedMs = now() - startTime;
+        const remainingMs = totalBudgetMs - elapsedMs;
+        if (remainingMs <= 0) {
+          // Earlier rounds that moved the boundary are kept — a rerun finishes the job.
+          if (progressRounds > 0) return partial();
+          err(
+            'ABORT — shallow-clone repair is wedged: a completed round made no progress ' +
+              '(.git/shallow unchanged) and no budget remains for the closing ' +
+              '`git fetch --unshallow`.',
+          );
+          err(
+            'This checkout cannot be trusted for merge-base/rebase against origin/master ' +
+              '— do not proceed to land. Fix the fetch path (network/credentials/proxy) ' +
+              'and rerun.',
+          );
+          return 1;
+        }
+        log(
+          'a completed round made no progress — running the closer: one plain ' +
+            `\`git fetch --unshallow\`, bounded to the remaining ${remainingMs}ms.`,
+        );
+        try {
+          runDeepenFetch('unshallow', { timeoutMs: remainingMs });
+        } catch (e) {
+          // Same timeout-vs-rejection split as the round catch above. A TIMED-OUT closer
+          // after rounds that moved the boundary keeps that progress, so it is a rerun
+          // (PARTIAL); a rejected closer is a broken fetch path whatever came before.
+          if (e && e.code === 'ETIMEDOUT') {
+            if (progressRounds > 0) return partial();
+            err(
+              `ABORT — shallow-clone repair TIMED OUT after ${remainingMs}ms (cause: the ` +
+                'closing git fetch --unshallow origin exceeded the remaining budget, and no ' +
+                'round ever moved the boundary — the network path is too slow or wedged).',
+            );
+          } else {
+            err(
+              'ABORT — shallow-clone repair failed (cause: closing git fetch --unshallow origin).',
+            );
+            err(`${e.message}`);
+          }
+          err(
+            'This checkout cannot be trusted for merge-base/rebase against origin/master ' +
+              '— do not proceed to land. Fix the fetch path (network/credentials/proxy) ' +
+              'and rerun.',
+          );
+          return 1;
+        }
+        // Fall through to the stillShallow re-check below — the closer reporting success
+        // is not itself proof: a wedged repair (S4/S2's "no progress" case) is caught
+        // there, not here.
+      } else {
+        // The while loop exited because the TOTAL budget ran out mid-round-schedule, not
+        // because a round completed with nothing to show for it.
+        if (progressRounds > 0) return partial();
+        err(
+          'ABORT — shallow-clone repair is wedged: no round completed within its ' +
+            `${totalBudgetMs}ms total budget.`,
+        );
+        err(
+          'This checkout cannot be trusted for merge-base/rebase against origin/master — ' +
+            'do not proceed to land. Fix the fetch path (network/credentials/proxy) and rerun.',
+        );
+        return 1;
+      }
+    }
+
+    let masterHistory;
     try {
-      stillShallow = git('rev-parse', '--is-shallow-repository').trim() === 'true';
+      masterHistory = originMasterHistoryWhole();
     } catch (e) {
       err(`cannot re-verify shallow-clone state after repair: ${e.message}`);
       return 1;
     }
-    if (stillShallow) {
+    if (!masterHistory.whole) {
       err(
-        'ABORT — shallow-clone repair failed (cause: still shallow after ' +
-          '`git fetch --unshallow` reported success). Do not proceed to land.',
+        'ABORT — shallow-clone repair is wedged: still shallow after the repair reported ' +
+          'success (no round ever moved the boundary). Do not proceed to land.',
       );
       return 1;
     }
-    log('shallow-clone REPAIRED — full history fetched, .git/shallow cleared.');
+    if (masterHistory.remaining > 0) {
+      log(
+        `shallow-clone REPAIRED for origin/master (${masterHistory.remaining} boundary ` +
+          'line(s) remain on other refs, none reachable from origin/master).',
+      );
+    } else {
+      log(
+        `shallow-clone REPAIRED (${rounds} deepen round(s)) — full history fetched, ` +
+          '.git/shallow cleared.',
+      );
+    }
   }
 
   // ── orient against a FRESH origin/master ───────────────────────────────────────────
   try {
-    git('fetch', '-q', 'origin');
+    // No explicit --filter: once a filtered repair ran, git recorded remote.origin.promisor +
+    // partialclonefilter, so this fetch is filtered the same way anyway.
+    git('fetch', '-q', 'origin', ORIGIN_MASTER_REFSPEC);
   } catch (e) {
     err(`git fetch origin failed — cannot judge divergence: ${e.message}`);
     return 1;
@@ -547,14 +814,14 @@ export function main({
     err(`reset failed after a successful backup (tip is safe at ${backup}): ${e.message}`);
     return 1;
   }
-  const now = git('rev-parse', 'refs/heads/master').trim();
+  const nowSha = git('rev-parse', 'refs/heads/master').trim();
   const originNow = git('rev-parse', 'refs/remotes/origin/master').trim();
-  if (now !== originNow) {
-    err(`reset landed on ${now}, expected origin/master ${originNow} — inspect by hand.`);
+  if (nowSha !== originNow) {
+    err(`reset landed on ${nowSha}, expected origin/master ${originNow} — inspect by hand.`);
     return 1;
   }
   log(
-    `REPAIRED — local master reset to origin/master (${now.slice(0, 12)}); stale tip preserved at ${backup}.`,
+    `REPAIRED — local master reset to origin/master (${nowSha.slice(0, 12)}); stale tip preserved at ${backup}.`,
   );
   return 0;
 }

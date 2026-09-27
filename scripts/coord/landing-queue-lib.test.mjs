@@ -2206,7 +2206,7 @@ test('plan 3450 (review F6): the reserved ghost name is refused at the write sea
 // anything else calling these exported helpers could still persist a row the sweep can never
 // judge. The grammar is now shared, and the refusal is asserted where entries are CREATED.
 test('plan 3450 (review round 2, G4): the write seam reuses the shared slug grammar and enforces it at creation', () => {
-  for (const bad of ['foo|bar', 'foo bar', "clinic's-fix", 'öppettider', '-leading-hyphen', '']) {
+  for (const bad of ['foo|bar', 'foo bar', "rec's-fix", 'öppettider', '-leading-hyphen', '']) {
     assert.notEqual(reservedSlugRefusal(bad), null, `the shared grammar must reject "${bad}"`);
   }
   assert.match(

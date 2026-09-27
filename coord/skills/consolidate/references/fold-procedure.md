@@ -71,7 +71,7 @@ node scripts/next-plan-id.mjs claim --category <Category> --slug <slug> \
 
 `--category` must come from the allowlist and a country-scoped slug carries its country token
 (`se`/`no`/`dk`/`uk` — prose says `uk`, never `gb`); an unknown category hard-fails the mint gate
-(plan 2329). Table + rules: `docs/runbooks/plans-workflow.md` § Plan naming.
+(plan 2329). Table + rules: `docs/coord/plan-lanes.md` § Plan naming.
 
 Reserves the id by push-win, writes to `ready/`, adds the INDEX bullet, commits+pushes atomically.
 **Read the minted id from its output** — call it `NNN`. Everything below needs the real `NNN` (you

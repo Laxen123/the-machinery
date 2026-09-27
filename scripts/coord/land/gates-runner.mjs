@@ -1,10 +1,9 @@
 // scripts/coord/land/gates-runner.mjs — plan 3961 T3.5: the land spine's gate-proof, cache, and
 // registry-lookup machinery (Zone C, landed first) PLUS the scripts-battery gate internals, the
 // build/prettier gate runners, and the chunk-round scoring machinery (Zone D, this commit),
-// moved out of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move) and
-// scripts/coord/land/registry.test.mjs's 51 cases.
+// moved out of scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's
+// parity-test suite against committed goldens, plus the full legacy test suite, both unchanged
+// by this move) and scripts/coord/land/registry.test.mjs's 51 cases.
 //
 // WHAT THIS MODULE OWNS. Two related layers of the once-per-land proof system (plan 3295 E2 /
 // plan 3503 / plan 4003 T2), plus the heavy chunk-capped gates themselves (plan 3436 / 3274 /
@@ -45,7 +44,7 @@
 // direct import from here.
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
-// import only scripts/coord/** and node: builtins (Rule 3, docs/runbooks/scripts-module-layout.md)
+// import only scripts/coord/** and node: builtins (Rule 3, docs/coord/scripts-layout.md)
 // — so every one of the plain scripts/*.mjs modules this code used to reach directly is instead
 // read off the bound dependency container, `landDeps()` (scripts/coord/land/deps.mjs), AT CALL
 // TIME, inside each function — never at module top level. `D` (this module's convention:
@@ -169,7 +168,7 @@
 // LEDGER_CLI, QUEUED_RUN_CLI, runFullBatteryPreflight, runBuildPreflight, runBuildPreflightCached,
 // runFullBatteryPreflightCached, runPrettierDriftCheck, narrateScopedGate, batteryRedIsFlake,
 // runSelectedBatteryPreflight, runBatteryTargets, batteryScopedSelection, readNoStartTally,
-// writeNoStartTally, noStartTallySha, noStartSidecarPath, chunkGateStartDecision, noStartGateResult,
+// writeNoStartTally, noStartTallyKey, noStartSidecarPath, chunkGateStartDecision, noStartGateResult,
 // recordNoProgressRound, activeChunkWallVar. The last four moved WITH this carve (they used to be
 // spine-resident T2.2 bag members) rather than staying behind: `chunkGateStartDecision`/
 // `noStartGateResult` are read back because head-lock.mjs's own `acquireWorktreeLockAtHead` still
@@ -311,7 +310,7 @@ export const CONTAINER_READS = Object.freeze({
   coordGit: Object.freeze(['GIT_MAXBUFFER']),
   env: Object.freeze(['DRY', 'IS_PREP']),
   // plan 4071 T4/D5: GATES is gone — gatesFrom(config) builds the registry, caller-injected.
-  gatePassCache: Object.freeze(['gatesFrom', 'pathCovers']),
+  gatePassCache: Object.freeze(['gateKeyAtRev', 'gatesFrom', 'pathCovers']),
   killTree: Object.freeze(['killProcessTree', 'spawnWithTreeKill', 'waitForExit']),
   scriptsBattery: Object.freeze(['BATTERIES', 'batteryRunCapMs', 'listScriptsTestFiles']),
   selectBatteryTests: Object.freeze(['EXIT_RUN_FULL']),
@@ -331,6 +330,7 @@ export const CONTAINER_READS = Object.freeze({
   testQueue: Object.freeze([
     'makeAdmissionScanner',
     'perSlotWorkerBudget',
+    'perSlotWorkerBudgetDetail',
     'slotAdmissionBackstopMs',
   ]),
 });
@@ -484,7 +484,7 @@ export async function runPrepGates({
   //
   // plan 2875: the two other heavy suites are the third and fourth entries — the two heavy tiers the
   // retiered scripts/hooks/pre-push.sh no longer proves on every LOCAL push (operator decision,
-  // docs/runbooks/push-gate-tiering.md § Operator decision). Both cached exactly like BUILD (a
+  // docs/coord/hooks.md § Diff-scoping). Both cached exactly like BUILD (a
   // gate-pass-cache / battery-pass-cache pair, never hand-rolled), for the same reason: the
   // overwhelmingly common re-prep is a rebase that moved master without touching either tier's
   // inputs, so this is a millisecond probe instead of a repeated multi-minute run.
@@ -864,10 +864,15 @@ export function hydrateLandGatesProven(state, wtPath, gateRoster) {
 
 // The entry authorizing a skip for `gate`, or null.
 //
-// CLOUD LANDS NEVER SKIP (operator ruling: cloud default = full every land, chunked per plan
-// 3274). The entry is still WRITTEN there — so a cloud sidecar reads the same as a local one and
-// a later local invocation on the same worktree is not confused by a hole — only the skip is
-// withheld. Plan 3503 supersedes plan 3295 E2 / commit fbedcddde5's claim that `--prep` children
+// CLOUD LANDS NEVER SKIP THROUGH THIS (operator ruling: cloud default = full every land, chunked
+// per plan 3274). The entry is still WRITTEN there — so a cloud sidecar reads the same as a local
+// one and a later local invocation on the same worktree is not confused by a hole — only the skip
+// is withheld. ONE carve-out, and it does not live here: the two gates with no diff-scoped variant
+// (`build` and a project's own UI gate) may reuse a proof earned in the SAME cloud land over the
+// SAME closure content — operator ruling 2026-09-25, plan 4192: "full every land" means a new land
+// never inherits an earlier land's results, not that one land re-proves unchanged content on every
+// chunk re-invoke. That reading is `landGateSameLandClosureProof` below, reached only from
+// `onceProvenClosureSkip`; every gate that reads THIS function stays full on cloud. Plan 3503 supersedes plan 3295 E2 / commit fbedcddde5's claim that `--prep` children
 // never participate because they may run on a tree the land process never sees: that is exactly
 // what the delta-scoped envelope is for. A prep entry authorizes only the remainder since ITS OWN
 // sha, and a remainder touching a gate's closure re-runs that gate. Prep still may not record a
@@ -889,6 +894,47 @@ export function landGateProven(state, gate) {
   if (landGateIsCloud()) return null;
   const entry = state?.gatesProven?.[gate];
   return entry && entry.sha ? entry : null;
+}
+
+// plan 4192 (operator ruling 2026-09-25): the cloud half of the closure-gate proof. Returns the
+// entry only when it can be judged by content AND belongs to THIS land — a `closureKey` to compare
+// and a `landId` equal to the land this invocation adopted (`state.landGateId`, the sidecar's own
+// id, which survives every re-invoke of one land and is fresh for a new one: a new land means a
+// new worktree, so a new sidecar). A pre-4192 entry carries neither and is refused, exactly as
+// every cloud proof was before. The CALLER still has to show the key matches the tree it is
+// standing on; this only decides which entries may be asked.
+export function landGateSameLandClosureProof(state, gate) {
+  const entry = state?.gatesProven?.[gate];
+  if (!entry || !entry.sha || !entry.closureKey || !entry.landId) return null;
+  return state?.landGateId && entry.landId === state.landGateId ? entry : null;
+}
+
+// plan 4192: the gate-pass-cache content key of `cacheGate`'s closure at the committed revision
+// `rev` in this worktree — the same `computeGateKey` the pre-push probe keys its cache on, so the
+// land and the hook agree on what "the build's content" is. Null on ANY doubt (a git error, a
+// closure path absent at `rev`, a registry that cannot key the gate): every caller reads null as
+// "cannot judge by content", which is always the run-the-gate direction on cloud and the
+// fall-back-to-the-delta direction locally. DRY hook: DW_FAKE_LAND_GATE_CLOSURE_KEY stands in for
+// the live read (the key a --dry-run's tree has, for every rev), honoured only under --dry-run.
+export function landGateClosureKey(wtPath, cacheGate, rev) {
+  const D = landDeps();
+  if (D.env.DRY) {
+    const raw = process.env.DW_FAKE_LAND_GATE_CLOSURE_KEY;
+    return raw ? raw : null;
+  }
+  if (!cacheGate || !rev) return null;
+  try {
+    const git = (args, input) =>
+      D.spawn.run(
+        'git',
+        ['-C', wtPath, ...args],
+        input === undefined ? {} : { input, stdio: ['pipe', 'pipe', 'pipe'] },
+      );
+    const key = D.gatePassCache.gateKeyAtRev(git, resolveGateRegistry(D), cacheGate, rev);
+    return typeof key === 'string' && key ? key : null;
+  } catch {
+    return null;
+  }
 }
 
 // The one combinator the 2.5x/2.6x step conditions read: returns the proving entry (truthy ⇒ the
@@ -943,14 +989,43 @@ export function onceProvenSkip(state, gate, extra = '') {
 // green, because their content shapes the build / WebKit run and git cannot key them. A git delta
 // is blind to them by construction, so the proof carries an `envHash` of exactly those files and
 // this check compares it (gpt-review r2 2f9fb2 / 97c100 / 41a726).
+//
+// plan 4192: the CONTENT arm, checked first. A proof carrying a `closureKey` is compared with the
+// key of the tree this invocation stands on: equal means every closure path (and the gate's own
+// definition, node major and git version) is byte-identical to what the gate verified, so a
+// head-of-queue rebase that moved master without touching the closure keeps the proof; unequal
+// means something the gate reads changed, and the gate re-enters the cache instead. On a CLOUD
+// land this is the ONLY arm (and only for a proof earned in this same land — see
+// `landGateSameLandClosureProof`): the sha-delta arm below stays local-only, so a cloud land never
+// skips on anything weaker than a content match. Locally a proof without a key, or a key that
+// cannot be computed now, falls through to the delta arm exactly as before.
 export function onceProvenClosureSkip(state, wtPath, gate, cacheGate) {
   const D = landDeps();
-  const entry = landGateProven(state, gate);
+  const cloud = landGateIsCloud();
+  const entry = cloud ? landGateSameLandClosureProof(state, gate) : landGateProven(state, gate);
   if (!entry) return false;
   // plan 4003 T2: `build` and a project's own UI gate have no per-file vocabulary and are never recorded partial,
   // so this can only fire on a corrupted or hand-edited sidecar. Refuse anyway — this function's
   // whole output is an AUTHORIZED SKIP, and a partial proof is by construction not one.
   if (D.L.isPartialGateProof(entry)) return false;
+  const keyNow = entry.closureKey ? landGateClosureKey(wtPath, cacheGate, 'HEAD') : null;
+  if (entry.closureKey && keyNow && keyNow !== entry.closureKey) {
+    console.log(
+      `done-worktree: once-per-land: ${gate} was proven green at ${entry.sha.slice(0, 7)}, but its ` +
+        `closure content key changed since (${entry.closureKey.slice(0, 8)} -> ${keyNow.slice(0, 8)}) ` +
+        `— re-entering the gate through the content cache (plan 4192)`,
+    );
+    return false;
+  }
+  if (cloud && !keyNow) {
+    console.log(
+      `done-worktree: once-per-land: ${gate} was proven green at ${entry.sha.slice(0, 7)} in this ` +
+        `land, but its closure content key could not be computed now — running the gate (plan ` +
+        `4192, a cloud land skips only on a content match)`,
+    );
+    return false;
+  }
+  if (keyNow) return onceProvenEnvCheckedSkip(entry, wtPath, gate, cacheGate, 'closure-key');
   const closure = resolveGateRegistry(D)[cacheGate]?.paths ?? [];
   const delta = landGateDeltaPaths(wtPath, entry.sha, []);
   if (delta === null) {
@@ -969,6 +1044,12 @@ export function onceProvenClosureSkip(state, wtPath, gate, cacheGate) {
     );
     return false;
   }
+  return onceProvenEnvCheckedSkip(entry, wtPath, gate, cacheGate, 'delta');
+}
+
+// The shared tail of both arms of `onceProvenClosureSkip`: the committed closure is known to be
+// what the proof verified; the untracked inputs decide the rest. `arm` only picks the audit line.
+function onceProvenEnvCheckedSkip(entry, wtPath, gate, cacheGate, arm) {
   // The UNTRACKED half. A proof written before this check existed carries no `envHash`; comparing
   // it against the all-absent baseline is the honest reading of what such a proof witnessed, so a
   // gate whose env file exists now correctly falls through instead of riding an unverified skip.
@@ -986,8 +1067,11 @@ export function onceProvenClosureSkip(state, wtPath, gate, cacheGate) {
     return false;
   }
   console.log(
-    `done-worktree: once-per-land: ${gate} proven green at ${entry.sha.slice(0, 7)} in this land ` +
-      `and nothing in its key closure changed since — skipped (plan 3295)`,
+    arm === 'closure-key'
+      ? `done-worktree: once-per-land: ${gate} proven green at ${entry.sha.slice(0, 7)} in this land ` +
+          `and its closure content key ${entry.closureKey.slice(0, 8)} is unchanged — skipped (plan 4192)`
+      : `done-worktree: once-per-land: ${gate} proven green at ${entry.sha.slice(0, 7)} in this land ` +
+          `and nothing in its key closure changed since — skipped (plan 3295)`,
   );
   return true;
 }
@@ -1380,7 +1464,16 @@ export function recordLandGateProven(registries, state, wtPath, gate, opts = {})
     : cacheGate
       ? landGateEnvHash(wtPath, cacheGate) || undefined
       : undefined;
-  const entry = D.L.gateProvenEntry(opts.sha ?? worktreeHeadSha(wtPath), new Date(), envHash);
+  // plan 4192: a gate with a pass-cache closure also records that closure's content key at the
+  // proven tree, plus the land that earned it — what lets the proof survive a rebase and, on a
+  // cloud land, a chunk re-invoke (see onceProvenClosureSkip). A key that cannot be computed is
+  // simply left off: the entry then behaves exactly as a pre-4192 sha-only proof.
+  const provenSha = opts.sha ?? worktreeHeadSha(wtPath);
+  const closureKey = cacheGate ? landGateClosureKey(wtPath, cacheGate, provenSha) : null;
+  const entry = D.L.gateProvenEntry(provenSha, new Date(), envHash, {
+    closureKey: closureKey ?? undefined,
+    landId: state.landGateId || state.landId || undefined,
+  });
   if (!entry) return; // no verifiable tree ⇒ no proof (see gateProvenEntry)
   if (opts.proofBuffer) {
     // plan 3503 gpt-review round 2 (fe75fd/f6d4d8/82ea78): speculation writes NOWHERE until its
@@ -1778,7 +1871,7 @@ export async function runPrepGateLifecycle(registries, name, ctx) {
  * (plan 4056, the gate fold). The ONE thing that was blocking a generic spine: before this, the
  * preflight phase called five gate steps and one non-gate step BY NAME, all of them project
  * functions, so the phase could not move under scripts/coord/ however generic the rest of it read
- * (Rule 3, docs/runbooks/scripts-module-layout.md).
+ * (Rule 3, docs/coord/scripts-layout.md).
  *
  * WHAT THE DRIVER DECIDES, and it is exactly one thing: what an entry's `step` receives as its
  * second argument.
@@ -2435,9 +2528,9 @@ export function narrateScopedGate(state, label, scoped, sel) {
 // alone). The 2026-09-08 plan-3732 land (branch
 // worktree-3548-FABLE-Pipe-price-v3-fork-backtest-baseline-optionb-read2-bakeoff — core-noun-ok:
 // cites the actual historical branch name of the incident) is the measured
-// incident this plan exists to fix: BATTERY_FAILED on scripts/cdp-client.test.mjs:392
-// (`true !== false`) and scripts/move-plan.test.mjs:514 (an isolated temp-repo `git checkout`
-// failing under load) — both green alone, 199/199, moments later.
+// incident this plan exists to fix: BATTERY_FAILED on one project test file
+// (`true !== false`) and another project test file's isolated temp-repo `git checkout`
+// failing under load — both green alone, 199/199, moments later.
 //
 // plan 3827 operator ruling R1 (2026-09-09): the branch's original approach — reconstructing the
 // failing-file set from `node --test`'s own TAP/spec TEXT output via three overlapping grammars
@@ -2533,9 +2626,9 @@ export function batteryFailureReportFromEvents(wtPath, eventsText, targetFiles, 
   const { passed, failed } = events || D.batteryLedger.parseLedgerEvents(eventsText || '');
   // plan 3827 fix pass 2 (G1, findings :8693/:8702, CONFIRMED across angle-A/angle-B/angle-C): a
   // reporter path OUTSIDE the worktree must never satisfy a target. `toPosixRelative` yields
-  // `../../elsewhere/scripts/foo.test.mjs` for a path outside `wtPath`, and
+  // `../../elsewhere/scripts/<name>.test.mjs` for a path outside `wtPath`, and
   // normalizeBatteryTestFile's `(?:^|\/)` suffix match then collapses that to
-  // `scripts/foo.test.mjs` — a foreign checkout's (or a nested node_modules/second worktree's)
+  // `scripts/<name>.test.mjs` — a foreign checkout's (or a nested node_modules/second worktree's)
   // event would otherwise be credited as this worktree's own target, the false-heal direction this
   // plan exists to close. Containment is enforced HERE, not inside normalizeBatteryTestFile itself
   // — that function's suffix match is deliberately lenient for its OTHER consumer
@@ -2556,8 +2649,8 @@ export function batteryFailureReportFromEvents(wtPath, eventsText, targetFiles, 
     // deliberately non-containment-aware SUFFIX match, so an in-worktree path outside `scripts/`
     // normalizes onto the identically-named real target. Plan 3971's fix-now closed the
     // `node_modules/` spelling of that inside normalizeBatteryTestFile, but a sibling source tree
-    // is still wide open: an event for a path like `a/b/coord/foo.test.mjs` collapses to
-    // `scripts/coord/foo.test.mjs`, so `reportedRel` credits the genuine target and `complete`
+    // is still wide open: an event for a path like `a/b/coord/<name>.test.mjs` collapses to
+    // `scripts/coord/<name>.test.mjs`, so `reportedRel` credits the genuine target and `complete`
     // can go true on a run that never touched it — the false-heal plan 3827 closed, re-opened one
     // level deeper by the nested widening. (The test above only ever exercised
     // `a/b/unrelated.py`, which drops on its EXTENSION, not on containment — so the
@@ -2990,7 +3083,8 @@ export async function batteryIsolationRecheck(wtPath, originalOutcome, { onRun }
     };
   }
   onRun?.(files);
-  const [cmd, cmdArgs] = battBattery.buildArgs(files);
+  // plan 4236 T1: capped from the per-slot CPU budget like every other battery run.
+  const [cmd, cmdArgs] = battBattery.buildArgs([...landBatteryConcArgs(), ...files]);
   const outcome = await runViaTestQueue(wtPath, {
     cmd,
     cmdArgs,
@@ -3341,7 +3435,12 @@ export async function runBatteryTargets(wtPath, tests, { onRun, reason } = {}) {
     `--test-reporter=${D.batteryLedger.REPORTER_SPECIFIER}`,
     `--test-reporter-destination=${eventsPath}`,
   ];
-  const [cmd, cmdArgs] = battBattery.buildArgs([...reporterArgs, ...tests]);
+  // plan 4236 T1: this arm used to pass NO concurrency at all — capped from the per-slot budget.
+  const [cmd, cmdArgs] = battBattery.buildArgs([
+    ...reporterArgs,
+    ...landBatteryConcArgs(),
+    ...tests,
+  ]);
   try {
     const outcome = await runViaTestQueue(wtPath, {
       cmd,
@@ -3814,16 +3913,69 @@ export function ledgerSalvageTimeoutMs(fixedMs, chunkCapMs) {
   return Math.max(Math.min(fixedMs, LEDGER_SALVAGE_FLOOR_MS), Math.min(fixedMs, chunkCapMs));
 }
 
+// plan 4236 T1 (H1): the land's scripts battery was the ONE heavy runner that never asked the
+// per-slot budget — the sibling gate's worker policy and both vitest configs already size
+// themselves from perSlotWorkerBudgetDetail, while `node --test` fell back to its own default of
+// `availableParallelism() - 1` (19 on the 20-thread dev box), so a single battery was sized to the
+// whole machine and the queue's two slots could never make two of anything fit (2026-09-26
+// incident: CPU 99%, three full-box jobs at once). The cap reads the CPU axis (`.cpuBudget`), never
+// `.workers`: the memory axis is the sibling gate's measured per-worker peak and says nothing about
+// `node --test` (decision S1) — hence `budget: null`, which also keeps this call free of the
+// budget-file read and the live freemem() probe. An explicit `--test-concurrency` already in
+// `concArgs` (the plan-1795 overflow clamp from batteryLockAcquireOutcome, 2) always wins — it is
+// the smaller number by construction, and appending a second flag would leave node's own
+// last-wins parsing to decide. Pure so a test pins it with an injected CPU count / env / budget
+// function, never the real box's CPU (the land's call sites below pass landCpuCount()).
+export function batteryConcurrencyArgs(concArgs, cpu, env, budgetDetail) {
+  const base = Array.isArray(concArgs) ? [...concArgs] : [];
+  if (base.some((a) => /^--test-concurrency(=|$)/.test(String(a)))) return base;
+  const { cpuBudget } = budgetDetail(cpu, env, { budget: null });
+  return [...base, `--test-concurrency=${Math.max(1, Math.floor(cpuBudget))}`];
+}
+
+function landBatteryConcArgs(concArgs = []) {
+  const D = landDeps();
+  return batteryConcurrencyArgs(
+    concArgs,
+    D.spine.landCpuCount(),
+    process.env,
+    D.testQueue.perSlotWorkerBudgetDetail,
+  );
+}
+
+// plan 4236 T3(c): the acquire CLI writes its reap verdict (`battery-lock: reaped … — reason: …`)
+// and its holder-pid refusal to STDERR, which acquireBatteryLock pipes and batteryLockAcquireOutcome
+// never reads — so every land swallowed the one line that would have said WHY a sibling's battery
+// lock was taken (the 2026-09-26 127-min age reap left no trace anywhere). Echo exactly those lines
+// into the land log. Pure over its inputs (`log` injected) so a test pins it without a real CLI.
+export function surfaceBatteryLockDiagnostics(stderr, log = console.log) {
+  const lines = String(stderr ?? '')
+    .split(/\r?\n/)
+    .filter((l) => /^battery-lock: (reaped|IGNORING --holder-pid)/.test(l));
+  for (const l of lines) log(`done-worktree: ${l}`);
+  return lines.length;
+}
+
+// plan 4236 T3(a): the land declares ITS OWN pid as the lock's long-lived holder (`--holder-pid`,
+// the shape pre-push-core.sh already uses). done-worktree is the process that spans the whole
+// battery run, so a crashed land is reaped on the next poll (dead-pid) and a live one is protected
+// past the 120-min age gate up to battery-lock's HARD_STALE_MIN, identity-checked. On Linux and
+// native Windows node, process.pid is the OS pid `process.kill` probes — no MSYS translation.
+export function batteryLockAcquireArgs(cliPath, label, holderPid = process.pid) {
+  return [cliPath, 'acquire', '--label', label, '--holder-pid', String(holderPid)];
+}
+
 function acquireBatteryLock(wtPath, label, chunkCapMs = null) {
   const D = landDeps();
   try {
-    const r = spawnSync(process.execPath, [BATTERY_LOCK_CLI, 'acquire', '--label', label], {
+    const r = spawnSync(process.execPath, batteryLockAcquireArgs(BATTERY_LOCK_CLI, label), {
       cwd: wtPath,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
       timeout: batteryLockAcquireTimeoutMs(chunkCapMs),
       env: D.L.spawnEnv(), // plan 2604: no child inherits implicitly
     });
+    surfaceBatteryLockDiagnostics(r?.stderr);
     return D.L.batteryLockAcquireOutcome(r);
   } catch {
     return { token: null, concArgs: [] };
@@ -4227,20 +4379,55 @@ export function writeNoStartTally(wtPath, payload) {
   }
 }
 
-// The head sha the tally is keyed against, or `''` when it cannot be read. An empty sha means the
-// tally is SKIPPED entirely this round (never counted, never consulted) — without a commit identity
-// there is no "same commit" for the two-strikes rule to be about, and guessing would either stop a
-// healthy land or silently stop counting.
+// The series key the tally is counted under. Plan 3436 keyed it on the head sha (read through
+// `resolveHeadOid`, gpt-review 7e571d, so it honours `DW_FAKE_BRANCH_TIP` under DRY); that read
+// survives only for a legacy sha-keyed tally below.
 //
-// `resolveHeadOid` rather than a second rev-parse wrapper of our own (gpt-review 7e571d): it is
-// this file's existing "HEAD sha, or '' if we cannot tell" helper, and it delegates to
-// `worktreeHeadSha` so it honours `DW_FAKE_BRANCH_TIP` under DRY exactly like every other HEAD read
-// in this spine. A convention-blind copy would have made this one path disagree with the rest.
-export const noStartTallySha = (wtPath) => resolveHeadOid(wtPath);
+// plan 4192: the key is the LAND, from the very first round — never the head sha. A head-of-queue
+// rebase moves HEAD without changing the land, and keying on the sha handed every post-rebase round
+// a fresh tally, so the two-strikes bound never fired on a land that kept not starting. In order:
+//   1. the key the tally file already carries, when it is a land key — a series never switches
+//      keys mid-land, whatever gets written beside it later;
+//   2. the land id of this worktree's `gatesProven` sidecar (`land:<landId>`), when one exists;
+//   3. a freshly minted `land:wt-<uuid>` — the case gpt-review ffef29/9e14be caught: a gate that
+//      never starts proves nothing, so no sidecar exists yet, and a sha fallback there reset the
+//      count at every rebase. The first bump persists this key in the tally file, so (1) returns
+//      it from then on. Lifetime = the worktree's, exactly like the gates sidecar's own land id.
+// A legacy tally keyed on a sha still counts while HEAD has not moved (the plan-3436 series it
+// was written under); once HEAD moves it is replaced by a land series.
+// The sidecar's `landId` is read raw (no roster needed: only the id matters here), off
+// DW_FAKE_LAND_GATES_PROVEN under --dry-run exactly like `readLandGatesProven`.
+export function noStartTallyKey(wtPath) {
+  const stored = readNoStartTally(wtPath)?.sha;
+  if (typeof stored === 'string' && stored.startsWith('land:')) return stored;
+  if (typeof stored === 'string' && stored && stored === resolveHeadOid(wtPath)) return stored;
+  const landId = landGatesSidecarLandId(wtPath);
+  return landId ? `land:${landId}` : `land:wt-${randomUUID()}`;
+}
+
+function landGatesSidecarLandId(wtPath) {
+  const D = landDeps();
+  let raw;
+  if (D.env.DRY) raw = process.env.DW_FAKE_LAND_GATES_PROVEN;
+  else {
+    try {
+      raw = readFileSync(landGatesSidecarPath(wtPath), 'utf8');
+    } catch {
+      return '';
+    }
+  }
+  if (typeof raw !== 'string' || !raw.trim()) return '';
+  try {
+    const id = JSON.parse(raw)?.landId;
+    return typeof id === 'string' && /^\S+$/.test(id) ? id : '';
+  } catch {
+    return '';
+  }
+}
 
 // plan 3961 T3.5c: recordNoProgressRound/chunkGateStartDecision/activeChunkWallVar/
 // noStartGateResult moved here WITH the no-start-tally trio above (readNoStartTally/
-// writeNoStartTally/noStartTallySha) rather than staying spine-resident T2.2 bag members: none of
+// writeNoStartTally/noStartTallyKey) rather than staying spine-resident T2.2 bag members: none of
 // the four has a call site anywhere outside this file's own battery/build cluster (checked by a
 // full-file grep before this move) — only `clearNoStartRoundFor` does (the not-yet-carved project
 // UI-gate block calls it directly), which is why THAT one alone stays behind, reached from here as
@@ -4260,7 +4447,7 @@ export const noStartTallySha = (wtPath) => resolveHeadOid(wtPath);
 // counts, and double-counting them here would fire this bound on a gate that is making progress.
 export function recordNoProgressRound(wtPath, gate) {
   const D = landDeps();
-  const sha = noStartTallySha(wtPath);
+  const sha = noStartTallyKey(wtPath);
   if (!sha) return { noStartRounds: 0, exhausted: false };
   const bumped = D.L.bumpNoStartRound(
     readNoStartTally(wtPath),
@@ -4316,7 +4503,7 @@ export function chunkGateStartDecision(
   // no-start round on record so the next did-not-start round reported a FALSE NON-CONVERGENT.
   if (chunkCapMs === null || chunkCapMs === undefined)
     return { ...decision, noStartRounds: 0, exhausted: false, secondsLeft };
-  const sha = noStartTallySha(wtPath);
+  const sha = noStartTallyKey(wtPath);
   if (!sha) return { ...decision, noStartRounds: 0, exhausted: false, secondsLeft };
   const tally = readNoStartTally(wtPath);
   if (decision.shouldRun) {
@@ -4644,7 +4831,7 @@ export async function runFullBatteryPreflight(
           gate: 'battery',
           key: '(dry-run)',
           rounds: D.batteryLedger.NON_CONVERGENT_ROUNDS,
-          headFile: 'scripts/some-very-slow.test.mjs',
+          headFile: 'scripts/<name>.test.mjs',
           remaining: 1,
           remedy: BATTERY_NONCONVERGENT_REMEDY,
         }),
@@ -4716,7 +4903,7 @@ export async function runFullBatteryPreflight(
     // the command SHAPE (executable, flag order) is the builder's, not a hand-rolled copy.
     const [dryBattCmd, dryBattArgs] = battBattery.buildArgs(['scripts/*.test.mjs']);
     const label = `dw-battery-${process.pid}`;
-    D.spawn.run('node', [BATTERY_LOCK_CLI, 'acquire', '--label', label]);
+    D.spawn.run('node', batteryLockAcquireArgs(BATTERY_LOCK_CLI, label));
     D.spawn.run('node', [
       QUEUED_RUN_CLI,
       '--label',
@@ -5038,7 +5225,12 @@ export async function runFullBatteryPreflight(
     // the DRY trace a few hundred lines above printing an argv this path no longer runs. Putting it
     // on the definition makes every present and future caller inherit it, which is the whole reason
     // this call site uses buildArgs instead of a hand-spelled copy in the first place.
-    const [battCmd, battArgs] = battBattery.buildArgs([...reporterArgs, ...concArgs, ...runFiles]);
+    // plan 4236 T1: the per-slot CPU cap rides concArgs unless the lock's overflow clamp is there.
+    const [battCmd, battArgs] = battBattery.buildArgs([
+      ...reporterArgs,
+      ...landBatteryConcArgs(concArgs),
+      ...runFiles,
+    ]);
     const outcome = await runViaTestQueue(wtPath, {
       cmd: battCmd,
       cmdArgs: battArgs,

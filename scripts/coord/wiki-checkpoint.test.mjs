@@ -28,7 +28,7 @@ function rootWithConfig(text) {
 
 test('wikiCheckpointNeeded: the two explicit signals fire regardless of the pattern list', () => {
   assert.equal(wikiCheckpointNeeded([], true), true, 'chainsChanged');
-  assert.equal(wikiCheckpointNeeded([], false, true), true, 'clinicPageChanged');
+  assert.equal(wikiCheckpointNeeded([], false, true), true, 'subjectPageChanged');
   assert.equal(wikiCheckpointNeeded([]), false);
   assert.equal(wikiCheckpointNeeded(null), false, 'a nullish diff is total, never a throw');
 });
@@ -42,20 +42,20 @@ test('wikiCheckpointNeeded: the two explicit signals fire regardless of the patt
 // synthetic registry instead of the calling checkout's live one.
 const SUBJECT_PATTERNS = [
   /^backend\/src\/adapters\//,
-  /^backend\/scripts\/price-pipeline\//,
+  /^backend\/scripts\/data-pipeline\//,
   /^shared\/src\/price-resolver\.ts$/,
 ];
 
-test('wikiCheckpointNeeded: a configured pattern matches a subject path, not a clinic row', () => {
+test('wikiCheckpointNeeded: a configured pattern matches a subject path, not a record row', () => {
   // The distinction the checkpoint exists to draw: subject SYNTHESIS (how an adapter / the price
-  // pipeline / a pricing-concept module WORKS) is the wiki's, plain per-clinic seed DATA is not.
+  // pipeline / a pricing-concept module WORKS) is the wiki's, plain per-record seed DATA is not.
   assert.equal(
-    wikiCheckpointNeeded(['backend/src/adapters/provet-cloud.ts'], false, false, SUBJECT_PATTERNS),
+    wikiCheckpointNeeded(['backend/src/adapters/acme-cloud.ts'], false, false, SUBJECT_PATTERNS),
     true,
   );
   assert.equal(
     wikiCheckpointNeeded(
-      ['backend/scripts/price-pipeline/extract.py'],
+      ['backend/scripts/data-pipeline/extract.py'],
       false,
       false,
       SUBJECT_PATTERNS,
@@ -69,8 +69,8 @@ test('wikiCheckpointNeeded: a configured pattern matches a subject path, not a c
   // The seed sample is built SEGMENT-WISE, never a quoted whole-path literal: this file lives
   // under scripts/, where assert-seed-io-seam.mjs reads such a literal as a direct open of the
   // sharded seed. Same convention assert-no-landed-reversion.test.mjs already follows.
-  const clinicRow = ['backend/src/data', 'seed', 'clinics', 'SE', 'clinic-327.json'].join('/');
-  assert.equal(wikiCheckpointNeeded([clinicRow], false, false, SUBJECT_PATTERNS), false);
+  const recordRow = ['backend/src/data', 'seed', 'records', 'SE', 'rec-327.json'].join('/');
+  assert.equal(wikiCheckpointNeeded([recordRow], false, false, SUBJECT_PATTERNS), false);
   assert.equal(wikiCheckpointNeeded(['docs/runbooks/x.md'], false, false, SUBJECT_PATTERNS), false);
   // One matching path among many still fires.
   assert.equal(

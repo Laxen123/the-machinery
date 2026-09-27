@@ -68,6 +68,6 @@ export function costBannerHelp() {
     '',
     '  Without it the drain PAUSES on this plan (cost.unknown) and lint-plan-cost-forecast',
     "  then blocks every session's next push until it is fixed. See",
-    '  docs/runbooks/autonomous-drain.md and docs/runbooks/plans-workflow.md § Cost-forecast banner.',
+    '  docs/coord/plan-lanes.md § The two mandatory banners.',
   ].join('\n');
 }

@@ -5,7 +5,7 @@
 // the WIKI_CHECKPOINT seam instead of halting at it.
 //
 // The decision is MANDATORY when the land diff touches a subject the wiki owns (a
-// platform adapter, the price-pipeline inspectors, a pricing-concept module, or the
+// platform adapter, the data-pipeline inspectors, a pricing-concept module, or the
 // seed chains[] registry). Two honest answers:
 //   WROTE  — you folded the durable learning into the matching wiki/ page (bumped its
 //            `updated:`, appended to wiki/log.md). Detail = the page(s).

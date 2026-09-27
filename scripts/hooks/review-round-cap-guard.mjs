@@ -43,7 +43,7 @@ import {
 // lookup error by its own contract, so this import can never turn a read failure into a denial.
 import { readLaneById } from '../coord/read-plan-stamps.mjs';
 import { splitSegments, tokenize } from './land-timeout-guard.mjs';
-import { parseAgentId, readStdin } from './lib/loader-common.mjs';
+import { denyEnvelope, parseAgentId, runHookCli } from './lib/loader-common.mjs';
 
 // Re-exported: existing external callers (this hook's own test file) import REVIEW_LEVELS from
 // here. plan 3618 moved the definition into scripts/coord/review-round-cap.mjs so the shared target
@@ -409,16 +409,10 @@ export function formatDeny(verdict) {
   return verdict.workflow ? `${message}\n${workflowUsage}` : message;
 }
 
-async function main(env = process.env) {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return;
-  }
-
+// The hook's whole outcome as DATA (plan 4238): the deny envelope it would print, or
+// null for silence. The in-process PreToolUse dispatcher (pretool-dispatch.mjs) awaits
+// this; main() below is a thin CLI wrapper that prints it.
+export async function evaluateHook(payload, { env = process.env } = {}) {
   const runGitFn =
     String(env?.REVIEW_ROUND_CAP_GUARD_FORCE_GIT_ERROR ?? '') === '1'
       ? () => {
@@ -426,17 +420,13 @@ async function main(env = process.env) {
         }
       : runGit;
   const verdict = await evaluate(payload, { runGitFn });
-  if (!verdict) return;
+  if (!verdict) return null;
 
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: formatDeny(verdict),
-      },
-    }),
-  );
+  return denyEnvelope(formatDeny(verdict));
+}
+
+async function main(env = process.env) {
+  return runHookCli((payload) => evaluateHook(payload, { env }));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

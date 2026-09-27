@@ -9,11 +9,11 @@ import assert from 'node:assert/strict';
 import { dirname, join, parse } from 'node:path';
 import { findScriptsDir, repoRootFrom, scriptsFileFrom } from './scripts-anchor.mjs';
 
-const ROOT = join(parse(process.cwd()).root, 'repo');
+const FIXTURE_ROOT = join(parse(process.cwd()).root, 'repo');
 // Not spelled inside the join below: `join(<root>, '<literal>', …)` is the idiom
 // select-battery-tests.mjs reads as a REAL-tree read, and this path is entirely synthetic.
 const ORPHAN = 'elsewhere';
-const SCRIPTS = join(ROOT, 'scripts');
+const SCRIPTS = join(FIXTURE_ROOT, 'scripts');
 
 test('findScriptsDir returns the scripts dir itself from every depth under it', () => {
   assert.equal(findScriptsDir(SCRIPTS), SCRIPTS);
@@ -23,7 +23,7 @@ test('findScriptsDir returns the scripts dir itself from every depth under it', 
 });
 
 test('findScriptsDir returns null when no ancestor is named scripts', () => {
-  assert.equal(findScriptsDir(join(ROOT, 'backend', 'src')), null);
+  assert.equal(findScriptsDir(join(FIXTURE_ROOT, 'backend', 'src')), null);
 });
 
 test('findScriptsDir bounds the walk and never loops at the filesystem root', () => {
@@ -32,13 +32,13 @@ test('findScriptsDir bounds the walk and never loops at the filesystem root', ()
 });
 
 test('repoRootFrom is depth-independent — the whole point of the move', () => {
-  assert.equal(repoRootFrom(SCRIPTS), ROOT);
-  assert.equal(repoRootFrom(join(SCRIPTS, 'coord')), ROOT);
-  assert.equal(repoRootFrom(join(SCRIPTS, 'coord', 'land')), ROOT);
+  assert.equal(repoRootFrom(SCRIPTS), FIXTURE_ROOT);
+  assert.equal(repoRootFrom(join(SCRIPTS, 'coord')), FIXTURE_ROOT);
+  assert.equal(repoRootFrom(join(SCRIPTS, 'coord', 'land')), FIXTURE_ROOT);
 });
 
 test('repoRootFrom falls back to the parent when there is no scripts ancestor', () => {
-  const orphan = join(ROOT, ORPHAN, 'copied-module');
+  const orphan = join(FIXTURE_ROOT, ORPHAN, 'copied-module');
   assert.equal(repoRootFrom(orphan), dirname(orphan));
 });
 
@@ -50,7 +50,7 @@ test('scriptsFileFrom resolves a sibling command from any depth', () => {
 });
 
 test('scriptsFileFrom falls back to the caller directory with no scripts ancestor', () => {
-  const orphan = join(ROOT, ORPHAN, 'copied-module');
+  const orphan = join(FIXTURE_ROOT, ORPHAN, 'copied-module');
   assert.equal(scriptsFileFrom('x.mjs', orphan), join(orphan, 'x.mjs'));
 });
 

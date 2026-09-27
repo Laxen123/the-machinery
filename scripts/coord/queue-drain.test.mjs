@@ -43,7 +43,7 @@ import {
   readPlanContentFromOrigin,
 } from './queue-drain.mjs';
 import { canonicalPlanId } from './batch-paths.mjs';
-import { readSeedMarker, MUTATION_BANNER_LABEL } from './build-index-lib.mjs';
+import { readSeedMarker, MUTATION_BANNER_LABEL, ARCHIVE_FOLDER } from './build-index-lib.mjs';
 
 // plan 3958: MUTATION_BANNER_LABEL self-resolves to 'SEED-WRITE' in vetapp's real checkout and
 // the public coord-kit's neutral 'DATA-WRITE' default in the built kit — every fixture below that
@@ -199,7 +199,7 @@ test('parseCost: split banner — Cash over $5 still pauses shouldPauseForCost',
 });
 
 test('parseCost: split banner — a range in one part takes its high end, leaves the other axis alone', () => {
-  const c = parseCost('Cash $0 · Claude ~$6–12 — Sol extraction over ~20 clinics, twice.');
+  const c = parseCost('Cash $0 · Claude ~$6–12 — Sol extraction over ~20 records, twice.');
   assert.equal(c.usd, 0);
   assert.deepEqual(c.claude, { usd: 12, over: false });
 });
@@ -220,11 +220,11 @@ test('parseCost: half-written split is malformed, not a silent legacy fall-back'
 // Getting this wrong is repo-wide: an unparseable banner both pauses the drain
 // (cost.unknown) and makes lint-plan-cost-forecast block EVERY session's next push.
 test('parseCost: legacy prose opening with "Claude"/"Cash" is not a malformed split', () => {
-  const fanout = parseCost('Claude -p fan-out over ~20 clinics, ~$12 total.');
+  const fanout = parseCost('Claude -p fan-out over ~20 records, ~$12 total.');
   assert.equal(fanout.unknown, false, 'a "claude -p" legacy banner must still parse');
   assert.equal(fanout.split, false);
   assert.equal(fanout.claude, null);
-  assert.equal(fanout.usd, 12); // legacy max-of-figures ("~20 clinics" carries no $)
+  assert.equal(fanout.usd, 12); // legacy max-of-figures ("~20 records" carries no $)
 
   const outlay = parseCost('Cash outlay ~$3 for Google Places; nothing else.');
   assert.equal(outlay.unknown, false, 'a "Cash outlay" legacy banner must still parse');
@@ -2348,6 +2348,59 @@ test('parsePlanMeta: stage: stub with no specReview is excluded with reason "stu
   assert.match(m.excludeReason, /exempt-mechanical/);
 });
 
+// ── plan 4202: specReviewBy: undeclared → exclude code 'provenance', never 'stub' ──────
+
+test('parsePlanMeta: a real specReview stamped with specReviewBy: undeclared is excluded with reason "provenance" (plan 4202)', () => {
+  const m = parsePlanMeta(
+    '1320-Other-undeclared.md',
+    planFm([
+      'stage: specced',
+      'specReview: 9f8e7d6',
+      'specReviewBy: undeclared',
+      'execModel: sonnet',
+    ]),
+  );
+  assert.equal(m.exclude, 'provenance');
+  assert.match(m.excludeReason, /specReviewBy: undeclared/);
+});
+
+test('parsePlanMeta: undeclared provenance excludes on stage: stub too — never the bare-stub "stub" code', () => {
+  const m = parsePlanMeta(
+    '1321-Other-undeclared-stub.md',
+    planFm(['stage: stub', 'specReview: 9f8e7d6', 'specReviewBy: undeclared', 'execModel: sonnet']),
+  );
+  assert.equal(m.exclude, 'provenance');
+  assert.doesNotMatch(m.excludeReason, /without a specReview stamp/);
+});
+
+test('parsePlanMeta: specReviewBy is case-insensitive; an absent specReviewBy (legacy) is never "provenance"', () => {
+  const upper = parsePlanMeta(
+    '1322-Other-undeclared-upper.md',
+    planFm(['stage: specced', 'specReview: 9f8e7d6', 'specReviewBy: UNDECLARED']),
+  );
+  assert.equal(upper.exclude, 'provenance');
+
+  const legacy = parsePlanMeta(
+    '1323-Other-legacy.md',
+    planFm(['stage: specced', 'specReview: 9f8e7d6']),
+  );
+  assert.equal(legacy.exclude, null);
+
+  const declared = parsePlanMeta(
+    '1324-Other-declared.md',
+    planFm(['stage: specced', 'specReview: 9f8e7d6', 'specReviewBy: fable-5.1/xhigh']),
+  );
+  assert.equal(declared.exclude, null);
+});
+
+test('parsePlanMeta: exempt-mechanical is never excluded as "provenance", even with a garbage specReviewBy', () => {
+  const m = parsePlanMeta(
+    '1325-Other-exempt.md',
+    planFm(['stage: stub', 'specReview: exempt-mechanical', 'specReviewBy: undeclared']),
+  );
+  assert.equal(m.exclude, null);
+});
+
 test('parsePlanMeta: stage: stub + specReview: exempt-mechanical is eligible', () => {
   const m = parsePlanMeta(
     '1305-Other-stub-exempt.md',
@@ -2434,6 +2487,34 @@ test('selectEligible: all excluded by fable/stub only → all_fable_or_stub, not
 test('selectEligible: a fable/stub mix WITH a genuine blocked plan still reports all_blocked', () => {
   const r = selectEligible(
     [meta({ id: 10, exclude: 'fable' }), meta({ id: 11, exclude: 'blocked' })],
+    { landingHeld: false },
+  );
+  assert.equal(r.reason, 'all_blocked');
+});
+
+// plan 4202: an undeclared-provenance exclude ('provenance') joins the same "lifecycle,
+// not blocked" mixed-pool set 'stub' already joined — see the mixed-pool `.every()` list's
+// own comment in queue-drain.mjs for why.
+test('selectEligible: an all-provenance pool (specReviewBy: undeclared) reports all_fable_or_stub, never all_blocked (plan 4202)', () => {
+  const r = selectEligible([meta({ id: 10, exclude: 'provenance' })], { landingHeld: false });
+  assert.equal(r.reason, 'all_fable_or_stub');
+});
+
+test('selectEligible: provenance MIXED with stub/fable still reports all_fable_or_stub', () => {
+  const r = selectEligible(
+    [
+      meta({ id: 10, exclude: 'provenance' }),
+      meta({ id: 11, exclude: 'stub' }),
+      meta({ id: 12, exclude: 'fable' }),
+    ],
+    { landingHeld: false },
+  );
+  assert.equal(r.reason, 'all_fable_or_stub');
+});
+
+test('selectEligible: provenance MIXED with a genuine blocked plan still reports all_blocked', () => {
+  const r = selectEligible(
+    [meta({ id: 10, exclude: 'provenance' }), meta({ id: 11, exclude: 'blocked' })],
     { landingHeld: false },
   );
   assert.equal(r.reason, 'all_blocked');
@@ -3821,6 +3902,7 @@ function catFileStream(objects) {
 
 test('readReadyMetas: source "origin" fetches ONCE, resolves ONE commit sha via `rev-parse`, lists via ONE `ls-tree` PINNED TO THAT SHA (blob shas, NOT --name-only, NOT the mutable origin/master name), and reads ALL ready/ content via ONE `cat-file --batch` — never a per-file listing or a per-file git-show (plan 3816 fix round 1 Fix 1, fix round 2 Fix A)', () => {
   const calls = [];
+  const lsTreeTargets = [];
   const RESOLVED_SHA = 'deadbeefcafe0000000000000000000000000000';
   const metas = readReadyMetas('/repo/docs/superpowers/plans/ready', {
     source: 'origin',
@@ -3828,6 +3910,7 @@ test('readReadyMetas: source "origin" fetches ONCE, resolves ONE commit sha via 
     _exec: (cmd, args, opts) => {
       assert.equal(cmd, 'git');
       calls.push(args[2]); // args: ['-C', repoRoot, <subcommand>, ...]
+      if (args[2] === 'ls-tree') lsTreeTargets.push(args[args.length - 1]);
       if (args[2] === 'fetch') return '';
       if (args[2] === 'rev-parse') {
         assert.deepEqual(args.slice(2), ['rev-parse', 'origin/master']);
@@ -3866,17 +3949,25 @@ test('readReadyMetas: source "origin" fetches ONCE, resolves ONE commit sha via 
     1,
     'exactly one commit-sha resolve per call (Fix A)',
   );
-  assert.equal(
-    calls.filter((c) => c === 'ls-tree').length,
-    1,
-    'exactly one listing call, never one per ready/ file',
+  // plan 4246 review fix (b35525): the batch roster is now ALSO read at the resolved sha — one
+  // more ls-tree, of the batches dir, pinned to the same RESOLVED_SHA (the mock's ls-tree branch
+  // asserts that for every listing). Its (mock) listing names no batch folder, so it reads no
+  // batch.md and adds no cat-file call.
+  assert.deepEqual(
+    lsTreeTargets,
+    ['docs/superpowers/plans/ready', 'docs/superpowers/batches/'],
+    'exactly one ready/ listing (never one per ready/ file), plus one roster listing',
   );
   assert.equal(
     calls.filter((c) => c === 'cat-file').length,
     1,
     'exactly one cat-file --batch call, never one per ready/ file',
   );
-  assert.equal(calls.length, 4, 'N ready/ files still produce exactly 4 subprocess calls, not 3+N');
+  assert.equal(
+    calls.length,
+    5,
+    'N ready/ files still produce a FIXED call count (4 + the roster listing), not 3+N',
+  );
   assert.equal(metas.length, 2);
   const flat = metas.find((m) => m.slug === '900-Other-ok');
   const nested = metas.find((m) => m.slug === '901-Infra-other');
@@ -4383,6 +4474,313 @@ test('CLI: a runnable batch whose members have ALL left ready/ is still REPORTED
       { id: '2601', cause: 'not-in-ready-pool' },
     ]);
   });
+});
+
+// --- plan 4246: an archived batch member must not strand the rest of the train -----------
+//
+// THE DEADLOCK THESE PIN (live 2026-09-26): batch-2026-09-26-profile-ui listed [4187, 4233];
+// 4187 landed solo and archived. The oracle then refused the train ("4187
+// (not-in-ready-pool)", all-or-nothing) AND refused 4233 solo ("member of runnable batch"), so
+// no drain would ever take it. The fixture archive lane sits beside ready/ under the configured
+// ARCHIVE_FOLDER name, exactly where main()'s roster looks for it.
+function archivePlan(readyDir, basename) {
+  const dir = join(dirname(readyDir), ARCHIVE_FOLDER);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, basename), '# landed\n\n**Status:** ✅ COMPLETED — test.\n');
+}
+
+test('CLI: a 2-member batch with 1 ARCHIVED member dissolves — the survivor is solo-eligible and the batch is logged as dissolved (plan 4246)', () => {
+  withSuperpowersDirs(({ readyDir, batchesDir }) => {
+    writeBatchMdFixture(batchesDir, 'batch-profile-ui', { members: ['2600', '2601'] });
+    archivePlan(readyDir, '2600-UI-landed-solo.md');
+    writeFileSync(join(readyDir, '2601-App-survivor.md'), cliPlanBody({}));
+    const res = runQueueDrain(readyDir, []);
+    assert.equal(res.code, 0, `expected exit 0; stderr=${res.stderr ?? ''}`);
+    assert.equal(res.json.next.slug, '2601-App-survivor');
+    assert.deepEqual(
+      res.json.eligible.map((e) => e.slug),
+      ['2601-App-survivor'],
+    );
+    assert.deepEqual(res.json.runnableBatches, []);
+    assert.equal(res.json.skippedBatches.length, 1, JSON.stringify(res.json.skippedBatches));
+    assert.equal(res.json.skippedBatches[0].slug, 'batch-profile-ui');
+    assert.match(
+      res.json.skippedBatches[0].reason,
+      /^dissolved: only 1 live member left \(2600 archived\)/,
+    );
+    assert.deepEqual(res.json.skippedBatches[0].blockers, [{ id: '2600', cause: 'archived' }]);
+  });
+});
+
+test('readReadyMetas (tree): the survivor of a dissolved batch reads exclude null, not batch (plan 4246)', () => {
+  withSuperpowersDirs(({ readyDir, batchesDir }) => {
+    writeBatchMdFixture(batchesDir, 'batch-scripts-checks', { members: ['2611', '2627'] });
+    archivePlan(readyDir, '2627-Infra-landed-solo.md');
+    writeFileSync(join(readyDir, '2611-Infra-survivor.md'), cliPlanBody({}));
+    const metas = readReadyMetas(readyDir, { source: 'tree' });
+    assert.equal(metas.length, 1);
+    assert.equal(metas[0].exclude, null, metas[0].excludeReason);
+  });
+});
+
+test('CLI: a 3-member batch with 1 ARCHIVED member stays runnable with exactly the 2 live ids (plan 4246)', () => {
+  withSuperpowersDirs(({ readyDir, batchesDir }) => {
+    writeBatchMdFixture(batchesDir, 'batch-three', { members: ['2600', '2601', '2602'] });
+    archivePlan(readyDir, '2600-Infra-landed-solo.md');
+    writeFileSync(join(readyDir, '2601-Infra-b.md'), cliPlanBody({}));
+    writeFileSync(join(readyDir, '2602-Infra-c.md'), cliPlanBody({}));
+    const res = runQueueDrain(readyDir, []);
+    assert.equal(res.json.runnableBatches.length, 1, JSON.stringify(res.json.skippedBatches));
+    assert.equal(res.json.runnableBatches[0].slug, 'batch-three');
+    assert.deepEqual(res.json.runnableBatches[0].members, ['2601', '2602']);
+    assert.deepEqual(res.json.skippedBatches, []);
+    // Still a live train: both survivors stay held from SOLO claims.
+    const excluded = Object.fromEntries(res.json.excluded.map((e) => [e.slug, e.exclude]));
+    assert.equal(excluded['2601-Infra-b'], 'batch');
+    assert.equal(excluded['2602-Infra-c'], 'batch');
+  });
+});
+
+test('CLI: a member merely out of ready/ (waiting-*, NOT archived) keeps the all-or-nothing hold (plan 4246 rule 4)', () => {
+  withSuperpowersDirs(({ readyDir, batchesDir }) => {
+    writeBatchMdFixture(batchesDir, 'batch-waiting', { members: ['2600', '2601'] });
+    const waiting = join(dirname(readyDir), 'waiting-operator');
+    mkdirSync(waiting, { recursive: true });
+    writeFileSync(join(waiting, '2600-Infra-parked.md'), cliPlanBody({}));
+    writeFileSync(join(readyDir, '2601-Infra-held.md'), cliPlanBody({}));
+    const res = runQueueDrain(readyDir, []);
+    assert.deepEqual(res.json.runnableBatches, []);
+    assert.equal(res.json.skippedBatches.length, 1);
+    assert.deepEqual(res.json.skippedBatches[0].blockers, [
+      { id: '2600', cause: 'not-in-ready-pool' },
+    ]);
+    assert.equal(res.json.excluded[0].slug, '2601-Infra-held');
+    assert.equal(res.json.excluded[0].exclude, 'batch');
+  });
+});
+
+test('selectEligible: dissolvedBatches are logged in skippedBatches even with an empty runnable roster (plan 4246)', () => {
+  const r = selectEligible([meta({ id: 10 })], {
+    landingHeld: false,
+    batchRoster: [],
+    dissolvedBatches: [{ slug: 'batch-gone', members: ['10'], archivedMembers: ['9'] }],
+  });
+  assert.deepEqual(r.runnableBatches, []);
+  assert.equal(r.skippedBatches.length, 1);
+  assert.equal(r.skippedBatches[0].slug, 'batch-gone');
+  assert.match(r.skippedBatches[0].reason, /^dissolved: only 1 live member left \(9 archived\)/);
+});
+
+// Review finding 23b124/4e915b: selectEligible's empty-metas fast path returned
+// `skippedBatches: []` before the dissolved batches were merged in, so a dissolved batch vanished
+// from the log exactly when ready/ held nothing at all.
+test('selectEligible: an EMPTY ready pool still logs every dissolved batch in skippedBatches (plan 4246)', () => {
+  const r = selectEligible([], {
+    landingHeld: false,
+    batchRoster: [],
+    dissolvedBatches: [{ slug: 'batch-gone', members: ['10'], archivedMembers: ['9'] }],
+  });
+  assert.equal(r.reason, 'empty');
+  assert.equal(r.skippedBatches.length, 1);
+  assert.equal(r.skippedBatches[0].slug, 'batch-gone');
+  assert.deepEqual(r.skippedBatches[0].blockers, [{ id: '9', cause: 'archived' }]);
+});
+
+test('CLI: an empty ready/ with a dissolved batch reports it (reason empty, skippedBatches carries it) (plan 4246)', () => {
+  withSuperpowersDirs(({ readyDir, batchesDir }) => {
+    writeBatchMdFixture(batchesDir, 'batch-empty-pool', { members: ['2600', '2601'] });
+    archivePlan(readyDir, '2600-UI-landed-solo.md');
+    const res = runQueueDrain(readyDir, []);
+    assert.equal(res.json.reason, 'empty');
+    assert.equal(res.json.skippedBatches.length, 1, JSON.stringify(res.json.skippedBatches));
+    assert.match(
+      res.json.skippedBatches[0].reason,
+      /^dissolved: only 1 live member left \(2600 archived\)/,
+    );
+  });
+});
+
+// Review finding 47956f: ready/ is read at the ORIGIN commit, so the archive listing must be too —
+// a member archived on origin but not yet pulled into the local checkout counts as archived, and
+// an archive file that exists only on local disk (never pushed) does not.
+test('readReadyMetas (origin): archive membership is read at the SAME origin commit as ready/, never local disk (plan 4246)', () => {
+  const bareDir = mkdtempSync(join(tmpdir(), 'qdrain-arch-bare-'));
+  const workDir = mkdtempSync(join(tmpdir(), 'qdrain-arch-work-'));
+  try {
+    const g = (...a) => execFileSync('git', ['-C', workDir, ...a], { encoding: 'utf8' });
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'master', bareDir]);
+    g('init', '-q', '-b', 'master');
+    g('config', 'user.email', 't@t');
+    g('config', 'user.name', 't');
+    g('config', 'commit.gpgsign', 'false');
+    g('remote', 'add', 'origin', bareDir);
+    const plansDir = join(workDir, 'docs', 'superpowers', 'plans');
+    const readyDir = join(plansDir, 'ready');
+    const archiveDir = join(plansDir, ARCHIVE_FOLDER);
+    const batchesDir = join(workDir, 'docs', 'superpowers', 'batches');
+    mkdirSync(readyDir, { recursive: true });
+    mkdirSync(archiveDir, { recursive: true });
+    // batch-origin: its co-member 2600 is archived ON ORIGIN only (removed from disk below).
+    writeBatchMdFixture(batchesDir, 'batch-origin', { members: ['2600', '2601'] });
+    writeFileSync(join(archiveDir, '2600-UI-landed-on-origin.md'), '# landed\n');
+    writeFileSync(join(readyDir, '2601-App-survivor.md'), cliPlanBody({}));
+    // batch-disk: its co-member 2700 is archived on local DISK only (never pushed).
+    writeBatchMdFixture(batchesDir, 'batch-disk', { members: ['2700', '2701'] });
+    writeFileSync(join(readyDir, '2701-App-held.md'), cliPlanBody({}));
+    g('add', '-A');
+    g('commit', '-qm', 'seed');
+    g('push', '-q', 'origin', 'master');
+    rmSync(join(archiveDir, '2600-UI-landed-on-origin.md'));
+    writeFileSync(join(archiveDir, '2700-UI-archived-locally-only.md'), '# local\n');
+
+    const metas = readReadyMetas(readyDir, { source: 'origin', repoRoot: workDir, log: () => {} });
+    const bySlug = Object.fromEntries(metas.map((m) => [m.slug, m.exclude]));
+    assert.equal(bySlug['2601-App-survivor'], null, 'archived on origin → batch dissolved');
+    assert.equal(bySlug['2701-App-held'], 'batch', 'archived on disk only → still held');
+  } finally {
+    rmSync(bareDir, { recursive: true, force: true });
+    rmSync(workDir, { recursive: true, force: true });
+  }
+});
+
+// A real origin + work repo pair for the plan-4246 snapshot tests below. Returns the work dir and
+// the plans / archive / ready / batches dirs inside it; `commitPush` commits everything and
+// pushes, so later disk edits diverge from origin.
+function makeOriginPair() {
+  const bareDir = mkdtempSync(join(tmpdir(), 'qdrain-snap-bare-'));
+  const workDir = mkdtempSync(join(tmpdir(), 'qdrain-snap-work-'));
+  const g = (...a) => execFileSync('git', ['-C', workDir, ...a], { encoding: 'utf8' });
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'master', bareDir]);
+  g('init', '-q', '-b', 'master');
+  g('config', 'user.email', 't@t');
+  g('config', 'user.name', 't');
+  g('config', 'commit.gpgsign', 'false');
+  g('remote', 'add', 'origin', bareDir);
+  const plansDir = join(workDir, 'docs', 'superpowers', 'plans');
+  const dirs = {
+    readyDir: join(plansDir, 'ready'),
+    archiveDir: join(plansDir, ARCHIVE_FOLDER),
+    batchesDir: join(workDir, 'docs', 'superpowers', 'batches'),
+  };
+  mkdirSync(dirs.readyDir, { recursive: true });
+  mkdirSync(dirs.archiveDir, { recursive: true });
+  return {
+    workDir,
+    ...dirs,
+    commitPush: () => {
+      g('add', '-A');
+      g('commit', '-qm', 'seed');
+      g('push', '-q', 'origin', 'master');
+    },
+    cleanup: () => {
+      rmSync(bareDir, { recursive: true, force: true });
+      rmSync(workDir, { recursive: true, force: true });
+    },
+  };
+}
+
+// Review finding b35525: the batch.md roster is read at the SAME origin commit as ready/ and the
+// archive. Origin lists 3 members with 1 archived (a live 2-car train, both survivors held); the
+// stale LOCAL batch.md lists only 2 (which would read as dissolved) and must be ignored.
+test('readReadyMetas (origin): a stale LOCAL batch.md is ignored — the origin roster decides the hold (plan 4246, review b35525)', () => {
+  const r = makeOriginPair();
+  try {
+    writeBatchMdFixture(r.batchesDir, 'batch-three', { members: ['2600', '2601', '2602'] });
+    writeFileSync(join(r.archiveDir, '2600-UI-landed.md'), '# landed\n');
+    writeFileSync(join(r.readyDir, '2601-Infra-b.md'), cliPlanBody({}));
+    writeFileSync(join(r.readyDir, '2602-Infra-c.md'), cliPlanBody({}));
+    r.commitPush();
+    writeBatchMdFixture(r.batchesDir, 'batch-three', { members: ['2600', '2601'] }); // stale, local
+    const metas = readReadyMetas(r.readyDir, {
+      source: 'origin',
+      repoRoot: r.workDir,
+      log: () => {},
+    });
+    const bySlug = Object.fromEntries(metas.map((m) => [m.slug, m.exclude]));
+    assert.equal(bySlug['2601-Infra-b'], 'batch');
+    assert.equal(bySlug['2602-Infra-c'], 'batch', 'the local roster (which drops 2602) is ignored');
+  } finally {
+    r.cleanup();
+  }
+});
+
+// Review finding b89c44: Blocked-by archive status is read at the SAME origin commit too — a
+// blocker archived+shipped on origin but not yet pulled is stale (plan eligible), and one shipped
+// only on local disk (never pushed) is still an open blocker.
+test('readReadyMetas (origin): Blocked-by archive status is read at the origin commit, not local disk (plan 4246, review b89c44)', () => {
+  const r = makeOriginPair();
+  try {
+    const shipped = '# done\n\n**Status:** ✅ COMPLETED — test.\n';
+    writeFileSync(join(r.archiveDir, '2650-Infra-shipped-on-origin.md'), shipped);
+    writeFileSync(
+      join(r.readyDir, '2651-Infra-waits-on-origin.md'),
+      cliPlanBody({}) + '\n**Blocked-by:** plan 2650 (landing)\n',
+    );
+    writeFileSync(
+      join(r.readyDir, '2661-Infra-waits-on-local.md'),
+      cliPlanBody({}) + '\n**Blocked-by:** plan 2660 (landing)\n',
+    );
+    r.commitPush();
+    rmSync(join(r.archiveDir, '2650-Infra-shipped-on-origin.md'));
+    writeFileSync(join(r.archiveDir, '2660-Infra-shipped-locally-only.md'), shipped);
+    const metas = readReadyMetas(r.readyDir, {
+      source: 'origin',
+      repoRoot: r.workDir,
+      log: () => {},
+    });
+    const bySlug = Object.fromEntries(metas.map((m) => [m.slug, m]));
+    assert.equal(bySlug['2651-Infra-waits-on-origin'].exclude, null);
+    assert.match(bySlug['2651-Infra-waits-on-origin'].staleBlockedBy, /all archived/);
+    assert.equal(bySlug['2661-Infra-waits-on-local'].exclude, 'blocked');
+  } finally {
+    r.cleanup();
+  }
+});
+
+// Review round 3 (9adfd7): the DISK Blocked-by archive reader parses archive names with the shared
+// planIdOfFilename, so a date-slugged shipped blocker (`029-2026-05-21-….md`) is recognized, and
+// the lookup matches canonically (`plan 029` ↔ id 29).
+test('readReadyMetas (tree): a DATE-slugged shipped archive blocker makes the Blocked-by line stale (plan 4246, review 9adfd7)', () => {
+  withSuperpowersDirs(({ readyDir }) => {
+    const archiveDir = join(dirname(readyDir), ARCHIVE_FOLDER);
+    mkdirSync(archiveDir, { recursive: true });
+    writeFileSync(
+      join(archiveDir, '029-2026-05-21-landed-long-ago.md'),
+      '# done\n\n**Status:** ✅ COMPLETED — test.\n',
+    );
+    writeFileSync(
+      join(readyDir, '2670-Infra-waits.md'),
+      cliPlanBody({}) + '\n**Blocked-by:** plan 029 (landing)\n',
+    );
+    const metas = readReadyMetas(readyDir, { source: 'tree' });
+    assert.equal(metas[0].exclude, null, metas[0].excludeReason);
+    assert.match(metas[0].staleBlockedBy, /plan 029 — all archived/);
+  });
+});
+
+// Review round 3 (ca651e): the same, for the origin (at-ref) reader.
+test('readReadyMetas (origin): a DATE-slugged shipped archive blocker makes the Blocked-by line stale (plan 4246, review ca651e)', () => {
+  const r = makeOriginPair();
+  try {
+    writeFileSync(
+      join(r.archiveDir, '029-2026-05-21-landed-long-ago.md'),
+      '# done\n\n**Status:** ✅ COMPLETED — test.\n',
+    );
+    writeFileSync(
+      join(r.readyDir, '2671-Infra-waits.md'),
+      cliPlanBody({}) + '\n**Blocked-by:** plan 029 (landing)\n',
+    );
+    r.commitPush();
+    const metas = readReadyMetas(r.readyDir, {
+      source: 'origin',
+      repoRoot: r.workDir,
+      log: () => {},
+    });
+    assert.equal(metas[0].exclude, null, metas[0].excludeReason);
+    assert.match(metas[0].staleBlockedBy, /plan 029 — all archived/);
+  } finally {
+    r.cleanup();
+  }
 });
 
 // The same gate's second trigger path: members ARE in ready/ but every one is excluded by a gate
@@ -5355,7 +5753,7 @@ test('planIdsFromRemoteHeads: a LEGACY date-prefixed branch never poisons the id
   const ids = planIdsFromRemoteHeads(
     [
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\trefs/heads/worktree-2026-05-17-vetpris-retry',
-      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/claude/drain-2026-05-23-clinic-split',
+      'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/heads/claude/drain-2026-05-23-record-split',
     ].join('\n'),
   );
   assert.equal(ids.size, 0, 'a date-slugged branch carries no plan id');
@@ -6265,4 +6663,185 @@ test('originExecutedPlanIds (plan 3767 r2): a THROWING dead-seed probe marks the
   for (const h of heads) assert.equal(h.livenessUnknown, true, `${h.name} carries the marker`);
   // and the marker survives the per-id fold, which is where a dropped field would undo the guard
   assert.deepEqual(collapseSameShaBranches(heads).duplicates, [], 'so the pair does not collapse');
+});
+
+// --- plan 4255: the land-phase axis (landCloudExec) for a /cloud-land hand-off ---------------
+
+// A ready/ plan a LOCAL session built and handed off: cloudExec: false for its BUILD, plus the
+// land-phase carrier, the adopt stamp and the hand-off note. Each part can be dropped.
+function landHandoffPlan({
+  cloud = 'false',
+  carrier = true,
+  env = 'full',
+  adopt = 'worktree-4255-X-test',
+  note = true,
+  extra = '',
+} = {}) {
+  const fm = [
+    '---',
+    'summary: test',
+    'stage: specced',
+    'specReview: abc1234',
+    'specReviewBy: test/high',
+    'execModel: fable',
+    `cloudExec: ${cloud}`,
+    ...(carrier ? ['landCloudExec: true'] : []),
+    ...(carrier && env ? [`landCloudEnv: ${env}`] : []),
+    ...(adopt ? [`adoptBranch: ${adopt}`] : []),
+    '---',
+  ];
+  const noteText = note
+    ? `\n## Cloud-land hand-off 2026-09-26T22:00:00Z\n\n- **Branch:** \`${adopt}\` — BUILT, REVIEWED and PUSHED; only the land remains.\n`
+    : '';
+  return `${fm.join('\n')}\n\n> 🟩 **${MUTATION_BANNER_LABEL}: no** — test.\n\n# Test plan\n\n${extra}\n${noteText}`;
+}
+
+const FABLE_FULL = { cloudOnly: true, fableLane: true, lane: 'full' };
+
+test('parsePlanMeta --cloud (plan 4255): a COMPLETE land hand-off of a cloudExec:false plan is admitted, land-only', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), FABLE_FULL);
+  assert.equal(m.exclude, null, m.excludeReason);
+  assert.equal(m.landHandoff, true);
+  assert.equal(m.landPhaseAdmit, true, 'admitted THROUGH the land carrier, not cloudExec');
+});
+
+test('parsePlanMeta --cloud (plan 4255): an UNBUILT cloudExec:false plan is still never admitted', () => {
+  const m = parsePlanMeta(
+    '4255-X-test.md',
+    landHandoffPlan({ carrier: false, adopt: null, note: false }),
+    FABLE_FULL,
+  );
+  assert.equal(m.exclude, 'cloud');
+  assert.match(m.excludeReason, /cloudExec: false/);
+});
+
+test('parsePlanMeta --cloud (plan 4255): landCloudExec:true WITHOUT adoptBranch is never admitted', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ adopt: null }), FABLE_FULL);
+  assert.equal(m.exclude, 'cloud');
+  assert.match(m.excludeReason, /adoptBranch/);
+});
+
+test('parsePlanMeta --cloud (plan 4255): landCloudExec:true WITHOUT the hand-off note is never admitted', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ note: false }), FABLE_FULL);
+  assert.equal(m.exclude, 'cloud');
+  assert.match(m.excludeReason, /Cloud-land hand-off/);
+});
+
+test('parsePlanMeta --cloud (plan 4255): the land routes on landCloudEnv — a trusted lane refuses a full land', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), {
+    cloudOnly: true,
+    fableLane: true,
+    lane: 'trusted',
+  });
+  assert.equal(m.exclude, 'full-env');
+});
+
+test('parsePlanMeta --cloud (plan 4255): an absent landCloudEnv defaults to full, never to trusted', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ env: null }), {
+    cloudOnly: true,
+    fableLane: true,
+    lane: 'trusted',
+  });
+  assert.equal(m.exclude, 'full-env');
+});
+
+test('parsePlanMeta --cloud (plan 4255): the build-phase operator gate does not hold back a built branch', () => {
+  const m = parsePlanMeta(
+    '4255-X-test.md',
+    landHandoffPlan({ extra: 'Operator supplies the export first.' }),
+    FABLE_FULL,
+  );
+  assert.equal(m.exclude, null, m.excludeReason);
+});
+
+test('parsePlanMeta --cloud (plan 4255): the lane gate still applies to a land hand-off', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), {
+    cloudOnly: true,
+    fableLane: false,
+    lane: 'full',
+  });
+  assert.equal(m.exclude, 'fable');
+});
+
+test('parsePlanMeta (plan 4255): off-cloud a complete hand-off is flagged but never land-phase-admitted', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), { fableLane: true });
+  assert.equal(m.landHandoff, true);
+  assert.equal(m.landPhaseAdmit, false);
+});
+
+test('selectEligible (plan 4255): a land-phase admit whose branch is on origin is selected with landOnly', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), FABLE_FULL);
+  const r = selectEligible([m], { onOriginIds: originMap({ 4255: 'worktree-4255-X-test' }) });
+  assert.equal(r.next.slug, '4255-X-test');
+  assert.equal(r.next.adoptBranch, 'worktree-4255-X-test');
+  assert.equal(r.next.landOnly, true, 'the taker must adopt and land, never re-execute');
+});
+
+test('selectEligible (plan 4255): a land-phase admit whose branch is GONE from origin is excluded, never re-executed', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan(), FABLE_FULL);
+  for (const onOriginIds of [null, new Map(), originMap({ 9999: 'worktree-9999-other' })]) {
+    const r = selectEligible([m], { onOriginIds });
+    assert.equal(r.next, undefined, 'nothing selected');
+    assert.equal(r.excluded[0].exclude, 'cloud');
+    assert.match(r.excluded[0].reason, /not on origin|could not read origin/);
+  }
+});
+
+test("selectEligible (plan 4255): a cloudExec:true hand-off whose branch vanished falls back to today's re-execute path", () => {
+  // Review fix (gpt-review r1, findings c0d8db/0ccdde/04487a): pinning landOnly on a hand-off whose
+  // branch is gone told the drain "adopt, never re-execute" for a branch it cannot adopt, so the
+  // plan cycled ready → refused adopt → ready forever. A cloud-safe plan re-executes instead.
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ cloud: 'true' }), FABLE_FULL);
+  assert.equal(m.landPhaseAdmit, false);
+  for (const onOriginIds of [new Map(), originMap({ 9999: 'worktree-9999-other' })]) {
+    const r = selectEligible([m], { onOriginIds });
+    assert.equal(r.next.slug, '4255-X-test');
+    assert.equal(r.next.landOnly, undefined, 'no branch to land ⇒ not land-only');
+  }
+});
+
+test('selectEligible (plan 4255): a cloudExec:true hand-off whose branch IS on origin stays landOnly', () => {
+  const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ cloud: 'true' }), FABLE_FULL);
+  const r = selectEligible([m], { onOriginIds: originMap({ 4255: 'worktree-4255-X-test' }) });
+  assert.equal(r.next.landOnly, true);
+});
+
+test("parsePlanMeta --cloud (plan 4255): a hand-off's land env below full (trusted, a typo) still routes to full", () => {
+  // Review fix (gpt-review r1, finding a7a1c6): an edited or mistyped landCloudEnv must never
+  // land on a trusted drain, which has no WebKit for the mobile gate.
+  for (const env of ['trusted', 'fulll', 'TRUSTED']) {
+    const m = parsePlanMeta('4255-X-test.md', landHandoffPlan({ env }), {
+      cloudOnly: true,
+      fableLane: true,
+      lane: 'trusted',
+    });
+    assert.equal(m.exclude, 'full-env', env);
+  }
+  const browser = parsePlanMeta('4255-X-test.md', landHandoffPlan({ env: 'browser' }), FABLE_FULL);
+  assert.equal(browser.exclude, 'browser-env', 'a HIGHER rung is honoured');
+});
+
+test('parsePlanMeta (plan 4255, review r4 c35d3b): a complete hand-off is never batch-held — it is land-only, not train work', () => {
+  const heldBy = new Map([['4255', 'batch-with-a-handed-off-member']]);
+  const cloud = parsePlanMeta('4255-X-test.md', landHandoffPlan(), {
+    ...FABLE_FULL,
+    batchHeldBy: heldBy,
+  });
+  assert.equal(cloud.exclude, null, cloud.excludeReason);
+  assert.equal(cloud.batchHold, null);
+  const local = parsePlanMeta('4255-X-test.md', landHandoffPlan(), {
+    fableLane: true,
+    batchHeldBy: heldBy,
+  });
+  assert.equal(
+    local.exclude,
+    null,
+    'the local oracle reports it solo too, so local-drain-filter can drop it as landOnly',
+  );
+  const unbuilt = parsePlanMeta(
+    '4255-X-test.md',
+    landHandoffPlan({ cloud: 'true', carrier: false, adopt: null, note: false }),
+    { ...FABLE_FULL, batchHeldBy: heldBy },
+  );
+  assert.equal(unbuilt.exclude, 'batch', 'an ordinary member is still held');
 });

@@ -95,6 +95,16 @@ export function spawnEnv(...layers) {
 // [[gitRepoIsolatedEnv]] instead, which drops only the vars that rebind which repository a git
 // command acts on and leaves transport/credentials alone (gpt-review.mjs plan 3503 review round
 // 3 — this function's blanket strip broke exactly that child; see GIT_REPO_SELECTOR_VARS below).
+// plan 4237 T2: the env layer for a READ-ONLY git probe of the shared MAIN checkout. A plain
+// `git status` (and a refreshing `git diff`) opportunistically WRITES the index back under an
+// optional lock — on 2026-09-26 an index rewritten between two rebase picks is what turned
+// heal-main's rebase-retry pick 2 into the 30-path rollback commit c8c55d9e704, and an unlocked
+// MAIN poller's write-back is the most plausible writer. `GIT_OPTIONAL_LOCKS=0` is git's env
+// spelling of the global `--no-optional-locks`: the read never takes index.lock and never
+// writes. It travels as an ENV layer (spawn env, not an argv flag) so it composes with every
+// coord git wrapper's own env seam; `scripts/assert-lock-free-git-polls.mjs` accepts it.
+export const LOCK_FREE_READ_ENV = Object.freeze({ GIT_OPTIONAL_LOCKS: '0' });
+
 export function gitIsolatedEnv(settings = {}) {
   return Object.assign(childEnv(process.env, { prefixes: GIT_ENV_PREFIXES }), settings);
 }

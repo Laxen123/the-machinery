@@ -12,7 +12,7 @@
 // predicates and coord-git executes no IO at import, so the re-export does not break the
 // unit-testability contract — it just avoids a duplicated regex that could drift.
 //
-// plan 3961 T2.5/T2.6/T2.7c moved the project-shaped functions (the wiki/status-flip/price-clinic
+// plan 3961 T2.5/T2.6/T2.7c moved the project-shaped functions (the wiki/status-flip/price-record
 // seams, the price-trust baseline data, the pytest-preflight closure, the deploy wall) out to
 // scripts/project/*.mjs; plan 4096 T2 then removed the pass-through re-exports of them and MOVED
 // this module under scripts/coord/ (it was core by usage — every land-spine module reads it as
@@ -130,12 +130,12 @@ export function detectLane(changedFiles, seedLaneFile, seedShardDir = null, deri
 //   2. orderManifestRelSrc — the pattern's DIRECTORY portion (everything before the last `/`)
 //      with its `[A-Z]{2}` country-code fragment turned into a capture group, followed by the
 //      literal `order\.json` filename. For today's default this reproduces
-//      'clinics/([A-Z]{2})/order\\.json' byte-for-byte.
-//   3. derivedShardRelSrc — the pattern's OWN capture-group content (the clinic-id fragment,
-//      e.g. `clinic-\d+`), re-wrapped as `(<content>)(?:\.json$|/)` — the shape a derived-data
-//      root needs to match either a flat per-clinic file or a per-clinic subtree. For today's
-//      default this reproduces '(clinic-\\d+)(?:\\.json$|/)' byte-for-byte.
-// Both derivations assume the vetapp-specific "clinics/<CC>/<file>" shape (a literal
+//      'records/([A-Z]{2})/order\\.json' byte-for-byte.
+//   3. derivedShardRelSrc — the pattern's OWN capture-group content (the record-id fragment,
+//      e.g. `record-\d+`), re-wrapped as `(<content>)(?:\.json$|/)` — the shape a derived-data
+//      root needs to match either a flat per-record file or a per-record subtree. For today's
+//      default this reproduces '(record-\\d+)(?:\\.json$|/)' byte-for-byte.
+// Both derivations assume the vetapp-specific "records/<CC>/<file>" shape (a literal
 // `[A-Z]{2}` country-code segment in the directory portion, and exactly one capture group in
 // the pattern) — coord-config.mjs's own validation only requires "compiles + exactly one
 // capture group" (project-agnostic), so THIS module is where the extra vetapp assumption
@@ -152,7 +152,7 @@ export function deriveShardPatterns(shardIdPattern) {
   if (lastSlash === -1) {
     throw new Error(
       `deriveShardPatterns: shardIdPattern ${JSON.stringify(shardIdPattern)} has no "/" — ` +
-        'expected a "<dir>/<file>" shape (e.g. "clinics/[A-Z]{2}/(clinic-\\\\d+)\\\\.json")',
+        'expected a "<dir>/<file>" shape (e.g. "records/[A-Z]{2}/(record-\\\\d+)\\\\.json")',
     );
   }
   const dirPart = shardIdPattern.slice(0, lastSlash);
@@ -169,8 +169,8 @@ export function deriveShardPatterns(shardIdPattern) {
   // group. coord-config.mjs's own shardIdPattern validator (normalizeShardIdPattern) deliberately
   // ACCEPTS a pattern whose first group is non-capturing (`(?:…)`) or a lookaround (`(?=…)` /
   // `(?!…)` / `(?<=…)` / `(?<!…)`) as long as exactly ONE group elsewhere is a real capture — so a
-  // validator-accepted pattern like `clinics/(?:[A-Z]{2})/(clinic-\d+)\.json` used to have its
-  // clinic-id fragment silently mis-derived as the CONTENTS of the non-capturing group instead of
+  // validator-accepted pattern like `records/(?:[A-Z]{2})/(record-\d+)\.json` used to have its
+  // record-id fragment silently mis-derived as the CONTENTS of the non-capturing group instead of
   // the real one. capturingGroups (imported from coord-config.mjs — the SAME scanner the
   // validator counts groups with) finds the first GENUINE capturing group, so this can never
   // again disagree with what the validator already proved the pattern contains: exactly one.
@@ -178,7 +178,7 @@ export function deriveShardPatterns(shardIdPattern) {
   if (groups.length === 0) {
     throw new Error(
       `deriveShardPatterns: shardIdPattern ${JSON.stringify(shardIdPattern)} has no capture ` +
-        'group — cannot derive DERIVED_SHARD_REL_SRC (the clinic-id fragment)',
+        'group — cannot derive DERIVED_SHARD_REL_SRC (the record-id fragment)',
     );
   }
   const derivedShardRelSrc = `(${groups[0].content})(?:\\.json$|/)`;
@@ -186,7 +186,7 @@ export function deriveShardPatterns(shardIdPattern) {
 }
 
 // plan 4071: coord-config.mjs's CORE `DEFAULTS.shardIdPattern` is now `null` (a config-less
-// repo has no per-clinic shard filename shape) — vetapp's own value lives as a row in vetapp's
+// repo has no per-record shard filename shape) — vetapp's own value lives as a row in vetapp's
 // `coord.config.json` instead, and reaches this module only through a CALLER-supplied override
 // (seedScopeOf's `derived.shardIdPattern`, shardFileRx/orderManifestRx/derivedShardRx's own
 // override params — see spine.mjs's `cfg.shardIdPattern` threading for the real caller). So
@@ -203,8 +203,8 @@ const SHARD_PATTERNS = deriveShardPatterns(DEFAULTS.shardIdPattern);
 // TypeError from interpolating `null` into a RegExp source string.
 const NEVER_MATCH_REL_SRC = '(?!)';
 
-// THE one encoding of a per-clinic shard filename, relative to the shard root:
-// `clinics/<CC>/<clinic-id>.json`, capture group 1 = the clinic id. Every coord
+// THE one encoding of a per-record shard filename, relative to the shard root:
+// `records/<CC>/<record-id>.json`, capture group 1 = the record id. Every coord
 // matcher derives from this string (seedScopeOf / statusFlipSeam here, the
 // done-worktree gate views via shardFileRx) so the layout pattern cannot drift
 // between gates (plan-1300 review finding 9 — previously three hand-rolled copies).
@@ -212,7 +212,7 @@ export const SHARD_REL_SRC = SHARD_PATTERNS?.shardRelSrc ?? NEVER_MATCH_REL_SRC;
 export const ORDER_MANIFEST_REL_SRC = SHARD_PATTERNS?.orderManifestRelSrc ?? NEVER_MATCH_REL_SRC;
 
 /**
- * The anchored per-clinic shard-path regex under a configured shard root.
+ * The anchored per-record shard-path regex under a configured shard root.
  * `shardRelSrc` (plan 3960 cluster-1 review fix) defaults to the module's own SHARD_REL_SRC
  * (derived from coord-config.mjs's DEFAULTS.shardIdPattern) — a caller with a REAL loaded
  * `coord.config.json` (done-worktree.mjs's `cfg.shardIdPattern`, run through deriveShardPatterns)
@@ -230,58 +230,58 @@ export function orderManifestRx(seedShardDir, orderManifestRelSrc = ORDER_MANIFE
   return new RegExp(`^${escaped}${orderManifestRelSrc}$`);
 }
 
-// Plan 1867: clinic-sharded DERIVED-DATA roots (render-fingerprints / render-store)
-// join the landing-lock scope with the same clinic-id semantics as seed shards. One
-// rel encoding covers both observed layouts under a derived root — a flat per-clinic
-// file (`render-fingerprints/clinic-4.json`) and a per-clinic subtree
-// (`render-store/clinic-4/<engine>/<hash>/_meta.json`). Derived from `shardIdPattern`
+// Plan 1867: record-sharded DERIVED-DATA roots (render-fingerprints / render-store)
+// join the landing-lock scope with the same record-id semantics as seed shards. One
+// rel encoding covers both observed layouts under a derived root — a flat per-record
+// file (`render-fingerprints/record-4.json`) and a per-record subtree
+// (`render-store/record-4/<engine>/<hash>/_meta.json`). Derived from `shardIdPattern`
 // (plan 3960) — see deriveShardPatterns above.
 export const DERIVED_SHARD_REL_SRC = SHARD_PATTERNS?.derivedShardRelSrc ?? NEVER_MATCH_REL_SRC;
 
-/** The anchored per-clinic derived-shard regex under a configured derived root (see shardFileRx). */
+/** The anchored per-record derived-shard regex under a configured derived root (see shardFileRx). */
 export function derivedShardRx(derivedDir, derivedShardRelSrc = DERIVED_SHARD_REL_SRC) {
   const escaped = escapeRegex(`${derivedDir}/`);
   return new RegExp(`^${escaped}${derivedShardRelSrc}`);
 }
 
-// Plan 1867: past this many clinic ids the scope collapses to {global:true}. A
+// Plan 1867: past this many record ids the scope collapses to {global:true}. A
 // corpus-scale rewrite (the 1788/1825/1852 fingerprint rebaselines were 712–899
 // files) intersects essentially every concurrent land anyway, and a ~15 KB scope
 // JSON would ride the lock registry + argv for no narrowing payoff. The cap is
 // UNCONDITIONAL (applies to seed-only scopes too — xhigh review F2 made the
 // docstring honest about that), so it sits far above any legitimate batch shape:
-// refresh batches run ~30 clinics (plan 1015/1055 sizing), the largest observed
+// refresh batches run ~30 records (plan 1015/1055 sizing), the largest observed
 // seed land is well under 200, while every corpus rebaseline clears 700.
 // plan 3960: sourced from coord-config.mjs's `scopeMaxKeys` default (500, unchanged) — a pure
 // constant read, no IO, no change to the cap's semantics or the mutex's byte-identical behavior.
-export const SCOPE_MAX_CLINICS = DEFAULTS.scopeMaxKeys;
+export const SCOPE_MAX_RECORDS = DEFAULTS.scopeMaxKeys;
 
 /**
  * The land's SEED SCOPE (plan 1300 mutex narrowing; plan 1867 derived-data
  * extension) — what the landing-lock serializes on. Pure.
  *   null                      → no seed/derived surface touched (free lane, no lock)
  *   {global:true}             → the monolith, chains.json, anything under a shard root
- *                               that is NOT a per-clinic shard, a derived
- *                               global-on-touch file, or a clinic set past the
+ *                               that is NOT a per-record shard, a derived
+ *                               global-on-touch file, or a record set past the
  *                               cap — contends with every other scoped land
- *   {clinics:[ids]}           → per-clinic shards and/or country manifests
+ *   {shards:[ids]}            → per-record shards and/or country manifests
  *                               (`manifest:<CC>`) touched — contends only with a
  *                               land whose scope set INTERSECTS
- * A clinic id is extracted from `<shardDir>/clinics/<CC>/<clinic-id>.json`; the
+ * A record id is extracted from `<shardDir>/records/<CC>/<record-id>.json`; the
  * id (not the path) is the scope unit, so a country MOVE (same id, two paths)
- * still collides with any other land touching that clinic.
+ * still collides with any other land touching that record.
  *
- * Plan 1867: clinic-sharded DERIVED-DATA roots (`derived.shardDirs`, e.g.
- * render-fingerprints + render-store) contribute clinic ids to the SAME set —
- * disjoint-clinic lands keep merging freely, same-clinic derived writes
+ * Plan 1867: record-sharded DERIVED-DATA roots (`derived.shardDirs`, e.g.
+ * render-fingerprints + render-store) contribute record ids to the SAME set —
+ * disjoint-record lands keep merging freely, same-record derived writes
  * serialize exactly like seed shards. `derived.globalFiles` (the append-only
  * observations *.jsonl, which conflict on any concurrent touch) are global on
- * touch. A combined id set larger than `derived.maxClinics` (default
- * SCOPE_MAX_CLINICS, applied UNCONDITIONALLY — with or without derived config)
+ * touch. A combined id set larger than `derived.maxRecords` (default
+ * SCOPE_MAX_RECORDS, applied UNCONDITIONALLY — with or without derived config)
  * collapses to {global:true} — a corpus rebaseline (712–899 files in the
  * 1788/1825/1852 passes) intersects everything anyway and must not ride
  * argv/registry as a ~15 KB scope. The cap sits far above every legitimate
- * batch shape (see SCOPE_MAX_CLINICS), so absent `derived` config the observable
+ * batch shape (see SCOPE_MAX_RECORDS), so absent `derived` config the observable
  * behavior matches plan 1300 for every historically observed diff.
  * `derived.shardIdPattern` (plan 3960 cluster-1 review fix): an optional override of
  * coord-config.mjs's `shardIdPattern` default (this module stays fs-/git-free, so the caller —
@@ -296,13 +296,13 @@ export const SCOPE_MAX_CLINICS = DEFAULTS.scopeMaxKeys;
  * @param {string[]} changedFiles
  * @param {string|null} seedLaneFile
  * @param {string|null} seedShardDir
- * @param {{shardDirs?: string[], globalFiles?: string[], maxClinics?: number, shardIdPattern?: string}} derived
+ * @param {{shardDirs?: string[], globalFiles?: string[], maxRecords?: number, shardIdPattern?: string}} derived
  */
 export function seedScopeOf(changedFiles, seedLaneFile, seedShardDir = null, derived = {}) {
   const {
     shardDirs = [],
     globalFiles = [],
-    maxClinics = SCOPE_MAX_CLINICS,
+    maxRecords = SCOPE_MAX_RECORDS,
     shardIdPattern,
   } = derived;
   if (!seedLaneFile && !seedShardDir && shardDirs.length === 0 && globalFiles.length === 0)
@@ -345,8 +345,8 @@ export function seedScopeOf(changedFiles, seedLaneFile, seedShardDir = null, der
     }
   }
   if (!touched) return null;
-  if (ids.size > maxClinics) return { global: true };
-  return { clinics: [...ids].sort() };
+  if (ids.size > maxRecords) return { global: true };
+  return { shards: [...ids].sort() };
 }
 
 // plan 3961 T2.7c: the land trust gate's merge-base baseline data/filters — TRUST_GATE_ENTRY_FILES,
@@ -745,8 +745,8 @@ export const SEAM = {
   LAND_BLOCKED_HOLDING: 'LAND_BLOCKED_HOLDING',
   BUILD_FAILED: 'BUILD_FAILED',
   // (plan 556's ARTIFACT_STALE seam — the generated-artifact freshness land-time gate —
-  //  was RETIRED by plan 1024: frontend/public/clinics-index.json is now build-generated +
-  //  gitignored, so there is no committed artifact left to go stale vs its seed.)
+  //  was RETIRED by plan 1024: the generated record-index artifact it checked is now
+  //  build-generated + gitignored, so there is no committed artifact left to go stale vs its seed.)
   // plan 771: the land diff touches a watched landing/composer/mobile surface and the
   // WebKit T1–T7 gate (verify-mobile-gate.mjs) failed. The hook's verify-mobile block is
   // BRANCH=master-gated and the spine lands from a detached-HEAD ephemeral worktree, so
@@ -755,7 +755,7 @@ export const SEAM = {
   // plan 2875 task 4/Part A: the land diff touches backend/scripts/** or shared/src/** and the
   // FULL `python -m pytest backend/scripts` suite FAILED. This is one of the two heavy tiers the
   // retiered scripts/hooks/pre-push.sh no longer proves on every LOCAL push (operator decision,
-  // docs/runbooks/push-gate-tiering.md § Operator decision, 2026-08-06) — this pre-queue
+  // docs/coord/hooks.md § Diff-scoping) — this pre-queue
   // preflight is now the fail-closed replacement, same family as BUILD_FAILED/MOBILE_FAILED
   // (pre-merge, resumable on its own code after a fix+push).
   PYTEST_FAILED: 'PYTEST_FAILED',
@@ -828,7 +828,7 @@ export const SEAM = {
   // WHY A SEAM AND NOT A LATER PREFLIGHT_FAIL. The dirt was always caught eventually — by the
   // CLEAN-TREE check in the land preflight, which runs BEFORE the battery and therefore only ever
   // sees the leak on the NEXT land, or mid-rebase. `docs/handoff/infra-debt.md` recorded exactly
-  // that six times in four days for one file (`apply-flags/clinic-004.json`), each costing a land
+  // that six times in four days for one file (`apply-flags/record-004.json`), each costing a land
   // attempt to a failure whose message named a dirty worktree and not the test that dirtied it.
   // Attribution is the whole point: this fires in the gate that ran the suite, names the paths,
   // and points at `backend/scripts/conftest.py`'s `_isolate_committed_stores`.
@@ -857,7 +857,7 @@ export const SEAM = {
   ARCHIVE_UNRESOLVED: 'ARCHIVE_UNRESOLVED',
   // plan 1074: pre-merge knowledge-of-record gates (the read/reasoning-layer twin of
   // the data-layer plan-706 `status` Zod guard).
-  // STATUS_FLIP — the seed diff flips a clinic's operationalStatus across the
+  // STATUS_FLIP — the seed diff flips a record's operationalStatus across the
   // active/closed line (active<->closed_permanently or active<->moved) WITHOUT the
   // rationale the provenance rule demands (a statusNote / an operationalStatus
   // verifications[] entry; closedAt on a closure). The resurrect direction
@@ -866,21 +866,21 @@ export const SEAM = {
   // override once the flip is confirmed genuine).
   STATUS_FLIP: 'STATUS_FLIP',
   // WIKI_CHECKPOINT — the land diff touched a subject the wiki OWNS (a platform
-  // adapter, the price-pipeline inspectors, a pricing-concept module, or the seed
+  // adapter, the data-pipeline inspectors, a pricing-concept module, or the seed
   // chains[] registry) but no fresh `Wiki: WROTE|SKIP @ <sha>` decision was recorded.
   // Forces the "did this teach the wiki something durable?" decision
   // (scripts/record-wiki.mjs); a SKIP is allowed but logged VISIBLY so the checkpoint
   // keeps its teeth (a silent always-skip would decay it to a toothless advisory).
   WIKI_CHECKPOINT: 'WIKI_CHECKPOINT',
-  // plan 1165 Part A: the land diff changes a clinic's prices[] and that clinic FAILS the
+  // plan 1165 Part A: the land diff changes a record's prices[] and that record FAILS the
   // extraction-trust gate (a DEDUP_PRICING_MODE / TIMEBAND_GAP / IMAGING_INDICATION / … HARD
   // finding). Pre-merge, ABSOLUTE — unlike the manual sign-off stamp-cohort, the land gate has
-  // NO override (the plan-1097 gap: 6 clinics landed gate-failing). Fix the rows in the worktree
-  // (apply-1165-trust-gate-enrichment.py or re-extract; see docs/runbooks/price-cohort-workflow.md
-  // § "definition of done"), push, and re-invoke done-worktree --resume PRICE_GATE_FAILED. The
+  // NO override (the plan-1097 gap: 6 records landed gate-failing). Fix the rows in the worktree
+  // (apply-1165-trust-gate-enrichment.py or re-extract; consult this project's price pipeline docs
+  // for the definition of done), push, and re-invoke done-worktree --resume PRICE_GATE_FAILED. The
   // spine check is gate-ENFORCEMENT only (read-only — land-trust-gate.py without --apply); stamping
   // verifiedAgainstRender is the session's one-command definition-of-done step
-  // (`land-trust-gate.py --clinics … --apply`), NOT a mid-land in-spine commit (which would break
+  // (the land trust gate's own `--apply` run over the touched records), NOT a mid-land in-spine commit (which would break
   // the sha-pinned review marker on a QUEUE_WAIT re-run — operator decision 2026-06-29).
   PRICE_GATE_FAILED: 'PRICE_GATE_FAILED',
   // plan 1205: findings-as-data land gate. A review recorded as NITS/BUGS-FOUND for the
@@ -918,7 +918,7 @@ export const SEAM = {
   PRETTIER_DRIFT: 'PRETTIER_DRIFT',
   // plan 2033: pre-merge conclusion-review gate for world-claim seed writes. The seed
   // diff OVERWRITES an established world-claim field (coord.config.json's
-  // land.worldClaimFields — a claim about external reality: liveness / clinic type /
+  // land.worldClaimFields — a claim about external reality: liveness / record type /
   // chain attribution / booking identity) but no fresh `Conclusion: UPHELD @ <sha>`
   // adversarial-review verdict is recorded (scripts/record-conclusion.mjs). The review machinery reviews DIFFS;
   // this gate makes someone review the CONCLUSION — one adversarial refuter (plan
@@ -929,9 +929,9 @@ export const SEAM = {
   // operated at the premises) is the failure class. --resume CONCLUSION_REVIEW is the
   // explicit operator-waiver valve.
   CONCLUSION_REVIEW: 'CONCLUSION_REVIEW',
-  // plan 3078: the land diff RE-INTRODUCES the retired backend/src/data/seed-clinics.json
-  // monolith, which CLAUDE.md forbids explicitly ("a re-appearing monolith is a resurrected
-  // legacy write") — the sharded seed under backend/src/data/seed/ is the only seed surface.
+  // plan 3078: the land diff RE-INTRODUCES the retired seedLaneFile monolith, which CLAUDE.md
+  // forbids explicitly ("a re-appearing monolith is a resurrected legacy write") — the sharded
+  // seed under seedShardDir is the only seed surface.
   // This is the one land shape that used to reach the monolith branch of the pre-merge
   // seed-gate block (the monolith-ref seed reader, since deleted) and silently no-op the
   // plan-1074 STATUS_FLIP and plan-1165 PRICE_GATE_FAILED gates: that reader returned null at a
@@ -959,7 +959,7 @@ export const SEAM = {
   // checkout — plan 3239) — its own contract on failure. Fed into readShardGateViews, that
   // null base is read by all FOUR base-vs-head seed gates (STATUS_FLIP / CONCLUSION_REVIEW /
   // PRICE_GATE_FAILED / WIKI_CHECKPOINT) as "nothing changed", so a genuine status flip, price
-  // change, world-claim overwrite, or paged-clinic change could land ungated. This seam
+  // change, world-claim overwrite, or paged-record change could land ungated. This seam
   // refuses at the ONE call site that feeds all four, before any of them run. No --resume skip
   // code: the way through is a repaired checkout (fetch / --unshallow) and a plain re-invoke,
   // never a conscious override — skipping this one would re-open the exact fail-open it closes.
@@ -1045,7 +1045,7 @@ export const EXIT = {
   [SEAM.PYTEST_FAILED]: 34, // plan 2875
   [SEAM.BATTERY_FAILED]: 35, // plan 2875
   // 36 was OMNIBUS_CARRYFORWARD (plan 2944), retired by plan 3961 with the grammar-omnibus
-  // carry-forward machinery — see docs/handoff/grammar-debt.md for the current routing.
+  // carry-forward machinery — such edge cases now route to a line in the project's domain debt ledger.
   // Deliberately UNASSIGNED, not reused: a result sidecar written before that retirement can
   // still carry `code: 'OMNIBUS_CARRYFORWARD'` / `exitCode: 36`, and handing 36 to a new seam
   // would make those records read as that seam.
@@ -1676,7 +1676,7 @@ export function buildPreflightNeeded(changedFiles) {
 
 // (plan 556's generatedArtifactPreflightNeeded predicate — which gated the
 //  generated-artifact freshness land-time preflight — was REMOVED by plan 1024:
-//  frontend/public/clinics-index.json is now build-generated + gitignored, so there
+//  the generated record-index artifact it checked is now build-generated + gitignored, so there
 //  is no committed artifact to regenerate-and-diff before the merge.)
 
 // plan 771's `mobilePreflightNeeded` moved to scripts/project/land-gate-mobile.mjs (plan 4096 T1/S9).
@@ -1688,8 +1688,8 @@ export function buildPreflightNeeded(changedFiles) {
 // reaches the predicate as the pytest gate's own registry `applies`.
 
 // plan 2875 task 4/Part A: the FULL `scripts/*.test.mjs` node:test battery must pass before a
-// land merges. `scripts/**/*.mjs` (recursive — scripts/ is not flat, e.g.
-// scripts/lib/decision-dossier/inline.mjs; a test's dependency closure reaches nested files the
+// land merges. `scripts/**/*.mjs` (recursive — scripts/ is not flat, e.g. a project-side helper
+// nested several directories deep; a test's dependency closure reaches nested files the
 // same way select-battery-tests.mjs's own reference walk does) mirrors the coord-machinery blast
 // radius the plan's own design-principle table names: this tree is consumed by every parallel
 // session the instant it lands.
@@ -2322,7 +2322,7 @@ export function shouldSpeculate({
 // build ×3, for a branch whose code had been green since before the first land launch.
 //
 // WHY THIS IS NOT THE PLAN-2462 CONTENT CACHE. That cache keys on the tree's CONTENT, which is
-// exactly the thing every one of those events changes: a two-clinic seed heal, a review fix, a
+// exactly the thing every one of those events changes: a two-record seed heal, a review fix, a
 // master merge at the queue head all mint a new content key and miss. The proof here is keyed to
 // the LAND — so it survives every content change the land itself causes. The two stack: the
 // per-land set sits IN FRONT of the content cache, and the content cache still serves a genuinely
@@ -2343,7 +2343,9 @@ export function shouldSpeculate({
 // A green refreshes the entry's sha, so each re-entry measures its remainder from the newest proof.
 // Only the FULL re-run is what the land refuses to buy twice. Cloud lands write the set but never
 // take the skip (`CLAUDE_CODE_REMOTE`), per the same ruling: cloud default stays full every land,
-// chunked per plan 3274. And a 3274 chunk-resume is NOT green — only a whole-gate green ever
+// chunked per plan 3274 — except `build` / a project's UI gate, which reuse a proof from the SAME
+// land over an unchanged closure content key (operator ruling 2026-09-25, plan 4192; see
+// gates-runner.mjs's `onceProvenClosureSkip`). And a 3274 chunk-resume is NOT green — only a whole-gate green ever
 // writes an entry.
 // plan 3961 T2.7a: there is no module-level roster constant here any more. `land.gateRoster` is
 // GONE as a coord-config.mjs key — the once-per-land roster is derived from the land-gates
@@ -2363,10 +2365,21 @@ export function shouldSpeculate({
 // they are gitignored, which is exactly why the pass cache refuses to serve a cached green while
 // one exists — so a proof that carried only a sha could authorize a skip across a changed
 // `NEXT_PUBLIC_*` value. Gates with no untracked inputs simply carry no `envHash`.
-export function gateProvenEntry(sha, at = new Date(), envHash = undefined) {
+//
+// `closureKey` + `landId` (optional, plan 4192) are what let a proof survive a head-of-queue
+// rebase and, on a CLOUD land, a chunk re-invoke. `closureKey` is `gate-pass-cache.mjs`'s own
+// `computeGateKey` over the gate's closure at `sha` — the tree content the gate verified, which a
+// rebase that leaves the closure alone does not change even though it changes the sha. `landId`
+// names the land that earned the proof, so a cloud land can honour its OWN proof and never one an
+// earlier land left behind (operator ruling 2026-09-25). Both are carried only when they are
+// non-empty strings; an entry without them reads exactly as before this plan (sha-only).
+export function gateProvenEntry(sha, at = new Date(), envHash = undefined, extra = {}) {
   if (!shaLike(sha)) return null;
   const entry = { sha: String(sha), at: at instanceof Date ? at.toISOString() : String(at) };
   if (typeof envHash === 'string') entry.envHash = envHash;
+  if (typeof extra?.closureKey === 'string' && extra.closureKey)
+    entry.closureKey = extra.closureKey;
+  if (typeof extra?.landId === 'string' && extra.landId) entry.landId = extra.landId;
   return entry;
 }
 
@@ -2689,6 +2702,11 @@ export function parseLandGatesProven(text, gateNames) {
     // missing envHash as "this proof was taken when no untracked input existed", so a gate whose
     // env file exists NOW compares unequal and re-runs (the safe direction).
     if (typeof entry.envHash === 'string') parsed.envHash = entry.envHash;
+    // plan 4192: carried verbatim when present; ABSENT means a pre-4192 (sha-only) proof, which
+    // a cloud land never honours and a local land judges by its delta exactly as before.
+    if (typeof entry.closureKey === 'string' && entry.closureKey)
+      parsed.closureKey = entry.closureKey;
+    if (typeof entry.landId === 'string' && entry.landId) parsed.landId = entry.landId;
     // plan 4003 T2: a partial proof's file list, normalized on the way in for the same reason
     // every other field here is validated — this object authorizes what the next run may SKIP
     // RUNNING, so a junk path must degrade to a wider run, never a narrower one. An entry whose
@@ -2698,7 +2716,7 @@ export function parseLandGatesProven(text, gateNames) {
     //
     // gpt-review r1 (77b78c/3d8677/c815ee/839ac0/09b61b — five finders, one defect): the test is on
     // PRESENCE, not on shape. An earlier cut checked `Array.isArray(entry.provenFiles)` and let
-    // anything else fall through — so `provenFiles: "scripts/a.test.mjs"`, `{}`, or `null` (a
+    // anything else fall through — so `provenFiles: "scripts/<name>.test.mjs"`, `{}`, or `null` (a
     // truncated write, a hand edit, a future writer's bug) silently PROMOTED a partial entry to a
     // WHOLE one, which authorizes skipping the entire gate. That is the single worst direction this
     // parser can fail in, and it is the direction a shape check reads as "no partial data here".
@@ -2738,9 +2756,14 @@ export function parseLandGatesProven(text, gateNames) {
 //
 // So: its own worktree-local sidecar with the same lifetime properties and no shared state.
 //
-// KEYED BY HEAD SHA. A stored sha that differs from the current one resets every counter — the
-// doctrine's "two consecutive did-not-start reports on the SAME commit", made literal. A new commit
-// is a new series, and on `--prep` the rebase that moves HEAD resets it for the same reason.
+// KEYED BY THE LAND (plan 4192). The stored series key is a `land:<id>` key chosen once per
+// worktree by gates-runner's `noStartTallyKey` (the `gatesProven` sidecar's land id, or a minted
+// one before anything is proven) and kept for the land's lifetime. A stored key that differs from
+// the current one resets every counter; a round that STARTS still clears its gate's count. The original sha key (plan 3436) meant a head-of-queue rebase
+// — which moves HEAD without the branch changing — handed the land a fresh, empty tally every
+// round, so the two-strikes rule could never fire on a land that kept not starting (the
+// 2026-09-25 batch-2026-09-25-search-input hand-back). The field is still spelled `sha` on disk
+// so an older reader of the file degrades to "no tally yet" rather than crashing.
 //
 // The threshold is `NON_CONVERGENT_ROUNDS`, REUSED rather than given a second constant: it is
 // already 2, which is also exactly the routine prompt's own two-strikes rule, so one knob keeps the
@@ -2764,7 +2787,7 @@ export function parseNoStartTally(text) {
     return null;
   }
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null;
-  if (!shaLike(obj.sha)) return null;
+  if (!noStartSeriesKeyLike(obj.sha)) return null;
   const rounds = {};
   const raw =
     obj.rounds && typeof obj.rounds === 'object' && !Array.isArray(obj.rounds) ? obj.rounds : {};
@@ -2772,6 +2795,11 @@ export function parseNoStartTally(text) {
     if (Number.isInteger(n) && n >= 0) rounds[gate] = n;
   }
   return { sha: obj.sha, rounds };
+}
+
+// A usable series key: a commit sha (plan 3436), or a `land:<id>` land key (plan 4192).
+function noStartSeriesKeyLike(key) {
+  return shaLike(key) || (typeof key === 'string' && /^land:\S+$/.test(key));
 }
 
 // The tally that applies to `sha`: the stored one when it is for this same sha, an empty one
@@ -2849,7 +2877,8 @@ export function noStartExhaustedDetail({ gate, rounds, secondsLeft = 0, minChunk
   }
   return (
     `${gate} gate: NON-CONVERGENT (not a test failure, and not ordinary chunking): it has now ` +
-    `made ${rounds} consecutive rounds of ZERO progress on this same commit — either declining to ` +
+    `made ${rounds} consecutive rounds of ZERO progress in this land (a rebase does not reset the ` +
+    `count, plan 4192) — either declining to ` +
     `start (only ${Math.max(0, Math.round(secondsLeft))}s of the chunk budget left when it was ` +
     `reached, against a ${minChunkS}s floor) or being cut off by the cap before it could finish. ` +
     `The budget is being spent BEFORE this gate, or this gate simply cannot fit inside one wall, ` +
@@ -3278,7 +3307,7 @@ export function worktreeLockHeadAction({ acquired, nowMs, deadlineMs }) {
 // the flip this same flagless text handed out a COLD wait, which is how plan 2549's land reached
 // head needing a full rebase + gate battery, blew the plan-1528 8-min head cap, and was requeued.
 // Regression-pinned in done-worktree-lib.test.mjs (both seam texts) and doc-pinned against the
-// real `.claude/commands/landing-queue.md` + `docs/runbooks/plans-workflow.md`.
+// real `.claude/commands/landing-queue.md` + `docs/coord/plan-lanes.md`.
 //
 // Do not "fix" this by appending `--heartbeat-every` either (the plan-2085 rule, unchanged): the
 // watcher self-arms queue heartbeats near the head and once at head-exit, so a wait longer than
@@ -3458,7 +3487,7 @@ export function queueWaitChunkConflictReason({ position, total, head }, files) {
     `queued at position ${position}/${total} behind head ${head} — the pre-convergence probe ` +
     `(plan 1805) found REBASE CONFLICTS vs fresh origin/master: ${files.join(', ')}. A ` +
     `--wait-chunk call never resolves conflicts (probe-only): resolve them in the worktree NOW, ` +
-    `during the wait (docs/runbooks/plans-workflow.md § Queue-waiter pre-convergence; 🟥 seed ` +
+    `during the wait (docs/coord/landing-queue.md § Queue-waiter pre-convergence; 🟥 seed ` +
     `shards use the branch-hygiene recipe, never a hand-merge), re-record the review marker, ` +
     `push, then re-invoke \`done-worktree <slug> --wait-chunk\` in the same turn. The queue ` +
     `slot is RETAINED.`
@@ -3499,7 +3528,9 @@ export function parseMergeTreeConflicts(stdout) {
 // stdout` closure (each caller's own git-invoking wrapper has a different shape/signature —
 // this takes a pre-bound closure rather than assuming either one). Returns `{conflicted,
 // files}` on a definitive result, or `null` when the probe itself is unavailable this tick (a
-// git error OTHER than the documented conflict exit) — callers treat null as "skip this round",
+// git error OTHER than the documented conflict exit, OR an exit 1 whose stdout does not carry
+// a written-tree OID — git also exits 1 for an unresolvable merge parent, "not something we
+// can merge" / help_unknown_ref, with empty stdout) — callers treat null as "skip this round",
 // never as "clean" (fail-open).
 export function mergeTreeConflictProbe(execGit, masterRef, branchRef) {
   try {
@@ -3507,6 +3538,12 @@ export function mergeTreeConflictProbe(execGit, masterRef, branchRef) {
     return { conflicted: false, files: [] };
   } catch (e) {
     if (e.status !== 1) return null;
+    // git exits 1 for a real conflict AND for an unresolvable merge parent ("not something
+    // we can merge", help_unknown_ref); only the former prints the written tree OID on line 1.
+    const first = String(e.stdout || '')
+      .split(/\r?\n/, 1)[0]
+      .trim();
+    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(first)) return null;
     return { conflicted: true, files: parseMergeTreeConflicts(e.stdout) };
   }
 }
@@ -3516,12 +3553,12 @@ export function mergeTreeConflictProbe(execGit, masterRef, branchRef) {
 const PRECONVERGE_RECIPE =
   `resolve during the wait: (1) resolve the conflicts in the worktree — rerere/manual; 🟥 seed ` +
   `shards use \`git checkout --ours\` + re-run the apply script with the .scratch finds ` +
-  `(docs/runbooks/branch-hygiene.md), NEVER a hand-merge; (2) conclude (\`git rebase --continue\`, ` +
+  `(docs/coord/worktrees.md), NEVER a hand-merge; (2) conclude (\`git rebase --continue\`, ` +
   `or \`git commit\` for a freshen-merge) and re-run the plan's targeted tests; (3) \`git push ` +
   `--force-with-lease origin <branch>\`; (4) re-record the review marker — \`node ` +
   `scripts/record-review.mjs repin\` auto-carries dispositions on a patch-identical re-sha (plan ` +
   `1775), a content change re-records with --carry-dispositions; (5) re-invoke done-worktree. ` +
-  `Full section: docs/runbooks/plans-workflow.md § Queue-waiter pre-convergence.`;
+  `Full section: docs/coord/landing-queue.md § Queue-waiter pre-convergence.`;
 
 // The QUEUE_WAIT reason for an ATTENDED (--wait) pre-convergence halt: the probe found
 // conflicts and the in-waiter rebase could not auto-complete (rerere/clean replay), so a
@@ -3695,18 +3732,18 @@ export function ephemeralMergeConflictReason(
       `NOT clear an infra fault, so fix that first. Recover: clear the ephemeral-checkout/infra ` +
       `problem the detail points at`;
   } else if (lane === 'seed') {
-    // Plan 1867: the seed lane now also covers clinic-sharded DERIVED data, so the
+    // Plan 1867: the seed lane now also covers record-sharded DERIVED data, so the
     // recovery names BOTH surfaces — the conflicted-path/culprit block below says which
     // one actually conflicted (xhigh review F4: the seed-only recipe misdirected a
     // derived-only conflict into re-running the seed apply for nothing).
     body =
       `this is a CONTENT conflict, NOT a queue/spine bug. Match the recovery to the conflicted ` +
-      `file(s) listed below: a SEED file (backend/src/data/seed*) is rewritten WHOLE-FILE + ` +
+      `file(s) listed below: a SEED file (the configured seed root) is rewritten WHOLE-FILE + ` +
       `re-stamps asOf across every touched row, so overlapping seed lands never line-merge — ` +
       `git checkout --ours the seed file(s), then RE-RUN the apply script (never hand-merge the ` +
       `JSON); a DERIVED-data file (render-fingerprints / render-store _meta / observations) takes ` +
       `YOUR branch's copy (checkout --ours) — the next pipeline run / weekly sweep re-derives and ` +
-      `self-heals a stale baseline (the plan-1839 clinic-378 pattern). Rebase the branch onto ` +
+      `self-heals a stale baseline (the plan-1839 record-378 pattern). Rebase the branch onto ` +
       `fresh origin/master, resolve per surface, push --force-with-lease, re-record-review`;
   } else {
     body =
@@ -4022,8 +4059,8 @@ const SOURCE_RE = /\.(ts|tsx|js|jsx|mjs|cjs|py|rs|go|java|rb)$/;
 // every hand push to master — landable with no recorded verdict at all.
 //
 // Scoped to `scripts/**`, not to `scripts/hooks/`: the mandatory-review surface in
-// vetapp/CLAUDE.md is the whole of scripts/**, so a future `scripts/maintenance.sh` needs
-// a verdict for exactly the same reason a hook does, and a hooks-only rule would be a
+// your project's `CLAUDE.md` is the whole of scripts/**, so a future project-side maintenance
+// script needs a verdict for exactly the same reason a hook does, and a hooks-only rule would be a
 // second, narrower answer to a question the repo has already answered once. A committed
 // `.sh` OUTSIDE scripts/ (docs/runbooks/, .husky/) keeps its own class and is untouched.
 const SCRIPTS_SHELL_RE = /^scripts\/.*\.sh$/;
@@ -4137,7 +4174,7 @@ import {
 // is no meaningful "no config" fallback: an empty coordination-path list makes the predicate
 // return false for any non-empty delta, which is a valid config choice, not the null case). A
 // trailing `/` on an entry marks a directory prefix, a bare path matches exactly.
-// `docs/PIPELINE.md` (the real plan-3941 conflict) and every other `docs/` page are NOT
+// the project's pipeline doc (the real plan-3941 conflict) and every other `docs/` page are NOT
 // coordination by the vetapp list — a doc that carries a spec is content, and `wiki/<page>.md` is
 // content too; only the append-only `wiki/log.md` line ledger rides along THERE. Widen a project's
 // list in its own coord.config.json, never here.
@@ -4418,8 +4455,8 @@ export function groupRowsById(rows) {
   return groups;
 }
 
-// Pure: does the diff touch the clinic-row seed surface — the monolith OR (plan 1300,
-// post-flip) a per-clinic shard file? Layout-pattern match, not a configured root, so
+// Pure: does the diff touch the record-row seed surface — the monolith OR (plan 1300,
+// post-flip) a per-record shard file? Layout-pattern match, not a configured root, so
 // the lib stays pure and config-free; a manifest-only diff (chains/country order)
 // can't flip a row field. ONE copy shared by statusFlipSeam + conclusionReviewSeam
 // (review 2033 [2]: a third copy-pasted regex pair would let the gates drift blind on
@@ -4427,19 +4464,30 @@ export function groupRowsById(rows) {
 // `shardIdPattern` (plan 3960 review fix): an optional override of coord-config.mjs's
 // `shardIdPattern` default, mirroring shardFileRx/seedScopeOf's own seam above — omitted, this
 // matches on the module's own SHARD_REL_SRC (today's exact default, byte-identical); provided, the
-// clinic-row surface test tracks the SAME configured layout the mutex (seedScopeOf) and the gate
+// record-row surface test tracks the SAME configured layout the mutex (seedScopeOf) and the gate
 // readers (readShardGateViews) already use, so a custom shardIdPattern is recognized here too.
-export function seedSurfaceTouched(changedFiles, shardIdPattern) {
+export function seedSurfaceTouched(changedFiles, shardIdPattern, seedLaneFile = null) {
   const shardRelSrc = shardIdPattern
     ? deriveShardPatterns(shardIdPattern).shardRelSrc
     : SHARD_REL_SRC;
   const shardTailRx = new RegExp(`/seed/${shardRelSrc}$`);
-  return (changedFiles || []).some((f) => /seed-clinics\.json$/.test(f) || shardTailRx.test(f));
+  const isMonolith = monolithMatcher(seedLaneFile);
+  return (changedFiles || []).some((f) => isMonolith(f) || shardTailRx.test(f));
+}
+
+// plan 4172: the ONE monolith-file matcher, from the configured `seedLaneFile` (coord.config.json)
+// instead of a literal filename. Matches any path ending in that file's basename — the same
+// suffix semantics the old literal regex had, so a monolith resurrected at a different directory
+// is still caught. null/absent seedLaneFile → matches nothing (a project with no monolith).
+export function monolithMatcher(seedLaneFile) {
+  if (!seedLaneFile) return () => false;
+  const base = String(seedLaneFile).replace(/\\/g, '/').split('/').pop();
+  return (f) => typeof f === 'string' && f.endsWith(base);
 }
 
 // The gate-INVOCATION twin of seedSurfaceTouched (plan 2042 — was a third, non-identical
 // inline copy in done-worktree.mjs). Deliberately BROADER: the shard arm is a configured
-// directory-prefix check, not the clinic-row regex, because the outer seed-gate block also
+// directory-prefix check, not the record-row regex, because the outer seed-gate block also
 // feeds the chains.json wiki signal (and per-country order.json) — a manifest-only diff must
 // still invoke the gates even though it can't flip a row field. Lives HERE, beside
 // seedSurfaceTouched, so a shard-layout change edits both detectors in one place instead
@@ -4450,9 +4498,9 @@ export function seedSurfaceTouched(changedFiles, shardIdPattern) {
 // MONOLITH_RESURRECTED seam can NAME the offending files without re-deriving the match — the
 // monolith regex stays in exactly ONE place here, per this function's own co-location rule
 // above. `monolithInDiff` is unchanged in meaning: it is that list being non-empty.
-export function seedGateSurfaces(changedFiles, seedShardDir) {
+export function seedGateSurfaces(changedFiles, seedShardDir, seedLaneFile = null) {
   const files = changedFiles || [];
-  const monolithPaths = files.filter((f) => /seed-clinics\.json$/.test(f));
+  const monolithPaths = files.filter(monolithMatcher(seedLaneFile));
   return {
     monolithPaths,
     monolithInDiff: monolithPaths.length > 0,
@@ -4501,7 +4549,7 @@ export function monolithResurrectedSeam(monolithPaths, seedShardDir) {
 // baseRef === null on a land whose diff touches seed shards refuses HERE, before any of those
 // four gates run, rather than let all four silently see nothing.
 //
-// Only baseRef === null refuses — an EMPTY base view (`clinics: []`, e.g. a shard file added at
+// Only baseRef === null refuses — an EMPTY base view (`records: []`, e.g. a shard file added at
 // head with no base version) is a real, resolved comparison and must not be conflated with an
 // unresolved lookup. shardsInDiff mirrors the call site's own guard so this predicate never
 // fires when there is no seed-shard diff to gate in the first place.
@@ -4520,7 +4568,7 @@ export function seedBaseUnresolvedSeam(baseRef, { shardsInDiff }) {
 }
 
 // ── plan 2033: conclusion-review gate for world-claim seed writes ─────────────
-// The fields whose seed value IS a claim about external reality — liveness, clinic
+// The fields whose seed value IS a claim about external reality — liveness, record
 // type, chain/brand attribution, booking-platform identity — used to live here as one exported
 // const (the GATE1_PIPELINE_FIELDS pattern, claim-plan-lib.mjs), deliberately NOT the whole
 // VerifiableFieldSchema enum: contact data, prices, hours etc. are observations the diff-review
@@ -4549,7 +4597,7 @@ const UNESTABLISHED_VALUES = new Set([null, undefined, '', 'unknown', 'unverifie
 // from the head view and silently bypass the gate — the seed convention is
 // tombstoning, so an outright row deletion is exactly the shape that deserves the
 // adversarial look; a legit dedup removal clears via review or the --resume waiver).
-// baseRows/headRows are parsed seed clinic arrays; a non-array (unreadable seed)
+// baseRows/headRows are parsed seed record arrays; a non-array (unreadable seed)
 // yields [] so the gate fails OPEN (validate-seed guards parse errors separately,
 // same contract as STATUS_FLIP).
 // plan 3282: the caller guarantees baseRows is never null-from-an-unresolved-merge-base —
@@ -4640,9 +4688,10 @@ export function conclusionReviewSeam(
   recordedVerdict,
   shardIdPattern,
   worldClaimFields,
+  seedLaneFile = null,
 ) {
   validateWorldClaimFields(worldClaimFields);
-  if (!seedSurfaceTouched(changedFiles, shardIdPattern)) return null;
+  if (!seedSurfaceTouched(changedFiles, shardIdPattern, seedLaneFile)) return null;
   const flips = findWorldClaimFlips(baseRows, headRows, worldClaimFields);
   if (flips.length === 0) return null;
   if (recordedVerdict && recordedVerdict.verdict === 'UPHELD') return null;
@@ -4716,9 +4765,9 @@ export function canonicalJSON(value) {
   return JSON.stringify(value);
 }
 
-// Pure: did any clinic that HAS a wiki page change between base and head? The
-// per-clinic-page analogue of chainsChanged. hasPage(id) is injected (the spine
-// passes existsSync over wiki/entities/clinics/; tests stub it). Compares ONLY the
+// Pure: did any record that HAS a wiki page change between base and head? The
+// per-record-page analogue of chainsChanged. hasPage(id) is injected (the spine
+// passes existsSync over the project's per-record wiki dir; tests stub it). Compares ONLY the
 // paged subset, so it stays cheap and can't normalise SKIP across the plain rows.
 // Compares a canonical (sorted-key) serialization, so a key-reorder-only seed
 // re-serialization does not spuriously trip the checkpoint (finding [6]).
@@ -4995,7 +5044,7 @@ export function landFullyCompleted(state) {
 // overflow or any post-push throw), so the merge demonstrably landed yet state.mergeSha is still
 // null. The crash path then probes origin for the real sha and passes it as `recovered`. Recording
 // it makes the sidecar read "landed (teardown incomplete)" instead of the plan-844 "mergeSha:null"
-// that the documented recovery (`docs/runbooks/plans-workflow.md`) reads as "nothing merged" —
+// that the documented recovery (`docs/coord/plan-lanes.md`) reads as "nothing merged" —
 // inviting a clobbering hand-merge of work that already shipped. The authoritative value always wins.
 export function crashResultMergeSha(state, recovered) {
   return (state && state.mergeSha) || recovered || null;
@@ -5027,7 +5076,7 @@ export function classifyCarryForwards(bullets) {
 const OPEN_NEW_PLAN_RE = /(→|->)\s*open new plan\b/i;
 // Explicit hints only — a bracketed/parenthesised `(seed)` / `(seed, ready)` token,
 // the literal `seed-write`, or a 🟥 — never a bare "seed"/"ready" word in prose (a
-// title like "re-validate seed-clinics" must NOT flip SEED-WRITE; the operator
+// title like "re-validate seed records" must NOT flip SEED-WRITE; the operator
 // confirms the real banner at triage). Seed ⇒ 🟥 SEED-WRITE banner. Ready is a
 // RETIRED flag (plan 1419): it no longer branches the mint destination — every
 // carry-forward stub rests in pending-approval/ regardless — but is still detected
@@ -5778,7 +5827,7 @@ export function planFinishCloseOut(facts) {
         `deleted the manifest. Recover a batch land with a bare re-invoke of ` +
         `done-worktree.mjs ${slug} from a checkout that still has the worktree (it is ` +
         `idempotent by manifest presence), or by the per-member checklist in ` +
-        `docs/runbooks/plans-workflow.md § Landing recovery under contention.`,
+        `docs/coord/land-spine.md § Landing recovery under contention.`,
     );
   }
   if (!f.planId) {

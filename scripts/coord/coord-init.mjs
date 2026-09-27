@@ -2,7 +2,7 @@
 // scripts/coord/coord-init.mjs
 // Adopt the coord-kit's coordination machinery into an EXISTING repo (plan 3958). Run from a
 // kit checkout — it locates the kit root from its own import.meta.url (two directories up from
-// scripts/coord/). Rule 3 (docs/runbooks/scripts-module-layout.md): this module imports only
+// scripts/coord/). Rule 3 (docs/coord/scripts-layout.md): this module imports only
 // node: builtins and scripts/coord/** siblings.
 //
 // Usage: node scripts/coord/coord-init.mjs [--target <repo>] [--no-wiki] [--dry-run] [--json]
@@ -15,14 +15,17 @@
 //      never carries as static content, because it is per-adoption data: the plan lanes (10
 //      `.gitkeep`s), docs/handoff/board.md (a BOARD-START/END sentinel skeleton — see
 //      board-lib.mjs), docs/handoff/sessions/.gitkeep, docs/INDEX.md (an INDEX:PLANS/INDEX:SPECS
-//      sentinel skeleton — see build-index-lib.mjs), and coord.config.json (the kit's default
+//      sentinel skeleton — see build-index-lib.mjs), the empty ledger/folder skeletons the skills
+//      and tools name by path (ledgerSkeletons below: FOG.md, the batch-roster folder, the debt
+//      ledger, the audit-run folder), and coord.config.json (the kit's default
 //      profile — sessions handoff layout only; every other key, mutationBanner included, takes
 //      normalizeConfig's own code default, so no vetapp-only value — deployServices, seed lanes,
 //      … — is ever inherited);
 //   3. copies the kit's static trees verbatim: scripts/coord/**, scripts/test-helpers/**,
 //      scripts/hooks/**, the top-level scripts/*.mjs commands (+ name-paired .test.mjs),
 //      .husky/**, coord/skills/**, .claude/commands/*.md, .claude/workflows/**, docs/coord/**,
-//      and — unless --no-wiki — WIKI.md + wiki/*.md;
+//      the audit harness (docs/superpowers/audit-harness/** + its runbook), and — unless
+//      --no-wiki — WIKI.md + wiki/*.md;
 //   4. MERGES .claude/settings.json (hook identity = event+matcher+command; an existing entry is
 //      untouched, a same-event+matcher entry with a different command is appended as a sibling,
 //      an absent event+matcher gets the whole matcher group appended; permissions.allow entries
@@ -86,6 +89,18 @@ const RECURSIVE_DIR_CATEGORIES = [
   'coord/skills',
   '.claude/workflows',
   'docs/coord',
+  'docs/superpowers/audit-harness',
+];
+
+// Single static files copied verbatim when the kit carries them (plan 4218 T6): the runbook the
+// /audit-with-verification command reads, beside its harness dir above. `prepush-job-wrapper.ps1`
+// (plan 4218 gap 1) joined the list because it lives at the top of `scripts/`, not under
+// `scripts/coord/`, so the `.mjs`-only shallow-file adoption loop below never picks it up on its
+// own — without this entry an adopted repo's pre-push would run the kill-on-close job wrapper
+// pre-push-core.sh names but never received.
+export const SINGLE_FILES = [
+  'docs/superpowers/AUDIT-RUNBOOK.md',
+  'scripts/prepush-job-wrapper.ps1',
 ];
 
 const SMOKE_COMMAND = 'node scripts/coord/smoke.mjs';
@@ -190,6 +205,121 @@ function indexSkeleton() {
   ].join('\n');
 }
 
+// The ledger and folder skeletons the shipped skills, commands and tools name by path but that
+// hold per-adoption DATA, so neither a kit checkout nor an adopting repo carries them as static
+// content (plan 4218 T6): the fog / out-of-scope ledger, the batch-roster folder (README +
+// dependencies fence + the archive/ folder a landed batch moves into), the sub-floor debt ledger,
+// and the audit-run output folder. Each is the EMPTY form of its contract — headings the readers
+// parse, no entries — so a reader finds the file, parses nothing, and degrades to its empty
+// answer. Exported (and imported by the kit builder, never re-typed there) so a fresh build and a
+// fresh adoption write byte-identical skeletons. Returns `[relPath, content]` pairs, POSIX paths.
+export function ledgerSkeletons() {
+  return [
+    ['docs/superpowers/plans/FOG.md', fogSkeleton()],
+    ['docs/superpowers/batches/README.md', batchesReadmeSkeleton()],
+    ['docs/superpowers/batches/dependencies.md', batchesDependenciesSkeleton()],
+    ['docs/superpowers/batches/archive/.gitkeep', ''],
+    ['docs/handoff/infra-debt.md', infraDebtSkeleton()],
+    ['docs/superpowers/audits/.gitkeep', ''],
+  ];
+}
+
+function fogSkeleton() {
+  return [
+    '# Fog ledger — "Not yet specified" + "Out of scope"',
+    '',
+    'Two board-level ledgers in one file, with OPPOSITE graduation rules (`docs/coord/plan-lanes.md`',
+    '§ The two-ledger idea: fog vs. out-of-scope): fog graduates INTO plans; out-of-scope never',
+    'graduates at all. It is a ledger, not a plan — the index and plan lints skip it. Edit it on the',
+    'main branch through the coordination write path, like any coordination document, never on a',
+    'worktree branch.',
+    '',
+    '## Not yet specified',
+    '',
+    'In-scope questions too dim to phrase as a plan yet. A plan when the question can be stated',
+    'precisely now, even if blocked; fog when it cannot. One bullet per patch:',
+    '`- <suspected question / area> — <context> (fogged YYYY-MM-DD)`. A board-pass re-tests each',
+    'patch; when one can be phrased precisely, mint the plan(s) and delete the patch in the same pass.',
+    '',
+    '## Out of scope',
+    '',
+    'Permanent ledger of ideas killed as beyond the current goal. One bullet per kill:',
+    '`- <gist> — out of scope because <why> → archive/<file>.md (killed YYYY-MM-DD)`. Entries never',
+    'graduate back; they return only as a fresh plan if the goal itself is redrawn.',
+    '',
+  ].join('\n');
+}
+
+function batchesReadmeSkeleton() {
+  return [
+    '# Execution batches — one folder per batch',
+    '',
+    'Each batch is a folder `docs/superpowers/batches/<slug>/`: `batch.md` is the roster entry (the',
+    'claimable unit) and `manifest.json` is written beside it when the batch is claimed. A landed',
+    "batch's folder moves under `archive/`. Cross-batch edges live in `dependencies.md` beside this",
+    'file. Mechanism: `docs/coord/plan-lanes.md` § Batch lanes. `node scripts/batches-view.mjs`',
+    'renders the roster; `node scripts/claim-plan.mjs batch <ids…> --slug <slug>` claims one.',
+    '',
+    '`batch.md` frontmatter contract:',
+    '',
+    '```',
+    '---',
+    'slug: <slug>',
+    'lane: <mutation-banner marker>',
+    'members: [<id>, <id>]',
+    'gate: null # null (runnable now) | an objective blocker, e.g. "item <id> lands"',
+    'status: proposed # proposed | claimed | landed',
+    '---',
+    '```',
+    '',
+    '## Fable lane',
+    '',
+    'Heavy-lane items never ride a batch; each executes solo. One bullet per item, if any.',
+    '',
+    '## Not batched',
+    '',
+    'Ready items deliberately kept solo. One bullet per item, with the reason.',
+    '',
+  ].join('\n');
+}
+
+function batchesDependenciesSkeleton() {
+  return [
+    '# Cross-batch dependencies',
+    '',
+    'Edges the batch roster renders. Each line inside the fence is',
+    '`<left> <relation> <right> [: <reason>]`, where a side is a batch slug or an item id and the',
+    'relation is `blocked-by`, `overlaps` or `order-after`. An empty fence means no edges.',
+    '',
+    '## Dependencies',
+    '',
+    '```dependencies',
+    '```',
+    '',
+  ].join('\n');
+}
+
+function infraDebtSkeleton() {
+  return [
+    '# Rolling debt ledger',
+    '',
+    'Sub-floor tooling issues live HERE, not as plans: only a defect that blocks lands or corrupts',
+    'data earns its own plan. Anything below that floor, after failing the fix-now test',
+    '(`docs/coord/review.md` § Disposition policy), is ONE line here.',
+    '',
+    '**Contract:** one dated line per entry, newest first, under `## Entries`; a pointer to where it',
+    'came from (finding key, session, commit, or plan); the failed fix-now clause in parentheses.',
+    'Every line carries a category tag right after the date — one of `[land]` `[plans]` `[review]`',
+    '`[hooks]` `[cloud]` `[wiki]` `[test]` `[misc]`. Hand-edited on the main branch only, never on',
+    'a worktree branch. A board-pass sweeps it periodically and deletes lines that shipped;',
+    '`node scripts/coord/infra-debt-report.mjs --check` reports size, shape and whether a sweep is',
+    'due.',
+    '',
+    '## Entries',
+    '',
+  ].join('\n');
+}
+
 // Hook identity is (event, matcher-or-'', command). Mutates nothing existing: an already-present
 // identity is left untouched, a same-event+matcher entry with a new command is appended to that
 // matcher group's `hooks` array, and an event+matcher absent from the target gets the kit's whole
@@ -265,9 +395,22 @@ function stripWikiHooks(settings) {
   return { ...settings, hooks };
 }
 
+// Lifecycle scripts whose kit steps must run even when the adopter already defines the script:
+// `prepare` wires husky and the wiki merge driver on every install, so skipping it would leave
+// both unregistered (plan 4218 review r2, 5d6221). Each `&&` step the adopter's body lacks is
+// appended after the adopter's own steps.
+export const CHAINED_LIFECYCLE_SCRIPTS = ['prepare'];
+
+const splitSteps = (body) =>
+  String(body)
+    .split('&&')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
 // devDependencies/dependencies/scripts added only where the target key is absent — an existing
-// version or script body is never overwritten. Returns the merged package.json object plus the
-// count of keys actually added.
+// version or script body is never overwritten, except that a CHAINED_LIFECYCLE_SCRIPTS body gets
+// the kit's missing steps appended. Returns the merged package.json object plus the count of
+// keys actually added or extended.
 export function mergePackageJson(targetPkg, kitPkg) {
   const result = structuredClone(targetPkg ?? {});
   let added = 0;
@@ -276,8 +419,16 @@ export function mergePackageJson(targetPkg, kitPkg) {
     if (!kitSection || typeof kitSection !== 'object') continue;
     if (!result[section] || typeof result[section] !== 'object') result[section] = {};
     for (const [name, value] of Object.entries(kitSection)) {
-      if (Object.prototype.hasOwnProperty.call(result[section], name)) continue;
-      result[section][name] = value;
+      if (!Object.prototype.hasOwnProperty.call(result[section], name)) {
+        result[section][name] = value;
+        added += 1;
+        continue;
+      }
+      if (section !== 'scripts' || !CHAINED_LIFECYCLE_SCRIPTS.includes(name)) continue;
+      const have = splitSteps(result[section][name]);
+      const missing = splitSteps(value).filter((step) => !have.includes(step));
+      if (missing.length === 0) continue;
+      result[section][name] = [...have, ...missing].join(' && ');
       added += 1;
     }
   }
@@ -319,6 +470,9 @@ export function run({
   entries.push(classify(target, join(target, cfg.paths.boardFile), boardSkeleton()));
   entries.push(classify(target, join(target, cfg.paths.sessionsDir, '.gitkeep'), ''));
   entries.push(classify(target, join(target, 'docs', 'INDEX.md'), indexSkeleton()));
+  for (const [rel, content] of ledgerSkeletons()) {
+    entries.push(classify(target, join(target, ...rel.split('/')), content));
+  }
   entries.push(
     classify(
       target,
@@ -338,6 +492,12 @@ export function run({
           readFileSync(join(srcDir, rel)),
         ),
       );
+    }
+  }
+  for (const rel of SINGLE_FILES) {
+    const srcAbs = join(kitRoot, ...rel.split('/'));
+    if (existsSync(srcAbs)) {
+      entries.push(classify(target, join(target, ...rel.split('/')), readFileSync(srcAbs)));
     }
   }
   for (const name of listShallowFiles(join(kitRoot, '.claude', 'commands'), (n) =>

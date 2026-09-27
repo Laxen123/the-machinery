@@ -20,9 +20,9 @@
 //      stdout (a UserPromptSubmit hook's stdout is injected context; a Stop hook's is a block
 //      decision), so the next occurrence is traceable instead of invisible.
 //
-// WHY IT LIVES IN scripts/, NOT in .claude/hooks/lib/loader-common.mjs where plan 2615 first
-// put it (hooks have since moved inside scripts/hooks/ too, plan 3765, but the reasoning below
-// is unchanged: this is still the shared piece, not a hook-owned one). `scripts/*.mjs` must not
+// WHY IT LIVES IN scripts/, NOT in .claude/hooks/lib/loader-common.mjs where plan 2615 first put (dangling-ok: historical pre-move location, retired by plan 3765)
+// it. Hooks have since moved inside scripts/hooks/ too (plan 3765), but the reasoning below is
+// unchanged: this is still the shared piece, not a hook-owned one. `scripts/*.mjs` must not
 // import outside `scripts/`: scripts/test-helpers/isolated-plan-repo.mjs copies the flat
 // non-test `scripts/*.mjs` tool tree into a temp repo and runs the COPIES, so a tool reaching
 // into `.claude/hooks/` (as it was back then) would have died there with ERR_MODULE_NOT_FOUND

@@ -410,7 +410,7 @@ export function grillQuestionsSection(content) {
 // True when the body carries a non-empty `## Session decisions` section (plan 4069) — where a
 // session records a tech-design or plan-scope fork it decided ITSELF rather than parking it (the
 // operator ruling this plan implements: sessions decide, they don't ask, except on the fixed
-// operator-only axis list — docs/runbooks/plans-workflow.md § Grill-at-spec). Deliberately NOT a
+// operator-only axis list — docs/coord/plan-lanes.md § Grill at spec time). Deliberately NOT a
 // gate of any kind: nothing requires this section, nothing blocks on its absence — a plan with no
 // session-decidable forks simply never has one. It is inert by construction wherever the heading
 // text does not itself match another recognised section's regex (it matches neither

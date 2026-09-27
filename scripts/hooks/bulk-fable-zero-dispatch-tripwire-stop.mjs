@@ -29,7 +29,8 @@
 //       evidence above, both of which blew well past it before finishing);
 //   (b) zero Agent/Task dispatches have occurred this session;
 //   (c) the claimed plan's `summary:`/H1 text matches bulk-shape language — a
-//       SMALL keyword list: "batch", digit+…+item/clinic/holdout/battery,
+//       SMALL keyword list: "batch", digit+…+item/holdout/battery (plus the
+//       project's own record nouns, coord.config.json `bulkItemNouns`),
 //       "corpus", "sweep" (BULK_SHAPE_TESTS below).
 //
 // COUNTING METHOD: reads the session's OWN transcript file (`transcript_path`
@@ -91,6 +92,7 @@ import {
 import { readFrontmatterScalar, readH1 } from '../coord/build-index-lib.mjs';
 import { readExecModel } from '../coord/lint-filename-execmodel-drift.mjs';
 import { slugFromBranch } from '../coord/redgreen-lib.mjs';
+import { loadCoordConfig } from '../coord/coord-config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -112,12 +114,31 @@ export const DISPATCH_TOOLS = new Set(['Agent', 'Task']);
 // neither has the digit directly adjacent to the noun. The window is capped at 50
 // chars and this test only ever runs against a plan's own (short) summary/H1 text,
 // never a full plan body, so it can't drift onto an unrelated number.
-export const BULK_SHAPE_TESTS = [
-  /\bbatch(?:es)?\b/i,
-  /\bcorpus\b/i,
-  /\bsweep\b/i,
-  /\d+[\s\S]{0,50}?\b(?:items?|clinics?|holdouts?|batter(?:y|ies))\b/i,
-];
+//
+// plan 4172: the project's own record nouns (coord.config.json `bulkItemNouns`, each matched with
+// an optional plural `s`) join the generic digit+noun alternation; the core names none.
+export function bulkShapeTests(extraNouns = []) {
+  const nouns = (extraNouns || []).map(
+    (n) => `${String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}s?`,
+  );
+  const alt = ['items?', ...nouns, 'holdouts?', 'batter(?:y|ies)'].join('|');
+  return [
+    /\bbatch(?:es)?\b/i,
+    /\bcorpus\b/i,
+    /\bsweep\b/i,
+    new RegExp(`\\d+[\\s\\S]{0,50}?\\b(?:${alt})\\b`, 'i'),
+  ];
+}
+
+function configuredBulkItemNouns(repoRoot) {
+  try {
+    return loadCoordConfig(repoRoot).bulkItemNouns ?? [];
+  } catch {
+    return []; // fail-open: a Stop hook never throws
+  }
+}
+
+export const BULK_SHAPE_TESTS = bulkShapeTests(configuredBulkItemNouns(REPO_ROOT));
 
 export function isBulkShaped(text) {
   return BULK_SHAPE_TESTS.some((re) => re.test(String(text || '')));

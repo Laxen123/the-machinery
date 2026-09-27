@@ -45,6 +45,8 @@ import {
   gitWithLockRetry,
   git,
   abortRebaseAndDiagnose,
+  captureRebaseBaseline,
+  verifyRebaseReplay,
   gitMoveCommit,
   isNonFastForward,
   isForeignDirtRefusal,
@@ -75,7 +77,7 @@ import {
   setUnblock,
 } from './plan-body-state.mjs';
 // review round 2 (R2-9, key 79 efficiency): the canonical axis vocabulary + the `[axis: …]`
-// marker regex now live in the zero-import leaf module scripts/axis-tags.mjs (move-plan.mjs
+// marker regex now live in the zero-import leaf module scripts/coord/axis-tags.mjs (move-plan.mjs
 // imports and re-exports the same bindings under these names) instead of coming from
 // move-plan.mjs directly — importing that module pulled in its whole heavyweight CLI surface
 // (node:fs, child_process, ~15 coordination modules) for three constants + one regex.
@@ -226,11 +228,12 @@ const TASKS_HEADING_RX = /^#{1,6}\s+Tasks?(?![\p{L}\p{N}_-])/iu;
 // A file under one of the code roots — the deterministic test R2/R3 specify: does the plan's
 // diff touch code, or is it only a data pass (seed/store/observation writes, no code)? Fix round
 // 1 (finding E) fixed four defects here:
-//   1. backend/src/data/seed/** is clinic DATA, not code (excluded via the negative lookahead
+//   1. backend/src/data/seed/** is record DATA, not code (excluded via the negative lookahead
 //      on the `backend/src/` alternative — every OTHER backend/src/** path still matches).
 //   2. `frontend/src/**` was missing from the roots — added.
-//   3. `(?<![\w/])` anchors each root to a real path start, not a NESTED occurrence — a mention
-//      of `docs/scripts/example.md` no longer matches on the trailing `scripts/`.
+//   3. `(?<![\w/])` anchors each root to a real path start, not a NESTED occurrence — a doc
+//      path that happens to carry a `scripts/` segment further in no longer matches on that
+//      trailing occurrence.
 //   4. classifyPlanSpend below used to fall back to scanning the WHOLE body — REVERTED in round 3
 //      (item 1 below); see classifyPlanSpend's own comment.
 // Fix round 3 (items 3+4) fixed two more:
@@ -246,15 +249,15 @@ const TASKS_HEADING_RX = /^#{1,6}\s+Tasks?(?![\p{L}\p{N}_-])/iu;
 //      path start — the very beginning of the plan body, or right after whitespace or an opening
 //      quote/backtick/paren — never after arbitrary punctuation like a bare dot.
 // Review round 2 (R2-5, key 208 angle-A): the lookbehind admitted a preceding backtick or `(`
-// (so `` `scripts/foo.mjs` `` and a markdown link's TARGET, `[the runner](scripts/foo.mjs)`,
+// (so `` `scripts/<name>.mjs` `` and a markdown link's TARGET, `[the runner](scripts/<name>.mjs)`,
 // already counted) but not a preceding `[` — so a path named as a link's own TEXT
-// (`[scripts/foo.mjs](docs/runbooks/x.md)`) fell through uncounted. Added to the class.
+// (`[scripts/<name>.mjs](docs/<page>.md)`) fell through uncounted. Added to the class.
 const CODE_CHANGE_PATH_RX =
   /(?<=^|[\s"'`([])(?:backend\/scripts\/|backend\/src\/(?!data\/seed(?![\w-]))|frontend\/src\/|shared\/src\/|scripts\/)/;
 
 // plan 4069 (task 5): "does this plan CHANGE the pipeline / fix a bug, including the rerun that
 // proves the fix" (code-change — the full ceiling applies) vs "is this plan's work a bulk data
-// pass over clinics with no code change behind it" (data-pass — R2's "always asks" applies
+// pass over records with no code change behind it" (data-pass — R2's "always asks" applies
 // regardless of the ceiling). `spendClass:` frontmatter is the DURABLE form and is checked
 // FIRST (a plan's own explicit self-classification always wins); the path heuristic — does the
 // `## Tasks` section name a file under `backend/scripts/**`, `backend/src/**`, `shared/src/**`,
@@ -265,7 +268,7 @@ const CODE_CHANGE_PATH_RX =
 //
 // Fix round 3 (item 1, REVERTS round 1 finding E.4): a plan with no `## Tasks` heading used to
 // fall back to scanning the WHOLE body for a code-root mention. That let incidental narrative
-// prose ("this fixes a bug in `scripts/foo.mjs`") flip a genuine data-only rerun to code-change
+// prose ("this fixes a bug in `scripts/<name>.mjs`") flip a genuine data-only rerun to code-change
 // and skip R2's cash-forecast pause — the governing principle for this whole function is that an
 // AMBIGUOUS case always resolves to data-pass (ask), never to code-change, because a false ask
 // costs one operator click and a false code-change costs up to the ceiling in unapproved spend. No
@@ -1418,7 +1421,8 @@ function runBuildIndex(mainDir, scriptsDir) {
 // we re-*derive* it. No-op when INDEX already matches the tree (a sibling's
 // regen already covered it). `reset --hard HEAD~1` only ever drops OUR just-made
 // INDEX commit (never a sibling's work), so it is safe on the shared main tree.
-function syncIndexOnMaster(mainDir, scriptsDir, commitMsg, { retries = 8 } = {}) {
+// Exported (plan 4237 review finding 4153a4) so a test drives the replay guard through this loop.
+export function syncIndexOnMaster(mainDir, scriptsDir, commitMsg, { retries = 8 } = {}) {
   const env = { ...process.env, HUSKY: '0' };
   for (let i = 0; ; i++) {
     runBuildIndex(mainDir, scriptsDir);
@@ -1432,6 +1436,9 @@ function syncIndexOnMaster(mainDir, scriptsDir, commitMsg, { retries = 8 } = {})
       if (!isNonFastForward(e) || i >= retries) throw e;
       gitWithLockRetry(mainDir, ['reset', '--hard', 'HEAD~1']); // drop our regenerable INDEX commit
       gitWithLockRetry(mainDir, ['fetch', 'origin', 'master']);
+      // plan 4237: the same replay guard pushMasterWithRebase carries — any OTHER local commit
+      // this rebase replays must not come out carrying a clobbered index.
+      const baseline = captureRebaseBaseline(mainDir);
       try {
         // plan 2933: the SECOND sanctioned rebase-retry loop on the shared main checkout
         // (the one coord-git.mjs's abortRebaseAndDiagnose comment names). Same exemption as
@@ -1448,6 +1455,11 @@ function syncIndexOnMaster(mainDir, scriptsDir, commitMsg, { retries = 8 } = {})
         // here IS the shared main checkout. Both now route through the ONE coord-git primitive.
         throw abortRebaseAndDiagnose(mainDir, re, { env });
       }
+      verifyRebaseReplay(mainDir, {
+        ...baseline,
+        token: `index-sync-rebase-${process.pid}-${Math.floor(Math.random() * 1e9)}`,
+        env,
+      });
     }
   }
 }

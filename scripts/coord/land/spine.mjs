@@ -12,8 +12,8 @@
 // imported `main()` back.
 //
 // Both tasks moved their code out of scripts/done-worktree.mjs behaviour-identical (parity proven
-// by scripts/coord/land/parity.test.mjs's eight dry-run scenarios against committed goldens, plus
-// the full scripts/done-worktree.test.mjs, both unchanged in BEHAVIOUR by either move — several of
+// by this migration's parity-test suite's eight dry-run scenarios against committed goldens, plus
+// the full legacy test suite, both unchanged in BEHAVIOUR by either move — several of
 // its source-text pins needed REBINDING to this file, not a behaviour change; see their own
 // commits).
 //
@@ -22,7 +22,7 @@
 // they travel bodily with no container indirection needed: `isBranchAlreadyLanded`,
 // `resolveWorktree`, `planLandGateFor`, `readBatchManifest` (module-private here, exactly as they
 // were in done-worktree.mjs), and `canonicalSlugFromBranch`/`landGateRoster`/`seedLaneInputs` (core-noun-ok: names the real functions this move carries)
-// (exported — done-worktree.test.mjs / scripts/worktree-resolve.test.mjs import each directly, so
+// (exported — the legacy module's test suite / this module's own resolve-worktree test suite import each directly, so
 // the `export` keyword and the test's import path are the only things that changed).
 //
 // WHAT TASK 2B ADDED. `main()` — the five-phase driver: calls all five phases in order inside a
@@ -57,7 +57,7 @@
 //   - `maybeReexecSpineFromMain` (the plan-2697 MAIN re-exec guard) cannot MOVE here at all: it
 //     spawns a child process, reads `import.meta.url`/`fileURLToPath`, and decides whether THIS
 //     process should hand the land to MAIN's own copy of the driver — none of which a core module
-//     may do (Rule 3, docs/runbooks/scripts-module-layout.md). It does not need to move to be
+//     may do (Rule 3, docs/coord/scripts-layout.md). It does not need to move to be
 //     CALLED from here, though — it stays resident in done-worktree.mjs and joins the `spine`
 //     group instead (a plain shorthand property, since its own signature already matches the
 //     call), reached at its ORIGINAL call site inside this phase, unchanged.
@@ -248,7 +248,8 @@ export const CONTAINER_READS = Object.freeze({
 // slug. resolveWorktree() already resolves the truncated form via resolveWorktreeFromPorcelain's
 // path-ends-with/branch-name fallback (unchanged here), so `branch` is always the full-length
 // source of truth once resolution succeeds. Exported standalone so it's unit-testable without a
-// real git worktree (see scripts/worktree-resolve.test.mjs's "canonical slug derivation" cases).
+// real git worktree (see this module's own resolve-worktree test suite's "canonical slug
+// derivation" cases).
 //
 // Reuses redgreen-lib's slugFromBranch (the existing worktree-<slug> extractor) rather than a
 // bare .replace: a bare strip silently returns a NON-worktree branch (or undefined, from
@@ -260,8 +261,8 @@ export const CONTAINER_READS = Object.freeze({
 //
 // `extract` is injected with a lazy container-read default (the same shape as
 // fetchOriginMasterForRepin's `run`/`dry` params in preflight.mjs), so a production caller keeps
-// reading the bound container while a standalone unit test (scripts/worktree-resolve.test.mjs)
-// can inject redgreen-lib's slugFromBranch directly and never touch landDeps() — a default
+// reading the bound container while a standalone unit test (this module's own resolve-worktree
+// test suite) can inject redgreen-lib's slugFromBranch directly and never touch landDeps() — a default
 // parameter initializer only evaluates when the caller omits the argument. gpt-review round 2
 // (e75b9f): taken as a PLAIN second parameter rather than an options bag, so the obvious call
 // `canonicalSlugFromBranch(branch, slugFromBranch)` works; wrapped in `{ extract }` it would have
@@ -617,7 +618,7 @@ export async function phasePreflight() {
         `longer halts a land — it prints what the merge removes from master and the land ` +
         `proceeds — so there is nothing to release. Re-run with the slug alone:\n` +
         `  node scripts/done-worktree.mjs <slug>\n` +
-        `(docs/runbooks/branch-hygiene.md § Landed-work-reversion lint.)\n`,
+        `(docs/coord/worktrees.md § Landed-work-reversion lint.)\n`,
     );
     process.exit(2);
   }
@@ -1021,17 +1022,17 @@ export async function phasePreflight() {
       D.spine.emitSeam(
         D.L.SEAM.LAND_BLOCKED,
         `${landableErr.reason}: ${landableErr.message} — resolve on the shared main tree per ` +
-          `docs/runbooks/plans-workflow.md § "Pre-land guard (\`assertLandable\`)" ` +
+          `docs/coord/land-spine.md (the pre-land guard, \`assertLandable\`) ` +
           `(\`git stash drop\` / resolve+commit / push master), then re-invoke done-worktree.`,
         state,
       );
     }
   }
 
-  // lane + seed scope (plan 1300: the landing-lock serializes on SCOPE — global (core-noun-ok: names the real mutex-scope concept this locks on)
-  // for a monolith/manifest touch, the exact clinic shard set otherwise — so (core-noun-ok: names the real mutex-scope concept this locks on)
-  // disjoint-clinic seed-write lands stop contending while same-clinic ones still do; (core-noun-ok: names the real mutex-scope concept this locks on)
-  // plan 1867: clinic-sharded derived data (render-fingerprints / render-store) (core-noun-ok: names the real derived-data stores this scope covers)
+  // lane + seed scope (plan 1300: the landing-lock serializes on SCOPE — global (core-noun-ok: names the real config-seam concept — seedShardDir/seedLaneFile — this locks on)
+  // for a monolith/manifest touch, the exact record shard set otherwise — so (core-noun-ok: names the real config-seam concept — seedShardDir/seedLaneFile — this locks on)
+  // disjoint-record seed-write lands stop contending while same-record ones still do; (core-noun-ok: names the real mutationBanner label this mutex gates on)
+  // plan 1867: record-sharded derived data (render-fingerprints / render-store) (core-noun-ok: names the real derivedShardDirs store basenames this scope covers)
   // joins the same scope, and the append-only observations logs are global-on-touch)
   const changed = changedFiles(wtPath);
   // plan 3961 T2 review round 2 (90ea7b reversed / 12tht80 / 1obyck3 / 1ndzjh3 / e8d5pn): land
@@ -1128,7 +1129,7 @@ export async function phasePreflight() {
     // loaded coord.config.json) for shardIdPattern/scopeMaxKeys — the seam those two config keys
     // exist for was inert. cfg is the ACTUAL loaded config a few lines above; vetapp's own (core-noun-ok: names the real function this config feeds)
     // coord.config.json sets neither key, so this is byte-identical to before this fix.
-    maxClinics: cfg.scopeMaxKeys,
+    maxRecords: cfg.scopeMaxKeys,
     shardIdPattern: cfg.shardIdPattern,
   });
   state.lane = state.seedScope === null ? D.L.FREE_LANE : D.L.EXCLUSIVE_LANE;
@@ -1368,7 +1369,7 @@ export async function phasePreflight() {
   // ── SEED GATE VIEWS (contextExtras registry entry, plan 4042 T1 tail) ───────────────────── (core-noun-ok: is the real contextExtras entry name this describes)
   // These three reads — the seed-gate surface detector, the merge-base resolve, and the two (core-noun-ok: names the real reads this entry hoists)
   // shard views — used to sit down at 2.67, immediately above the gates that consume them
-  // (STATUS_FLIP, CONCLUSION_REVIEW, PRICE_GATE_FAILED, and the chains[]/paged-clinic signals (core-noun-ok: names the real registered seam/gate codes)
+  // (STATUS_FLIP, CONCLUSION_REVIEW, PRICE_GATE_FAILED, and the chains[]/paged-record signals
   // 2.68 needs). Plan 3295 (E1) hoisted them here, ahead of the PRICE TRUST GATE it moved ahead (core-noun-ok: names the real registered gate this precedes)
   // of build/pytest/battery (cheap-fails-first, R3). Plan 4042 moves the block's BODY out whole — (core-noun-ok: names the real registered gate this precedes)
   // the FIRST production `contextExtras` entry (scripts/coord/land/registry.mjs's fifth extension
@@ -1386,6 +1387,7 @@ export async function phasePreflight() {
       DRY: D.env.DRY,
       changed,
       seedShardDir,
+      seedLaneFile,
       alreadyLanded,
       resumedPast,
       state,
@@ -1432,6 +1434,7 @@ export async function phasePreflight() {
     seedGateBase,
     seedGateHead,
     shardIdPattern: cfg.shardIdPattern,
+    seedLaneFile,
     handoffLayout: cfg.handoffLayout,
     worldClaimFields: cfg.land.worldClaimFields,
     seamTimeRepin,
@@ -1444,7 +1447,7 @@ export async function phasePreflight() {
   // for that predicate and for why `review-marker`/`findings-open` above are NOT admitted here),
   // in the registry's own order:
   //
-  // 2.67 STATUS-FLIP CONSISTENCY GATE (plan 1074) — a seed diff that flips a clinic across the (core-noun-ok: is the real registered seam name and step number)
+  // 2.67 STATUS-FLIP CONSISTENCY GATE (plan 1074) — a seed diff that flips a record across the (core-noun-ok: is the real registered seam name and step number)
   //   active/closed line must carry the rationale the provenance rule demands. The degenerate
   //   member of the fold: no marker satisfies it, so it halts bare.
   // 2.672 CONCLUSION-REVIEW GATE (plan 2033) — a seed diff that OVERWRITES an established (core-noun-ok: is the real registered seam name and step number)
@@ -1476,7 +1479,7 @@ export async function phasePreflight() {
   // NAMING a project step function (`runPriceTrustGateStep`, `runBuildGateStep`, (core-noun-ok: names the real (now-inlined) step functions)
   // `runMobileGateStep`, `runPytestGateStep`, `runBatteryGateStep`) plus a sixth for the (core-noun-ok: names the real (now-inlined) step functions)
   // cloud-only pre-build prune. That is what stopped this phase moving under scripts/coord/
-  // however generic the rest of it reads (Rule 3, docs/runbooks/scripts-module-layout.md). Each
+  // however generic the rest of it reads (Rule 3, docs/coord/scripts-layout.md). Each
   // step is now declared BY ITS OWN ENTRY (`step`, alongside `lifecycle`), and the core's
   // `runPreflightGates` executes whatever is registered, in `order`:
   //
@@ -1491,9 +1494,9 @@ export async function phasePreflight() {
   // lines, same proof recording: every one of those lives inside the step that already owned it,
   // and the fold moved the CALL, not the body.
   //
-  // (2.65 GENERATED-ARTIFACT FRESHNESS PREFLIGHT (plan 556) was RETIRED by plan 1024.
-  //  frontend/public/clinics-index.json is now build-generated + gitignored, so there is (core-noun-ok: names the real retired artifact path this note explains)
-  //  no committed artifact that could be stale vs its seed at land time. The non-vet leak (core-noun-ok: names the real retired artifact path this note explains)
+  // (2.65 GENERATED-ARTIFACT FRESHNESS PREFLIGHT (plan 556) was RETIRED by plan 1024: the
+  //  generated record-index artifact it checked is now build-generated + gitignored, so there is
+  //  no committed artifact that could be stale vs its seed at land time. The non-vet leak (core-noun-ok: names the real seed-lane concept this note explains)
   //  guard that shared its trigger still runs at the worktree-branch push, where the
   //  scripts/hooks/pre-push.sh regenerates the index off the current seed and checks it.) (core-noun-ok: names the real script this note explains)
   //

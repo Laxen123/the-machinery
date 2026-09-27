@@ -14,7 +14,7 @@ the project's `/landing-queue` command** — same shape (a thin skill/command th
 landing-queue FIFO.
 
 **Location note:** `/landing-queue` actually lives as a the project _project_ slash command
-(`the project/.claude/commands/landing-queue.md`), not a `coord/skills/` master — so "mirror the
+(`.claude/commands/landing-queue.md`), not a `coord/skills/` master — so "mirror the
 landing-queue skill" means mirror its _shape_, not its literal location. This skill is minted under
 `coord/skills/` per plan 1373 D8 regardless (a coord master, junctioned into `~/.claude/skills/`,
 usable from any project that adopts the shared coord tooling) — see this file's own report-back for the

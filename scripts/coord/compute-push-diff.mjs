@@ -69,7 +69,7 @@ import { repoRootFrom } from './scripts-anchor.mjs';
 // detector, reused below instead of a hand-rolled regex. `redgreen-lib.mjs` is a
 // `scripts/` sibling (imports only `./landing-queue-lib.mjs` / `./board-lib.mjs`, neither
 // of which imports this module back) so this stays legal under
-// docs/runbooks/scripts-module-layout.md Rule 1 (no escape outside `scripts/`) and
+// docs/coord/scripts-layout.md Rule 1 (no escape outside `scripts/`) and
 // introduces no import cycle.
 import { slugFromBranch } from './redgreen-lib.mjs';
 // coord-refs.mjs imports nothing, so this adds no new cross-tree edge (plan 3756 step 2
@@ -181,7 +181,7 @@ export function computeRanges(stdin, { base = mergeBase, isAncestor = gitIsAnces
 // START — the boundary such that `start..localSha` contains exactly the
 // commits THIS push introduces, excluding anything origin/master already
 // carries. A worktree branch's "freshen" (`git fetch && git rebase
-// origin/master`, the standard procedure — docs/runbooks/branch-hygiene.md) can
+// origin/master`, the standard procedure — docs/coord/worktrees.md) can
 // leave remoteSha itself sitting BEHIND origin/master's current tip whenever
 // the branch's remote ref was last pushed before the freshen (e.g. a branch
 // published empty at cut time, so its remote tip IS an old master commit) —
@@ -286,15 +286,10 @@ export function isDrainStatusOnlyPushStdin(
 // branch's real land-time push, over the WHOLE accumulated delta, still runs the full
 // battery unconditionally, so this exemption only ever skips the INTERMEDIATE heartbeats,
 // never the branch's actual review.
-// plan 4071 T3: SWEEP_CHECKPOINT_PATH_RX stays a LITERAL — `sweep-checkpoints/` is not one of
-// coord-config.mjs's existing lists (it is not a plan-1867 DERIVED-DATA root — derivedShardDirs /
-// derivedGlobalFiles — nor the plan-1300 sharded seed root; it is this batch job's own checkpoint
-// directory, named nowhere else in the config seam). Deriving it would mean inventing a brand new
-// config key for a value with no sibling to drift from, which is exactly what T3 rules out
-// ("adding a key here would create a second list that drifts from the first" — there is no first
-// list here). Left exactly as it was before this plan.
-export const SWEEP_CHECKPOINT_PATH_RX =
-  /^backend\/data\/price-pipeline\/sweep-checkpoints\/[^/\\]+\.json$/;
+// plan 4172: the checkpoint path is coord.config.json's `sweepCheckpointPattern` (a regex SOURCE,
+// null = no such batch job), resolved by the CALLER exactly like renderStoreRx below — this
+// module carries no project path of its own. It supersedes plan 4071 T3's "stays a literal"
+// ruling, which predates the project-word lint that made the literal a shipped leak.
 
 // A regex that can never match a real repo-relative path — the empty/absent-row degrade for
 // renderStorePathRxFor below. Never throws, never matches: a config-less repo (or one whose
@@ -307,8 +302,8 @@ function escapeRegexLiteral(s) {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// plan 4071 T3: RENDER_STORE_PATH_RX used to hardcode `backend/data/price-pipeline/render-store/`
-// as a second copy of a path coord-config.mjs's `derivedShardDirs` (plan 1867) already carries.
+// plan 4071 T3: RENDER_STORE_PATH_RX used to hardcode the render-store directory as a second
+// copy of a path coord-config.mjs's `derivedShardDirs` (plan 1867) already carries.
 // Derive it instead: find the ONE derivedShardDirs row whose basename is `render-store` and
 // return a `^<dir>/` regex over it. Byte-identical on vetapp today (see the test asserting the
 // derived `.source` against the pre-4071 literal); an empty list or a list with no such row
@@ -320,15 +315,25 @@ export function renderStorePathRxFor(derivedShardDirs) {
   return new RegExp(`^${escapeRegexLiteral(row)}\\/`);
 }
 
+// plan 4172: the checkpoint twin of renderStorePathRxFor — compile the configured
+// `sweepCheckpointPattern`, or match nothing when the project configures none.
+export function sweepCheckpointRxFor(pattern) {
+  if (typeof pattern !== 'string' || !pattern) return NEVER_MATCH_RX;
+  return new RegExp(pattern);
+}
+
 // `renderStoreRx` follows this plan's caller-injects rule: this module carries no project
 // knowledge of its own, so the CALLER (main(), the CLI entry point below) resolves
 // coord.config.json's derivedShardDirs once and passes the derived regex in. Default
 // NEVER_MATCH_RX is the config-less-repo posture, not a real fallback value.
-export function isSweepCheckpointOnlyPush(files, { renderStoreRx = NEVER_MATCH_RX } = {}) {
+export function isSweepCheckpointOnlyPush(
+  files,
+  { renderStoreRx = NEVER_MATCH_RX, sweepCheckpointRx = NEVER_MATCH_RX } = {},
+) {
   return (
     Array.isArray(files) &&
     files.length > 0 &&
-    files.every((f) => SWEEP_CHECKPOINT_PATH_RX.test(f) || renderStoreRx.test(f))
+    files.every((f) => sweepCheckpointRx.test(f) || renderStoreRx.test(f))
   );
 }
 
@@ -386,6 +391,7 @@ export function isSweepCheckpointOnlyPushStdin(
     base = mergeBase,
     isAncestor = gitIsAncestor,
     renderStoreRx = NEVER_MATCH_RX,
+    sweepCheckpointRx = NEVER_MATCH_RX,
   } = {},
 ) {
   const refs = qualifyingRefs(stdin);
@@ -395,6 +401,7 @@ export function isSweepCheckpointOnlyPushStdin(
   if (!destinationRefs.every((r) => isWorktreeBranchRef(r.remoteRef))) return false;
   return isSweepCheckpointOnlyPush(computeChangedFiles(stdin, { diff, base, isAncestor }), {
     renderStoreRx,
+    sweepCheckpointRx,
   });
 }
 
@@ -446,8 +453,12 @@ export function main() {
   // the same fail-closed direction this flag already documents.
   if (argv.includes('--sweep-checkpoint-only')) {
     const repoRoot = repoRootFrom(dirname(fileURLToPath(import.meta.url)));
-    const renderStoreRx = renderStorePathRxFor(loadCoordConfig(repoRoot).derivedShardDirs);
-    process.exitCode = isSweepCheckpointOnlyPushStdin(stdin, { renderStoreRx }) ? 0 : 1;
+    const cfg = loadCoordConfig(repoRoot);
+    const renderStoreRx = renderStorePathRxFor(cfg.derivedShardDirs);
+    const sweepCheckpointRx = sweepCheckpointRxFor(cfg.sweepCheckpointPattern);
+    process.exitCode = isSweepCheckpointOnlyPushStdin(stdin, { renderStoreRx, sweepCheckpointRx })
+      ? 0
+      : 1;
     return;
   }
 

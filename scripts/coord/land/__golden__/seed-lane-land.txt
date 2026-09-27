@@ -9,7 +9,7 @@ DRY git -C <dry:demo-slug> rev-parse HEAD
 pre-queue freshen: stand-down — chunk mode is enabled; the optional freshen yields its shared wall to the authoritative at-head sync
 DRY node scripts/landing-queue.mjs enqueue demo-slug --lane seed --host <host> --session <session>
 DRY node scripts/landing-queue.mjs status demo-slug --json
-DRY node scripts/landing-lock.mjs acquire demo-slug --wait --scope {"clinics":["clinic-1"]}
+DRY node scripts/landing-lock.mjs acquire demo-slug --wait --scope {"shards":["record-1"]}
 DRY node scripts/board.mjs set-state demo-slug LANDING
 DRY git -C <dry:demo-slug> rev-parse origin/master
 DRY git -C <dry:demo-slug> rev-parse HEAD

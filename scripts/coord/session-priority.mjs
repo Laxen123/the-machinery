@@ -16,11 +16,19 @@
 //     landing-queue head resolves `high` regardless of its own plan's `priority:` stamp — see
 //     "THE HEAD OUTRANKS EVERYTHING" below.
 //   - The SessionStart hook establishes a Windows BelowNormal baseline for every session tree.
-//     `applyCpuClass()` then steps a `low` session's heavy children down to Windows IDLE / POSIX
-//     nice +19, and does the same for ANY tier's heavy children while a LOCAL land is in flight at
-//     the queue head and this session is not it (`yieldToHead`, plan 3226). The two axes remain
-//     independent: a yielding `high` sibling still outranks a waiting `medium` ticket, while its
-//     heavy child yields the CPU to the head.
+//     `applyCpuClass()` steps ANY tier's heavy children down to Windows IDLE / POSIX nice +19 while
+//     a LOCAL land is in flight at the queue head and this session is not it (`yieldToHead`, plan
+//     3226). The two axes remain independent: a yielding `high` sibling still outranks a waiting
+//     `medium` ticket, while its heavy child yields the CPU to the head.
+//
+// PRIORITY ORDERS ADMISSION; IT DOES NOT THROTTLE A SLOT-HOLDER (plan 4236 T4, folding plan 4234
+// Task 2 — the operator-confirmed reading, paraphrased: priority decides the order in which
+// waiting jobs get a slot, but a job that already holds a slot is no longer slowed down for being
+// low priority; the plan about to land keeps first claim on the CPU). Before plan 4236 a `low`
+// tier ALSO demoted its admitted heavy tree to IDLE, so a low job that had waited its turn for one
+// of the two slots then crawled inside it — holding the slot longer, which is exactly what makes
+// the next waiter time out. The `low` tier now orders queue admission only; the plan-3226 head
+// yield is unchanged, and dropping a demote is not an elevation (see NO ELEVATION below).
 //
 // THE HEAD OUTRANKS EVERYTHING (plan 3226, operator directive 2026-08-16 — "the plan that is
 // ahead in the landing queue that is about to land has priority over the CPU"). The landing-queue
@@ -538,9 +546,12 @@ export function resolveSessionTier(opts = {}) {
 }
 
 // Demote ONE child process (and, by OS inheritance, everything it spawns afterwards) to the
-// IDLE class when the session is low-priority — one rung below the BelowNormal baseline the
-// SessionStart hook already established for the whole session tree (plan 3544). Returns whether
-// the demotion was applied.
+// IDLE class while a local land is in flight at the queue head and this session is not it
+// (`yieldToHead`, plan 3226) — one rung below the BelowNormal baseline the SessionStart hook
+// already established for the whole session tree (plan 3544). Returns whether the demotion was
+// applied. `tier` no longer demotes anything (plan 4236 T4: priority orders ADMISSION, it does not
+// throttle a slot-holder — see the header); the parameter stays so both production callers keep
+// their call shape.
 //
 // WHY inheritance is enough: both Windows priority class and POSIX nice are inherited by children
 // created AFTER the change, and callers apply this synchronously on the pid spawnWithTreeKill just
@@ -551,10 +562,8 @@ export function resolveSessionTier(opts = {}) {
 //
 // NEVER THROWS: a failed demotion (EPERM under an odd token, a pid that already exited) must not
 // take down the heavy run it was trying to be polite about — warn once and proceed at the default
-// class. `high`/`medium` return false without touching the process at all (no elevation, ever) —
-// UNLESS `yieldToHead` is set (plan 3226: a local land is in flight at the queue head and this
-// session is not it), in which case ANY tier demotes. The two conditions share one target and one
-// mechanism; `low` and `yieldToHead` are simply two independent reasons to reach for it.
+// class. Without `yieldToHead` every tier returns false without touching the process at all (no
+// elevation, ever, and since plan 4236 no tier-driven demotion either).
 export function applyCpuClass(
   pid,
   tier,
@@ -564,7 +573,7 @@ export function applyCpuClass(
     warn = (m) => console.error(m),
   } = {},
 ) {
-  if (tier !== 'low' && !yieldToHead) return false;
+  if (!yieldToHead) return false;
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
     setPriority(pid, CPU_CLASS_DEMOTED);

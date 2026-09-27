@@ -18,11 +18,11 @@
 // docs/handoff/infra-debt.md, NOT implemented here). Any future candidate an
 // owning script could handle belongs in that script, not in this file.
 //
-// SIX pinned patterns (deliberately narrow — see § Tight patterns below):
+// SEVEN pinned patterns (deliberately narrow — see § Tight patterns below):
 //   1. heavy-test-unqueued  — a whole-suite / whole-directory test run not
 //                             wrapped in scripts/queued-run.mjs
 //   2. bare-main-install    — a bare `pnpm install` in the MAIN checkout
-//   3. seed-corpus-walk     — a WILDCARD walk over the seed clinic shards
+//   3. seed-corpus-walk     — a WILDCARD walk over the seed record shards
 //   4. env-walk-up          — a `dotenv` import (there is no dotenv in this
 //                             workspace; the hand-rolled form throws)
 //   5. stale-lock-rm        — an `rm` of a git LOCK file (plan 3752): the
@@ -33,11 +33,18 @@
 //                             `--slug review-debt-*` (plan 3967): the shape
 //                             a session reaches for when it hand-mints a
 //                             fastlane plan's follow-up review-debt plan
-//                             instead of scripts/park-review-findings.mjs,
+//                             instead of the review-findings parking tool,
 //                             which also dispositions every parked finding
 //                             into it in the SAME write — a hand mint skips
 //                             that half entirely, leaving the findings
 //                             undispositioned.
+//   7. prettier-hand-check  — a hand-run `prettier --check`/`--write`
+//                             (plan 4211): can silently examine ZERO files
+//                             and still report success (an ignored path, or
+//                             any path under another checkout's ignore
+//                             files), where node scripts/prettier-check.mjs
+//                             checks per file via prettier's Node API and
+//                             never prints a false clean.
 //
 // § Pattern 5 is the one that cost real time rather than risk. 2026-09-05 an
 // unattended cloud drain hand-rolled `GD=…; rm -f "$GD"/index.lock …` and sat
@@ -51,7 +58,7 @@
 //
 // § WARN, never DENY. Exit 0 always; the warning rides PreToolUse
 // `hookSpecificOutput.additionalContext` via loader-common's shared
-// `emitInjection` envelope (the non-blocking channel the wiki loaders use).
+// `injectionEnvelope` (the envelope `emitInjection` prints) (the non-blocking channel the wiki loaders use).
 // Legitimate one-offs exist and the value is naming the tool at the moment of
 // the mistake, not blocking. A deny here would get the hook muted within a day.
 //
@@ -95,7 +102,7 @@
 // like a TEST file, so `vitest run --config vitest.config.ts` is still a whole
 // suite); a glob must sit ON the seed path, in the same token; a WORKTREE
 // install never fires (worktree installs are lock-free by design, per
-// docs/runbooks/branch-hygiene.md § The THIRD lock); a segment that merely
+// docs/coord/worktrees.md § The install lock); a segment that merely
 // PRINTS or COMMITS text (`echo`, `printf`, `git commit`) runs nothing at all;
 // and a SEARCHER (`grep`/`rg`/…) hunting for dotenv usage is auditing it, not
 // importing it.
@@ -134,13 +141,27 @@
 // PRINTS hits, exactly like the stale-lock one, and the block itself lives in
 // the shell hook.
 //
+// § A THIRD CLI classifier flag, `--unqueued-heavy-test-json` (plan 4241),
+// same shape again: worktree-guard.sh DENIES a bare `node --test <file>` when
+// <file>'s repo-relative PATH is on the MEASURED heavy list
+// scripts/heavy-test-files.mjs regenerates from the battery ledger
+// (scripts/coord/heavy-test-files.json) — matched on path, not basename, so
+// two same-named files in different directories (review round: findings
+// ee6714/147420) are never conflated. See `unqueuedHeavyTestFileHits`'s own
+// doc comment below for the match shape and the fail-open contract. The two
+// DENY classifiers do not share a
+// predicate (pytest sweeps vs. a single `node --test` file are unrelated
+// shapes) but share every other convention: segment walk, command position,
+// fail-open on doubt, one parser for both this file and the shell hook.
+//
 // Fails OPEN on any parse/IO error — a tool hook must never break the turn.
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { emitInjection, readStdin } from './lib/loader-common.mjs';
+import { injectionEnvelope, readStdin, runHookCli } from './lib/loader-common.mjs';
+import { loadCoordConfig } from '../coord/coord-config.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
@@ -692,13 +713,36 @@ const TEST_INFO_FLAG_RE = /(?:^|\s)(?:--version|-V|--help|-h)(?=\s|$)/;
 // The seed shard tree, RESOLVED — the glob token is resolved against the cwd in
 // effect and tested for membership, never matched as text. Two review rounds
 // pushed it here: a text match on the path both MISSED the real corpus (the repo
-// tracks 9,061 `clinic-NNN.json` files OUTSIDE the seed, under
-// backend/data/<pass>/extract/, which the spec's bare `clinic-*.json` trigger
+// tracks thousands of record-shaped `<record>-NNN.json` files OUTSIDE the seed,
+// under per-pass extract directories, which a bare filename-glob trigger
 // false-fired on) and could be escaped by a `..` traversal that still contained
 // the seed text. Resolution answers both at once, and it is what makes
-// `cd backend/src/data/seed/clinics/SE && ls clinic-*.json` fire while
-// `ls backend/src/data/seed/clinics/../extract/clinic-*.json` does not.
-const SEED_SHARD_DIR = 'backend/src/data/seed/clinics';
+// `cd <shard tree>/SE && ls <record>-*.json` fire while
+// `ls <shard tree>/../extract/<record>-*.json` does not.
+//
+// plan 4172: the tree is coord.config.json's, never a literal here — `seedShardDir` joined with
+// the LITERAL leading directory segments of `shardIdPattern` (the part before the first regex
+// construct), so it is exactly the directory the per-record shard files live under. A project
+// with no shard layout gets null, and the seed-walk detector stays silent.
+export function seedShardTreeRel({ seedShardDir, shardIdPattern } = {}) {
+  if (!seedShardDir) return null;
+  const lead = [];
+  for (const seg of String(shardIdPattern || '')
+    .split('/')
+    .slice(0, -1)) {
+    if (!/^[\w.-]+$/.test(seg)) break;
+    lead.push(seg);
+  }
+  return [seedShardDir, ...lead].join('/');
+}
+
+function configuredSeedShardTreeRel(repoRoot) {
+  try {
+    return seedShardTreeRel(loadCoordConfig(repoRoot));
+  } catch {
+    return null; // an unreadable config never blocks a Bash command — the detector just stays off
+  }
+}
 // A glob token only counts as a PATH if it looks like one — a bare `*` from an
 // unrelated flag value (`--ignore='*'`) must not resolve into a seed walk just
 // because the cwd happens to be a shard dir.
@@ -801,38 +845,44 @@ const PATTERNS = {
   'heavy-test-unqueued': {
     what: 'This looks like a heavy test run outside the queue.',
     tool: 'node scripts/queued-run.mjs <cmd...>   (backend suite: pnpm --filter @vetapp/backend test:queued)',
-    doc: 'vetapp/CLAUDE.md § Pre-commit / pre-land checks',
+    doc: "your project's `CLAUDE.md` § Pre-commit / pre-land checks",
     exempt: ['queued-run.mjs', 'test:queued'],
   },
   'bare-main-install': {
     what: 'This looks like a bare pnpm install in the MAIN checkout.',
     tool: 'node scripts/install-main.mjs   (single-holder mutex + heals a torn node_modules/.pnpm store first)',
-    doc: 'docs/runbooks/branch-hygiene.md § The THIRD lock',
+    doc: 'docs/coord/worktrees.md § The install lock',
     exempt: ['install-main.mjs'],
   },
   'seed-corpus-walk': {
-    what: 'This looks like a hand-rolled wildcard walk over the seed clinic shards.',
+    what: 'This looks like a hand-rolled wildcard walk over the seed record shards.',
     tool: '_pp_census_corpus (Python) / @vetapp/shared seed-io (TS/JS)',
-    doc: 'vetapp/CLAUDE.md § Clinic data — read/write ONLY through the seam',
+    doc: "your project's `CLAUDE.md` — the seed source-of-truth rule: read/write ONLY through the seam",
     exempt: ['_pp_census_corpus', 'seed-io'],
   },
   'env-walk-up': {
     what: 'This looks like a hand-rolled env walk-up. There is no dotenv in this workspace — the import throws.',
-    tool: 'loadHobbyEnv() from scripts/hobby-env.mjs (Node) / import _load_env (Python)',
-    doc: 'vetapp/CLAUDE.md § Secrets / env',
+    tool: "the project's own env loader (Node) / its Python twin — never a second hand-rolled walk-up",
+    doc: "your project's `CLAUDE.md` § Secrets / env",
     exempt: ['hobby-env.mjs', '_load_env'],
   },
   'stale-lock-rm': {
     what: 'This looks like a hand-rolled rm of a stale git lock file.',
     tool: 'node scripts/clear-stale-worktree-lock.mjs   (removes a lock only when provably idle, never one a live op holds; from MAIN it sweeps every worktree — for a MAIN-checkout wedge the tool is node scripts/heal-main.mjs). Both forms are allow-listed, so they auto-approve where a raw rm cannot.',
-    doc: 'docs/runbooks/branch-hygiene.md § Stale worktree `index.lock` self-heal',
+    doc: 'docs/coord/worktrees.md § Stale index.lock self-heal',
     exempt: ['clear-stale-worktree-lock.mjs', 'heal-main.mjs'],
   },
   'review-debt-hand-mint': {
     what: 'This looks like a hand-minted review-debt follow-up plan.',
-    tool: 'node scripts/park-review-findings.mjs <planId>   (mints the follow-up plan from the recorded review sidecar AND dispositions every parked finding into it, in one write)',
-    doc: 'docs/runbooks/plans-workflow.md § `lane:` stamp',
+    tool: 'the review-findings parking tool (project-side): mints the follow-up plan from the recorded review sidecar AND dispositions every parked finding into it, in one write',
+    doc: 'docs/coord/review.md § The calibration ladder',
     exempt: ['park-review-findings.mjs'],
+  },
+  'prettier-hand-check': {
+    what: "This looks like a hand-run prettier --check/--write, which can silently examine ZERO of the files it was asked about and still report success (an ignored path exits 0; a path under another checkout's ignore files — e.g. a worktree path checked from the main checkout — is swallowed the same way).",
+    tool: 'node scripts/prettier-check.mjs <paths…> [--allow-ignored]   (per-file prettier Node-API wrapper — reports IGNORED/CLEAN/DIRTY/MISSING per file, never a false clean)',
+    doc: 'docs/runbooks/cloud-drain-landing.md (the hand-run prettier note)',
+    exempt: ['prettier-check.mjs'],
   },
 };
 
@@ -894,7 +944,7 @@ function isInstallSegment(seg) {
 // not blanking).
 // `--out=<path>` carries a real path in its VALUE; classify that, not the whole
 // `--flag=` token (review round 4).
-// The value is unquoted in turn: `--out="…/clinics/*.json"` kept its leading
+// The value is unquoted in turn: `--out="…/records/*.json"` kept its leading
 // quote and resolved outside the seed root (round 5). The name charset admits a
 // dot so a dotted flag (`--out.dir=`) is stripped too.
 const flagValue = (tok) => {
@@ -903,6 +953,7 @@ const flagValue = (tok) => {
 };
 
 function isSeedWalkSegment(seg, { dir, seedRoot }) {
+  if (!seedRoot) return false; // plan 4172: no configured shard tree
   if (exemptIn(seg, 'seed-corpus-walk')) return false;
   return tokensOf(seg.raw).some((tok) => {
     // An ESCAPED wildcard is a literal character — the shell expands nothing, so
@@ -955,7 +1006,7 @@ function isReviewDebtHandMintSegment(seg) {
 }
 
 // An `rm` whose TARGET LIST names a git lock. The command-position test is what
-// keeps a mere mention out (`node scripts/x.mjs --keep rm index.lock` is not an
+// keeps a mere mention out (`node scripts/<name>.mjs --keep rm index.lock` is not an
 // rm), and the target walk skips FLAG tokens so `-f`/`--force` never counts.
 function isStaleLockRmSegment(seg) {
   if (exemptIn(seg, 'stale-lock-rm')) return false;
@@ -964,6 +1015,36 @@ function isStaleLockRmSegment(seg) {
   // scope call the deny does. No variables here: a per-segment detector cannot
   // see an earlier line's assignment, and a lock BASENAME is already enough.
   return lockTargetsIn(seg, new Map()).length > 0;
+}
+
+// A hand-run `prettier --check`/`--write` (plan 4211): prettier's CLI can silently examine ZERO
+// of the files it was asked about and still print the success sentence with exit 0 — an ignored
+// path is swallowed with no warning, and any path under ANOTHER checkout's ignore files (a
+// `.claude/worktrees/<slug>/…` file checked from the MAIN checkout, whose own
+// `.gitignore`/`.prettierignore` swallow it) is silently skipped too. The automated land/push
+// gates are unaffected (repo/worktree-root cwd, relative paths); this pattern is for the hand-run
+// shape only. Five spellings recognised: bare `prettier`, `npx prettier`, `pnpm exec prettier`,
+// `pnpm prettier`, and `node node_modules/prettier/bin/prettier.cjs` — the first four share one
+// command-position lookup (`npx`/`pnpm`/`exec` are already WRAPPERS, so prefixOk's chain already
+// carries them to a bare `prettier` token); the fifth is `node` at command position followed by a
+// token naming that exact bin path.
+const PRETTIER_RE = /(?:^|[\\/])prettier(?:\.cmd|\.exe)?$/i;
+const PRETTIER_NODE_RE = /(?:^|[\\/])node(?:\.exe)?$/i;
+const PRETTIER_CJS_PATH_RE = /(?:^|[\\/])node_modules[\\/]prettier[\\/]bin[\\/]prettier\.cjs$/i;
+// Only `--check`/`--write` matter — a bare `prettier <file>` with neither flag only echoes the
+// formatted file to stdout and asserts nothing, so it is not the false-green shape this warns
+// about.
+const PRETTIER_CHECK_OR_WRITE_RE = /(?:^|\s)(?:--check|--write)(?=[\s=]|$)/;
+
+function isPrettierHandRunSegment(seg) {
+  if (exemptIn(seg, 'prettier-hand-check')) return false;
+  const { raw } = seg;
+  if (atCommandPosition(raw, PRETTIER_RE)) return PRETTIER_CHECK_OR_WRITE_RE.test(raw);
+  const nodeAt = commandTokenIndex(raw, PRETTIER_NODE_RE);
+  if (nodeAt < 0) return false;
+  const target = stripQuotes(normTokensOf(raw)[nodeAt + 1] ?? '').replace(/\\/g, '/');
+  if (!PRETTIER_CJS_PATH_RE.test(target)) return false;
+  return PRETTIER_CHECK_OR_WRITE_RE.test(raw);
 }
 
 // ── the stale-lock classifier, shared with worktree-guard.sh ─────────────────
@@ -1072,16 +1153,20 @@ const DETECTORS = {
   'env-walk-up': isEnvWalkSegment,
   'stale-lock-rm': isStaleLockRmSegment,
   'review-debt-hand-mint': isReviewDebtHandMintSegment,
+  'prettier-hand-check': isPrettierHandRunSegment,
 };
 
 // Returns the pattern keys this command trips, in PATTERNS order. `[]` = silent.
-export function evaluate(cmd, { cwd = process.cwd(), repoRoot = REPO_ROOT } = {}) {
+// `seedTreeRel` (plan 4172): the repo-relative shard tree; omitted, it is read from the repo's own
+// coord.config.json (a test passes it explicitly instead of standing up a config).
+export function evaluate(cmd, { cwd = process.cwd(), repoRoot = REPO_ROOT, seedTreeRel } = {}) {
   const command = String(cmd ?? '');
   if (!command.trim()) return [];
 
   let dir = cwd ? String(cwd) : repoRoot;
   // Invariant per evaluation — resolved once, not per segment (review round 4).
-  const seedRoot = resolve(repoRoot, SEED_SHARD_DIR);
+  const treeRel = seedTreeRel === undefined ? configuredSeedShardTreeRel(repoRoot) : seedTreeRel;
+  const seedRoot = treeRel ? resolve(repoRoot, treeRel) : null;
   const hits = new Set();
 
   for (const seg of segmentPairs(command)) {
@@ -1141,29 +1226,29 @@ export function logFirings(
   }
 }
 
-function main() {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
+// The hook's whole outcome as DATA (plan 4238): the warn envelope it would print, or
+// null for silence. The firing-log append is a side effect it still performs itself
+// (same as before the fold). The in-process PreToolUse dispatcher (pretool-dispatch.mjs)
+// calls this; main() below is a thin CLI wrapper that prints it.
+export function evaluateHook(payload) {
   const cmd = String(payload?.tool_input?.command ?? '');
-  if (!cmd) return;
+  if (!cmd) return null;
 
   const hits = evaluate(cmd, { cwd: payload?.cwd ?? process.cwd() });
-  if (!hits.length) return;
+  if (!hits.length) return null;
 
   logFirings(hits);
   // The SHARED injection envelope (loader-common), not a private copy of its
   // shape — a future change to the contract then lands in one place.
-  emitInjection(
+  return injectionEnvelope(
     formatWarning(hits),
     `⚠️  hand-rolled-step guard: ${hits.join(', ')}`,
     'PreToolUse',
   );
+}
+
+function main() {
+  return runHookCli(evaluateHook);
 }
 
 // CLI mode for worktree-guard.sh (plan 3752 T4): same PreToolUse payload on
@@ -1311,11 +1396,306 @@ function classifyUnqueuedPytestSweepMain() {
   );
 }
 
+// ── the unqueued-heavy-single-test-file classifier, shared with worktree-guard.sh
+// (plan 4241) ────────────────────────────────────────────────────────────────
+// A KNOWN-heavy `node --test <file>` run currently passes through no wrapper at
+// all — single-file runs are ticket-free BY RULE (vetapp/CLAUDE.md § Pre-commit
+// / pre-land checks: "Single-file runs stay ticket-free"), which is right for a
+// 5s file and wrong for one measured at 1,499,615 ms
+// (scripts/pre-push-hook.test.mjs, before plan 4228 shrank it). Session // dangling-ok: dated measurement of a project test file
+// decisions S1-S7 on plan 4241 are the design record; this comment only
+// restates what a reader of THIS classifier needs.
+//
+// THE LIST IS DATA, NEVER HAND-TYPED HERE (S1). `heavyPaths` — a Set of
+// repo-relative PATHS (normalized: backslashes to `/`, a leading `./`
+// stripped), not basenames — comes from scripts/coord/heavy-test-files.json,
+// which scripts/heavy-test-files.mjs regenerates from the battery ledger's
+// measured `durationMs` values. This module never decides what counts as
+// heavy; it only matches a command shape against whatever the list currently
+// says.
+//
+// MATCH SHAPE (S4, mirrors pytestSweepHitInText's own tightness discipline —
+// prefer a MISS to a false DENY, the plan-3969 lesson): a segment whose
+// command token is `node` (node flags before `--test` are transparent,
+// INCLUDING the separate value token of a known value-taking node option
+// written without `=` — `-r`/`--require`, `--import`, `--loader`,
+// `--experimental-loader`, `--env-file(-if-exists)`, `-C`/`--conditions`,
+// `--input-type`, `--inspect-port`, `--title`, `--stack-size`, see
+// NODE_VALUE_FLAGS below — so `node --require preload.cjs --test <file>`
+// still reaches `--test` instead of stopping at `preload.cjs` as a positional
+// [findings 09455b/abec6a]; a non-flag, non-value, non-`--test` token there
+// still means node's first positional is a script path, not the `--test`
+// flag itself, which is also what structurally excludes the wrapped form: in
+// `node scripts/queued-run.mjs -- node --test <file>` the OUTER `node`'s
+// first positional is `scripts/queued-run.mjs`, so it never reaches the
+// literal `--test` token and the classifier reports no hit for that command
+// position — no name-based exemption needed, same structural trick
+// unqueuedPytestSweepHits already relies on for its own wrapped form), the
+// literal token `--test`, then (after any further flags — an inner
+// `--test-reporter=…`, another node flag, OR the separate value token of a
+// value-taking `--test-*`/node option, see NODE_TEST_VALUE_FLAGS below, which
+// is skipped rather than compared to the list [finding b64789] —
+// `--test-name-pattern pre-push-hook.test.mjs scripts/light.test.mjs` must // dangling-ok: illustrative project test names
+// not deny `light.test.mjs` on the strength of the PATTERN's value) an
+// argument whose repo-relative PATH — not its basename — matches a listed
+// heavy file [findings ee6714/147420: two files sharing a basename in
+// different directories, e.g. scripts/coord/land/registry.test.mjs vs.
+// scripts/fb-responder/registry.test.mjs, must not be conflated]. The // dangling-ok: illustrative project test name
+// argument matches when it is RESOLVED against the command's own working
+// directory and then made relative to that checkout's toplevel (the worktree
+// root when `dir` sits under `.claude/worktrees/<slug>`, the main repoRoot
+// otherwise), and that relative path (posix separators) equals a listed path
+// EXACTLY and does not escape the toplevel (round-2 review: a suffix-only
+// match at :1492 let an unrelated path merely ENDING in a listed path false-
+// DENY, e.g. `unrelated/scripts/coord/land/registry.test.mjs` or an absolute
+// path outside the repo that happens to end in a listed suffix; :1539 — a
+// relative target is now resolved against the tracked cwd, not compared as
+// raw text; :1573 — an absolute target outside the checkout now fails the
+// relative-path check instead of being treated as a repo heavy test). A bare
+// basename typed from inside the wrong directory does NOT match and stays
+// allowed (fail open, not a false DENY); so does anything that throws while
+// resolving (unknown cwd/toplevel). `$( … )`, a glob-hidden target, `vitest`,
+// and the backend suite all stay allowed — none of them match this shape at
+// all.
+//
+// FAIL OPEN, same direction as the list load below: a heavy list of ZERO
+// paths (not yet regenerated, or genuinely measured empty per S7) means
+// this classifier never fires — checked first, before spawning the segment
+// walk, so an empty list costs nothing per call.
+const NODE_RE = /^node$/;
+
+// Node options that take a value in a SEPARATE token (never just `=value`) —
+// enumerated per current Node CLI docs, the same "list the known shapes,
+// don't invent a general next-token-is-a-value rule" discipline
+// WRAPPER_VALUE_FLAGS above already uses. Not exhaustive: a value-taking flag
+// missing here only widens the pre-`--test` MISS (finding 09455b/abec6a is a
+// documented, acceptable miss direction), it never causes a false DENY.
+const NODE_VALUE_FLAGS = new Set([
+  '-r',
+  '--require',
+  '--import',
+  '--loader',
+  '--experimental-loader',
+  '--env-file',
+  '--env-file-if-exists',
+  '-C',
+  '--conditions',
+  '--input-type',
+  '--inspect-port',
+  '--title',
+  '--stack-size',
+]);
+
+// `--test-*` options that take a value in a separate token (finding b64789):
+// skipped post-`--test` so the VALUE is never compared to the heavy list.
+const NODE_TEST_VALUE_FLAGS = new Set([
+  '--test-name-pattern',
+  '--test-skip-pattern',
+  '--test-reporter',
+  '--test-reporter-destination',
+  '--test-concurrency',
+  '--test-timeout',
+  '--test-shard',
+  '--test-isolation',
+  '--test-coverage-include',
+  '--test-coverage-exclude',
+]);
+
+// scripts/coord/heavy-test-files.json — read fresh on every hook invocation
+// (this repo's existing convention for small hook-time config; see
+// configuredSeedShardTreeRel above for the same shape over coord.config.json).
+// A PreToolUse hook process is one-shot, so there is no staleness to manage.
+// FAIL OPEN on every doubt: a missing file (not yet regenerated), an
+// unreadable one, malformed JSON, or a non-array `files` all yield an EMPTY
+// Set — which unqueuedHeavyTestFileHits below reads as "nothing is heavy",
+// never as an error to surface. PATHS, not basenames (findings ee6714/147420):
+// normalized to forward slashes with any leading `./` stripped, since that is
+// the one normalisation the loader owns and heavyTestFileHitInSegment's match
+// is now on the full repo-relative path.
+// `HEAVY_TEST_FILES_JSON_OVERRIDE` is a test seam (mirrors the
+// `HAND_ROLLED_GUARD_LOG` override `logFirings` already uses) so a shell-level
+// worktree-guard.test.mjs case can point the CLI classifier at a fixture list
+// without mutating the real, ship-empty committed JSON.
+function normalizeHeavyPath(p) {
+  const s = String(p).replace(/\\/g, '/');
+  return s.startsWith('./') ? s.slice(2) : s;
+}
+
+function loadHeavyTestFilePaths(repoRoot) {
+  const path =
+    process.env.HEAVY_TEST_FILES_JSON_OVERRIDE ||
+    join(repoRoot, 'scripts', 'coord', 'heavy-test-files.json');
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf8'));
+    const files = Array.isArray(raw?.files) ? raw.files : [];
+    return new Set(
+      files.filter((f) => typeof f === 'string' && f.length > 0).map(normalizeHeavyPath),
+    );
+  } catch {
+    return new Set(); // missing/unreadable/malformed ⇒ fail open, nothing is heavy
+  }
+}
+
+// The git toplevel for `dir` (round-2 review, :1539/:1573): a worktree's
+// toplevel is the worktree root itself, never the outer main-checkout
+// repoRoot, mirroring what `git rev-parse --show-toplevel` would report from
+// inside that worktree — this repo's worktrees live at a fixed convention,
+// `<repoRoot>/.claude/worktrees/<slug>` (the same convention `isWorktreeCwd`/
+// `isUnder` already rely on), so the toplevel is derived from that fixed
+// shape with pure path text, no git spawn. A `dir` NOT under `.claude/
+// worktrees/` (the main checkout, or anywhere else) uses `repoRoot` as-is.
+function toplevelFor(dir, repoRoot) {
+  const norm = String(dir).replace(/\\/g, '/');
+  const m = norm.match(/^(.*[\\/]\.claude[\\/]worktrees[\\/][^\\/]+)(?:[\\/]|$)/);
+  return resolve(m ? m[1] : repoRoot);
+}
+
+// Does argument text `argPath`, RESOLVED against the command's own working
+// directory `dir` and then made relative to `toplevel`, name one of the
+// listed heavy paths? A hit requires the relative path (posix separators) to
+// equal a listed path EXACTLY and to not escape `toplevel` (a leading `..`,
+// or — the cross-drive-on-Windows case `path.relative` returns as an
+// unrelated absolute path — `isAbsolute`). Round-2 review: the old
+// suffix-only match (`argPath.endsWith('/' + listed)`) let an unrelated path
+// merely ENDING in a listed path false-DENY (:1492, two findings — an
+// unrelated repo-relative path, or an absolute path outside the checkout
+// that happens to share a listed suffix) and never resolved a relative
+// target against the tracked cwd at all (:1539). ANY failure to resolve
+// (bad path text, `dir`/`toplevel` unknown) fails OPEN, same direction as
+// every other doubt in this file.
+function matchesHeavyPath(argPath, dir, toplevel, heavyPaths) {
+  if (!dir || !toplevel) return false;
+  try {
+    const abs = resolve(dir, argPath);
+    const rel = relative(toplevel, abs).replace(/\\/g, '/');
+    // Round-3 review: escape means a whole `..` SEGMENT, not any name starting with two dots.
+    if (!rel || rel === '.' || rel === '..' || rel.startsWith('../') || isAbsolute(rel))
+      return false;
+    // Round-3 review: Windows paths are case-insensitive, so `SCRIPTS/X.TEST.MJS` must still hit.
+    // Compared case-insensitively everywhere — a false DENY would need two tracked files that
+    // differ only in case, which a Windows-worked repo cannot hold.
+    const key = rel.toLowerCase();
+    for (const p of heavyPaths) if (p.toLowerCase() === key) return true;
+    return false;
+  } catch {
+    return false; // fail open — malformed path text, never a false DENY
+  }
+}
+
+// One segment's own match against S4's pinned shape. Reads the RAW segment's
+// quote-aware tokens (normTokensOf), same as pytestSweepHitInText's sibling
+// detectors — a quoted file argument must still match. `dir` is the cwd this
+// segment runs from (the walk's own cd-tracking in unqueuedHeavyTestFileHits
+// below) and `repoRoot` is the outer main-checkout root; `toplevelFor` turns
+// those into the checkout whose heavy-list paths the argument is compared
+// against.
+function heavyTestFileHitInSegment(seg, heavyPaths, dir, repoRoot) {
+  if (heavyPaths.size === 0) return false;
+  const toplevel = toplevelFor(dir, repoRoot);
+  const toks = normTokensOf(seg.raw);
+  const nodeAt = commandTokenIndex(seg.raw, NODE_RE);
+  if (nodeAt < 0) return false;
+  let i = nodeAt + 1;
+  let sawTestFlag = false;
+  for (; i < toks.length; i++) {
+    const t = toks[i];
+    if (t === '--test') {
+      sawTestFlag = true;
+      i++;
+      break;
+    }
+    if (t.startsWith('-')) {
+      // A value-taking node option written WITHOUT `=` consumes the next
+      // token too, so it is never mistaken for node's first positional
+      // (findings 09455b/abec6a).
+      if (!t.includes('=') && NODE_VALUE_FLAGS.has(t)) i++;
+      continue;
+    }
+    // A positional token before `--test` ever appears: node's first argument
+    // is not the test flag (a script path, e.g. the wrapped form's
+    // `scripts/queued-run.mjs`) — not this shape.
+    return false;
+  }
+  if (!sawTestFlag) return false;
+  for (; i < toks.length; i++) {
+    const raw = toks[i];
+    if (raw.startsWith('-')) {
+      // Skip the separate value token of a value-taking `--test-*`/node
+      // option so its VALUE is never compared to the heavy list (finding
+      // b64789). An `--opt=value` form already carries its own value, so it
+      // never consumes the following token.
+      if (!raw.includes('=') && (NODE_TEST_VALUE_FLAGS.has(raw) || NODE_VALUE_FLAGS.has(raw))) {
+        i++;
+      }
+      continue;
+    }
+    const argPath = stripQuotes(raw);
+    if (matchesHeavyPath(argPath, dir, toplevel, heavyPaths)) return true;
+  }
+  return false;
+}
+
+// Same segment-walk contract as unqueuedPytestSweepHits: cd-tracking,
+// vetapp-only (a sibling repo's test run is not this hook's business), prose
+// segments skipped. `heavyPaths` is an injectable override for tests (mirrors
+// `seedTreeRel` on `evaluate()`) — a Set of normalized repo-relative PATHS,
+// not basenames (findings ee6714/147420); omitted, it is loaded fresh from
+// the repo's own scripts/coord/heavy-test-files.json.
+export function unqueuedHeavyTestFileHits(
+  cmd,
+  { cwd = process.cwd(), repoRoot = REPO_ROOT, heavyPaths } = {},
+) {
+  const command = String(cmd ?? '');
+  if (!command.trim()) return [];
+  const paths = heavyPaths ?? loadHeavyTestFilePaths(repoRoot);
+  if (paths.size === 0) return [];
+
+  let dir = cwd ? String(cwd) : repoRoot;
+  const hits = [];
+
+  for (const seg of segmentPairs(command)) {
+    const target = segmentCdTarget(seg);
+    if (target) {
+      try {
+        dir = resolve(dir, target);
+      } catch {
+        /* unparseable target — keep the current dir */
+      }
+      continue;
+    }
+    if (!isInsideRepo(dir, repoRoot)) continue;
+    if (isProseSegment(seg)) continue;
+    if (heavyTestFileHitInSegment(seg, paths, dir, repoRoot))
+      hits.push({ segment: seg.raw.trim() });
+  }
+
+  return hits;
+}
+
+// CLI mode for worktree-guard.sh (plan 4241), twinning `--unqueued-pytest-sweep-json`
+// above: same PreToolUse payload on stdin, prints the unqueued-heavy-test-file hits.
+function classifyUnqueuedHeavyTestMain() {
+  const raw = readStdin();
+  let cmd = '';
+  let cwd;
+  try {
+    const payload = JSON.parse(raw);
+    cmd = String(payload?.tool_input?.command ?? '');
+    cwd = payload?.cwd;
+  } catch {
+    cmd = '';
+  }
+  process.stdout.write(
+    JSON.stringify({ hits: unqueuedHeavyTestFileHits(cmd, { cwd: cwd ?? process.cwd() }) }),
+  );
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
     if (process.argv[2] === '--stale-lock-rm-json') classifyMain();
     else if (process.argv[2] === '--unqueued-pytest-sweep-json') classifyUnqueuedPytestSweepMain();
-    else main();
+    else if (process.argv[2] === '--unqueued-heavy-test-json') classifyUnqueuedHeavyTestMain();
+    else await main();
   } catch {
     // fail open — a tool hook must never break the turn
   }

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // scripts/landing-lock.mjs — same-PC LANDING mutex (plan 234), SCOPE-AWARE since
-// plan 1300 (per-clinic seed sharding Phase 3).
+// plan 1300 (per-record seed sharding Phase 3).
 //
 // WHY: the `🟢 LANDING` board marker (board.mjs set-state … LANDING) is an
 // ADVISORY cross-PC signal with a TOCTOU window — two same-PC sessions can both
@@ -12,14 +12,14 @@
 // their serialization still rides on the git push-rejection guard (a non-ff push
 // is refused). This lock is the same-PC layer ON TOP of that.
 //
-// SCOPE NARROWING (plan 1300): with the seed sharded per-clinic, two seed writes
-// to DISJOINT clinics are conflict-free by construction and must NOT serialize.
+// SCOPE NARROWING (plan 1300): with the seed sharded per-record, two seed writes
+// to DISJOINT records are conflict-free by construction and must NOT serialize.
 // Each acquire therefore carries a SCOPE — `{"global":true}` (the monolith /
-// manifests / anything not a clinic shard) or `{"clinics":["clinic-1",…]}` (the
+// manifests / anything not a record shard) or `{"shards":["record-1",…]}` (the
 // exact shard set the land touches) — and an acquire BLOCKS only on a holder
-// whose scope OVERLAPS its own (global overlaps everything; clinic sets overlap
-// on a non-empty intersection). Same-clinic collisions still serialize exactly
-// as before; disjoint-clinic 🟥 lands are effectively 🟩. An acquire with no
+// whose scope OVERLAPS its own (global overlaps everything; record sets overlap
+// on a non-empty intersection). Same-record collisions still serialize exactly
+// as before; disjoint-record 🟥 lands are effectively 🟩. An acquire with no
 // --scope defaults to global (pre-1300 behaviour, and the safe conservative
 // reading for any caller that cannot compute its shard set).
 //
@@ -58,14 +58,17 @@ import { join, dirname, basename } from 'node:path';
 import { hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import { resolveMain, sleepSync } from './coord-git.mjs';
+// plan 4172: the read-both window's legacy scope key names come from the repo's own
+// coord.config.json (`legacyScopeKeys`), resolved once in main() — never a literal here.
+import { loadCoordConfig } from './coord-config.mjs';
 import { resolveCommonDirPath } from './lock-path.mjs';
 // parseFlags comes from the ADOPTED module, NOT coord-git: this file is byte-synced to
 // siblings whose coord-git.mjs is a slim local shim without it (plan 1777).
 import { parseFlags } from './parse-flags.mjs';
 // The file-level O_EXCL create/reap mechanism behind this file's registry META-MUTEX is shared
 // with battery-lock.mjs's single-holder lock (plan 1678) — see scripts/coord/excl-lock.mjs. This module
-// is a NEW coordShare member (adopted by tandapp alongside this file, per the dependency-ordering
-// rule in docs/runbooks/coord-sharing.md) since THIS file — unlike battery-lock — is
+// is a NEW coordShare member (adopted by tandapp alongside this file, per the
+// coordShare dependency-ordering rule) since THIS file — unlike battery-lock — is
 // byte-identical-synced to a sibling. registryVerdict and the scoped multi-holder registry
 // read-modify-write below are NOT part of that shared module — only the mutex mechanism is.
 import { tryCreateExclusive, readExclusive, reapStaleExclusive } from './excl-lock.mjs';
@@ -124,27 +127,57 @@ export function ageMinutes(iso, nowMs) {
   return Math.max(0, Math.round((nowMs - t) / 60000));
 }
 
-// Normalize a scope value. Accepts `{"global":true}`, `{"clinics":[...]}`,
-// undefined/null (→ global — the conservative pre-1300 meaning). Throws on a
-// malformed shape so a caller bug surfaces at acquire time, not as a silently
+// plan 4172 — the record-set scope key is `shards` (the vocabulary coord.config.json already
+// uses: seedShardDir, shardIdPattern, derivedShardDirs). READ-BOTH WINDOW: a project that renamed
+// the key declares its old name(s) in coord.config.json's `legacyScopeKeys`, and
+//   • normalizeScope reads a legacy key exactly like `shards` (a holder written by a landing-lock
+//     copy on an OLDER branch, which knows only the old key, still contends correctly), and
+//   • withLegacyMirrors writes every legacy key BESIDE `shards` on the persisted holder entry (so
+//     that older copy, reading a NEW holder, finds the key it knows instead of throwing
+//     "malformed scope" inside its own acquire).
+// Remove the window by dropping `legacyScopeKeys` from the config once one full land cycle has
+// passed; nothing in this file names a legacy key.
+let activeLegacyScopeKeys = [];
+
+/** Test/CLI seam: set the legacy scope key names (null/undefined = none). */
+export function setLegacyScopeKeys(keys) {
+  activeLegacyScopeKeys = Array.isArray(keys) ? [...keys] : [];
+}
+
+const isIdList = (v) => Array.isArray(v) && v.every((c) => typeof c === 'string');
+
+// Normalize a scope value. Accepts `{"global":true}`, `{"shards":[...]}` (or a configured legacy
+// key carrying the same list), undefined/null (→ global — the conservative pre-1300 meaning).
+// Throws on a malformed shape so a caller bug surfaces at acquire time, not as a silently
 // non-blocking lock.
-export function normalizeScope(scope) {
+export function normalizeScope(scope, legacyKeys = activeLegacyScopeKeys) {
   if (scope == null) return { global: true };
   if (typeof scope !== 'object')
     throw new Error(`landing-lock: malformed scope ${JSON.stringify(scope)}`);
   if (scope.global === true) return { global: true };
-  if (Array.isArray(scope.clinics) && scope.clinics.every((c) => typeof c === 'string')) {
-    if (scope.clinics.length === 0) return { global: true }; // an empty shard set can't prove disjointness
-    return { clinics: [...new Set(scope.clinics)].sort() };
+  const key = ['shards', ...(legacyKeys || [])].find((k) => isIdList(scope[k]));
+  if (key) {
+    const ids = scope[key];
+    if (ids.length === 0) return { global: true }; // an empty shard set can't prove disjointness
+    return { shards: [...new Set(ids)].sort() };
   }
   throw new Error(`landing-lock: malformed scope ${JSON.stringify(scope)}`);
 }
 
-// Do two (normalized) scopes contend? Global overlaps everything; clinic sets
+// The persisted shape of a normalized scope: `shards` plus every configured legacy key mirrored
+// beside it (see the READ-BOTH WINDOW note above). A global scope carries no list to mirror.
+export function withLegacyMirrors(normalized, legacyKeys = activeLegacyScopeKeys) {
+  if (normalized.global) return normalized;
+  const out = { shards: normalized.shards };
+  for (const k of legacyKeys || []) out[k] = normalized.shards;
+  return out;
+}
+
+// Do two (normalized) scopes contend? Global overlaps everything; record sets
 // overlap on a non-empty intersection. A holder record with NO scope (written by
 // a pre-1300 process during rollout) reads as global — never under-serialize.
-export function scopesOverlap(a, b) {
-  return normalizedOverlap(normalizeScope(a), normalizeScope(b));
+export function scopesOverlap(a, b, legacyKeys = activeLegacyScopeKeys) {
+  return normalizedOverlap(normalizeScope(a, legacyKeys), normalizeScope(b, legacyKeys));
 }
 
 // The ONE overlap definition, on already-normalized scopes. registryVerdict calls
@@ -152,14 +185,14 @@ export function scopesOverlap(a, b) {
 // loop) — never a second hand-rolled copy of the semantics.
 function normalizedOverlap(na, nb) {
   if (na.global || nb.global) return true;
-  const set = new Set(na.clinics);
-  return nb.clinics.some((c) => set.has(c));
+  const set = new Set(na.shards);
+  return nb.shards.some((c) => set.has(c));
 }
 
 // Human-readable scope tag for status/error lines.
-export function scopeLabel(scope) {
-  const n = normalizeScope(scope);
-  return n.global ? 'global' : n.clinics.join(',');
+export function scopeLabel(scope, legacyKeys = activeLegacyScopeKeys) {
+  const n = normalizeScope(scope, legacyKeys);
+  return n.global ? 'global' : n.shards.join(',');
 }
 
 // Parse the registry file's text into an array of holder records. v2 shape is
@@ -207,13 +240,22 @@ export function parseLockArgs(argv, spec = LOCK_ARG_SPEC) {
 //   BUSY  → at least one overlapping holder is fresh (reported, with its age).
 //   STALE → every overlapping holder is stale (staleHolders lists them all;
 //           --force-stale removes exactly those, never a disjoint or fresh one).
-export function registryVerdict({ holders, slug, scope, nowMs, staleMin = DEFAULT_STALE_MIN }) {
+export function registryVerdict({
+  holders,
+  slug,
+  scope,
+  nowMs,
+  staleMin = DEFAULT_STALE_MIN,
+  legacyKeys = activeLegacyScopeKeys,
+}) {
   const own = holders.find((h) => h.slug === slug);
   const others = holders.filter((h) => h.slug !== slug);
   // Normalize OUR scope ONCE (scopesOverlap would re-sort/dedup the same array per
   // holder); the overlap semantics stay single-sourced in normalizedOverlap.
-  const ourScope = normalizeScope(scope);
-  const blockers = others.filter((h) => normalizedOverlap(ourScope, normalizeScope(h.scope)));
+  const ourScope = normalizeScope(scope, legacyKeys);
+  const blockers = others.filter((h) =>
+    normalizedOverlap(ourScope, normalizeScope(h.scope, legacyKeys)),
+  );
   if (blockers.length === 0) return { action: own ? 'REENTRANT' : 'ACQUIRE' };
   // Unknown age (corrupt timestamp) can't be proven healthy → treat as stale and
   // surface, consistent with the board landing-age convention. STALE never auto-steals anyway.
@@ -395,7 +437,7 @@ export function acquireAt(
     _statMs = (p) => statSync(p).mtimeMs,
   },
 ) {
-  const entry = { slug, pid, host, iso: nowIso, scope: normalizeScope(scope) };
+  const entry = { slug, pid, host, iso: nowIso, scope: withLegacyMirrors(normalizeScope(scope)) };
   return withRegistryMutex(lockPath, () => {
     const holders = readHolders(lockPath);
     if (holders === null) {
@@ -613,6 +655,14 @@ export function resolveLockPath() {
 
 export function main() {
   const { cmd, positionals, flags } = parseLockArgs(process.argv.slice(2));
+  // plan 4172: resolve the read-both window's legacy key names once, from the main checkout's own
+  // config. A config that cannot be read degrades to "no legacy key" — a legacy-keyed holder then
+  // reads as malformed and acquire fails CLOSED (exit 5), never silently non-blocking.
+  try {
+    setLegacyScopeKeys(loadCoordConfig(resolveMain()).legacyScopeKeys);
+  } catch {
+    setLegacyScopeKeys(null);
+  }
   if (!cmd) {
     console.error('landing-lock: no command (acquire|release|status|path)');
     return 5;

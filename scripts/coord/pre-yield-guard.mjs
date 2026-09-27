@@ -32,12 +32,15 @@
 import { execFileSync } from 'node:child_process';
 import { statSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { hostname } from 'node:os';
 import { pathToFileURL } from 'node:url';
 import {
   resolveMain,
   gitWithLockRetry,
   pushMasterWithRebase,
   withCoordLock,
+  readCoordOpJournal,
+  LOCK_FREE_READ_ENV,
 } from './coord-git.mjs';
 import { COORDINATION_RX, coordinationRx } from './check-coordination-branch.mjs';
 import { loadCoordConfig } from './coord-config.mjs';
@@ -90,6 +93,50 @@ export function budgetShortfall({
   return elapsedMs + STASH_RESERVE_MS > budgetMs ? elapsedMs : null;
 }
 
+// plan 4237 T3: the plan-4026 gate above covers the commit, but the commit's push can turn into
+// fetch + REBASE + push on a non-ff — unbounded against the Stop hook's 60 s harness timeout. On
+// 2026-09-26 that tail needed more than 50 s on the loaded box, the harness killed the hook
+// mid-rebase, and the detached half-rebased MAIN it left is what heal-main then aborted and
+// re-ran into the 30-path rollback commit. So the rebase itself is gated too: it starts only
+// when the remaining budget covers a MEASURED rebase plus the stash reserve (the fetch before it
+// and the push after it). The figure is the slowest closed `push-rebase` window among this
+// host's most recent REBASE_SAMPLE_WINDOWS in the coord-op journal (slowest, not median: the
+// wrong direction costs a killed rebase, the safe one costs a deferred push), or
+// DEFAULT_REBASE_RESERVE_MS when the journal has none. When it does not fit, the hook keeps its
+// local commit and LEAVES the push to the next heal-main pass, whose push carries the plan-4237
+// replay guard — a local commit waiting for a heal is harmless, a killed rebase is not.
+export const DEFAULT_REBASE_RESERVE_MS = 30_000;
+export const REBASE_SAMPLE_WINDOWS = 20;
+
+// Pure: the rebase figure from parsed journal entries (oldest first).
+export function measuredRebaseMs(entries, { host = hostname() } = {}) {
+  const starts = new Map();
+  const durations = [];
+  for (const e of entries || []) {
+    if (e?.tool !== 'push-rebase' || (host && e.host && e.host !== host) || !e.token) continue;
+    const t = Date.parse(e.ts);
+    if (!Number.isFinite(t)) continue;
+    if (e.phase === 'start') starts.set(e.token, t);
+    else if (e.phase === 'done' && starts.has(e.token)) {
+      durations.push(t - starts.get(e.token));
+      starts.delete(e.token);
+    }
+  }
+  const recent = durations.filter((d) => d >= 0).slice(-REBASE_SAMPLE_WINDOWS);
+  return recent.length ? Math.max(...recent) : DEFAULT_REBASE_RESERVE_MS;
+}
+
+// Pure: may a rebase start now? No budget = unlimited (every caller but the Stop hook).
+export function rebaseFitsBudget({
+  budgetMs = 0,
+  startMs = PROCESS_START_MS,
+  nowMs = Date.now(),
+  rebaseMs = DEFAULT_REBASE_RESERVE_MS,
+} = {}) {
+  if (!budgetMs || budgetMs <= 0) return true;
+  return nowMs - startMs + rebaseMs + STASH_RESERVE_MS <= budgetMs;
+}
+
 // Compact, filesystem-safe timestamp for the stash/commit label.
 export function stamp(d = new Date()) {
   return d.toISOString().replace(/[:.]/g, '').replace('T', '-').slice(0, 15);
@@ -115,7 +162,7 @@ function pathsOf(line) {
 // Split once at the status-read boundary: every downstream classifier and mutator sees
 // only loose session work, while live pipeline artefacts remain owned by their writer.
 // Matching every path also handles rename/copy entries and git's collapsed untracked
-// directory form (`?? backend/data/price-pipeline/batches/x/`).
+// directory form (`?? backend/data/job-pipeline/batches/x/`).
 export function partitionJobOutput(porcelain, jobOutputPrefixes) {
   const parkable = [];
   const jobOutput = [];
@@ -363,7 +410,9 @@ const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 export function hasRealDirt(mainDir, paths) {
   if (!paths.length) return false;
   try {
-    gitWithLockRetry(mainDir, ['diff', '--quiet', 'HEAD', '--', ...paths]);
+    gitWithLockRetry(mainDir, ['diff', '--quiet', 'HEAD', '--', ...paths], {
+      env: LOCK_FREE_READ_ENV,
+    });
     // exit 0 → every one of these paths' tracked content is identical to HEAD once
     // normalized; fall through to the untracked check below.
   } catch (e) {
@@ -495,6 +544,8 @@ export function guard(
     // can place the deadline without sleeping; production always measures from process entry.
     budgetMs = 0,
     startMs = PROCESS_START_MS,
+    // plan 4237 T3: a test seam for the rebase figure; production measures it from the journal.
+    rebaseReserveMs = null,
     now = new Date(),
     log = console.log,
     exec = execFileSync,
@@ -535,7 +586,11 @@ export function guard(
       indexSanity: sanity,
     };
   }
-  const statusPorcelain = gitWithLockRetry(mainDir, ['status', '--porcelain']);
+  // plan 4237 T2: this read runs BEFORE the coord lock is taken, on the shared MAIN checkout —
+  // never let it write the index back (see LOCK_FREE_READ_ENV).
+  const statusPorcelain = gitWithLockRetry(mainDir, ['status', '--porcelain'], {
+    env: LOCK_FREE_READ_ENV,
+  });
   const { jobOutputPrefixes } = loadCoordConfig(mainDir);
   const { parkable: porcelain, jobOutput } = partitionJobOutput(statusPorcelain, jobOutputPrefixes);
   const jobOutputPaths = dirtyPaths(jobOutput);
@@ -544,7 +599,7 @@ export function guard(
     const more = jobOutputPaths.length - shown.length;
     log(
       `pre-yield-guard: leaving ${jobOutputPaths.length} live pipeline-output path(s) in place ` +
-        `(backend/data/price-pipeline/** is job-owned, never parked): ${shown.join(', ')}` +
+        `(${jobOutputPrefixes.join(', ')} is job-owned, never parked): ${shown.join(', ')}` +
         (more ? `, +${more} more` : ''),
     );
   }
@@ -632,7 +687,16 @@ export function guard(
   return withCoordLock(
     mainDir,
     () =>
-      guardMutate(mainDir, porcelain, { slug, commit, commitSafe, budgetMs, startMs, now, log }),
+      guardMutate(mainDir, porcelain, {
+        slug,
+        commit,
+        commitSafe,
+        budgetMs,
+        startMs,
+        rebaseReserveMs,
+        now,
+        log,
+      }),
     { tool: 'pre-yield-guard' },
   );
 }
@@ -641,7 +705,16 @@ export function guard(
 function guardMutate(
   mainDir,
   porcelain,
-  { slug, commit, commitSafe, budgetMs = 0, startMs = PROCESS_START_MS, now, log },
+  {
+    slug,
+    commit,
+    commitSafe,
+    budgetMs = 0,
+    startMs = PROCESS_START_MS,
+    rebaseReserveMs = null,
+    now,
+    log,
+  },
 ) {
   const label = `wip-${slug}-${stamp(now)}`;
   const { jobOutputPrefixes } = loadCoordConfig(mainDir);
@@ -772,7 +845,15 @@ function guardMutate(
         committed = true;
         // Rebase-replays our commit onto origin/master on a non-ff, preserving the
         // content (unlike coordWrite, whose retry reverts paths to be regenerated).
-        pushMasterWithRebase(mainDir);
+        // plan 4237 T3: …but only when the budget left covers a measured rebase.
+        pushMasterWithRebase(mainDir, {
+          beforeRebase: () =>
+            rebaseFitsBudget({
+              budgetMs,
+              startMs,
+              rebaseMs: rebaseReserveMs ?? measuredRebaseMs(readCoordOpJournal(mainDir)),
+            }),
+        });
         log(
           `pre-yield-guard: committed + pushed ${paths.length} idle commit-safe file(s) to master (${paths.join(
             ', ',
@@ -786,6 +867,22 @@ function guardMutate(
           ...(corruptPaths.length ? { corrupted: corruptPaths } : {}),
         };
       } catch (e) {
+        // plan 4237 T3: the push needed a rebase the budget cannot cover. Keep the commit —
+        // heal-main's master sync pushes it (through the replay guard) on its next pass.
+        if (committed && e?.code === 'PUSH_REBASE_DEFERRED') {
+          log(
+            `pre-yield-guard: committed ${paths.length} idle commit-safe file(s) to LOCAL master; ` +
+              `the push needs a rebase this run's budget cannot finish, so it is left to the next ` +
+              `heal-main pass (\`node scripts/heal-main.mjs\`).`,
+          );
+          return {
+            protected: true,
+            dirty: true,
+            mode: 'commit-push-deferred',
+            paths,
+            ...(corruptPaths.length ? { corrupted: corruptPaths } : {}),
+          };
+        }
         // Push failed: undo the local commit so the dirt returns to the working tree,
         // then fall through to STASH — never leave an unpushed local master commit (it
         // would diverge from origin and break sibling cuts).
@@ -824,8 +921,10 @@ function guardMutate(
   // push` errors ("no local changes to save"). Leave the corrupted file(s) exactly as-is
   // on disk and return without touching anything further.
   const stillDirty = dirtyPaths(
-    partitionJobOutput(gitWithLockRetry(mainDir, ['status', '--porcelain']), jobOutputPrefixes)
-      .parkable,
+    partitionJobOutput(
+      gitWithLockRetry(mainDir, ['status', '--porcelain'], { env: LOCK_FREE_READ_ENV }),
+      jobOutputPrefixes,
+    ).parkable,
   );
   if (corruptPaths.length && stillDirty.every((p) => corruptSet.has(p))) {
     log(

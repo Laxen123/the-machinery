@@ -22,6 +22,7 @@ import {
   violationsIntroduced,
   listCorpusFiles,
   SCOPE_PATHSPECS,
+  MAIN_POLLER_FILES,
 } from './assert-lock-free-git-polls.mjs';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -360,14 +361,18 @@ test('collectAddedByFile: only in-scope, non-exempt files are collected', () => 
   assert.deepEqual([...byFile.keys()], ['scripts/hooks/coord-write-guard-pretooluse.mjs']);
 });
 
-test('SCOPE_PATHSPECS covers exactly the three in-scope surfaces', () => {
+test('SCOPE_PATHSPECS covers exactly the in-scope surfaces', () => {
   // scripts/coord/redgreen*.mjs joined the list when plan 3962 moved redgreen-lib.mjs into the
   // coord core. Listed explicitly rather than folded into a scripts/** glob: this rule judges
   // POLLERS, a named short list, and widening the pathspec would change what the gate means.
+  // plan 4237 T2 added the three named MAIN pollers the same way, file by file.
   assert.deepEqual(SCOPE_PATHSPECS, [
     ':(glob)scripts/hooks/**/*.mjs',
     ':(glob)scripts/redgreen*.mjs',
     ':(glob)scripts/coord/redgreen*.mjs',
+    'scripts/coord/pre-yield-guard.mjs',
+    'scripts/coord/heal-main.mjs',
+    'scripts/coord/index-sanity.mjs',
   ]);
 });
 
@@ -416,4 +421,91 @@ test('listCorpusFiles: matches every file inScope() accepts in the real tree (pl
   // Not a vacuous pass: scripts/coord/redgreen-lib.mjs must actually be one of the files being
   // compared, or this test would trivially agree with itself on an empty set.
   assert.ok(expected.has('scripts/coord/redgreen-lib.mjs'));
+});
+
+// ── plan 4237 T2: shape (c), wrapper calls in the named MAIN pollers ─────────────────────────
+
+test('plan 4237 T2: the named MAIN pollers are in scope, other coord modules are not', () => {
+  for (const f of MAIN_POLLER_FILES) assert.equal(inScope(f), true, f);
+  assert.equal(inScope('scripts/coord/coord-git.mjs'), false);
+  for (const f of MAIN_POLLER_FILES) assert.ok(SCOPE_PATHSPECS.includes(f), f);
+});
+
+test('plan 4237 T2: a deliberate optional-lock status/diff read through a coord wrapper goes RED in a MAIN poller', () => {
+  const fixture = [
+    "import { gitWithLockRetry, git } from './coord-git.mjs';",
+    'export function probe(mainDir) {',
+    "  const s = gitWithLockRetry(mainDir, ['status', '--porcelain']);",
+    '  const d = git(mainDir, [',
+    "    'diff',",
+    "    '--cached',",
+    '  ]);',
+    '  return s + d;',
+    '}',
+  ].join('\n');
+  const vs = findViolations(fixture, { mainPoller: true });
+  assert.deepEqual(
+    vs.map((v) => [v.line, v.kind]),
+    [
+      [3, 'missing-lock-free-env'],
+      [4, 'missing-lock-free-env'],
+    ],
+  );
+  // the same text outside a MAIN poller is not judged by shape (c)
+  assert.deepEqual(findViolations(fixture), []);
+});
+
+test('plan 4237 T2: LOCK_FREE_READ_ENV / GIT_OPTIONAL_LOCKS / the flag in the call satisfies shape (c)', () => {
+  const ok = [
+    "gitWithLockRetry(mainDir, ['status', '--porcelain'], { env: LOCK_FREE_READ_ENV });",
+    "git(mainDir, ['diff', '--quiet'], { env: { GIT_OPTIONAL_LOCKS: '0' } });",
+    "gitRaw(mainDir, ['--no-optional-locks', 'status']);",
+    // not status/diff → out of scope
+    "git(mainDir, ['rev-parse', 'HEAD']);",
+    // member call, not the coord wrapper
+    "s.git(mainDir, ['status']);",
+    // waived
+    "// lock-free-poll-ok: the commit path must write the index\ngit(mainDir, ['status']);",
+  ];
+  for (const t of ok) assert.deepEqual(findViolations(t, { mainPoller: true }), [], t);
+});
+
+test('plan 4237 T2: a module-local wrapper whose body carries the marker covers its callers (index-sanity shape)', () => {
+  const safe = [
+    'function git(dir, args, { exec = execFileSync } = {}) {',
+    "  return exec('git', ['-C', dir, ...args], { env: gitIsolatedEnv(LOCK_FREE_READ_ENV) });",
+    '}',
+    "const t = git(dir, ['diff', '--cached', '--name-only'], { exec });",
+  ].join('\n');
+  assert.deepEqual(findViolations(safe, { mainPoller: true }), []);
+  const unsafe = safe.replace('gitIsolatedEnv(LOCK_FREE_READ_ENV)', 'gitIsolatedEnv()');
+  assert.deepEqual(
+    findViolations(unsafe, { mainPoller: true }).map((v) => v.kind),
+    ['missing-lock-free-env'],
+  );
+});
+
+test('plan 4237 T2: a direct spawn whose env carries GIT_OPTIONAL_LOCKS is accepted by shape (a)', () => {
+  const t =
+    "execFileSync('git', ['status', '--porcelain'], { env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });";
+  assert.deepEqual(findViolations(t), []);
+});
+
+test('plan 4237 T2: the real MAIN pollers are clean, and a diff re-adding a flagless read is caught', () => {
+  for (const f of MAIN_POLLER_FILES) {
+    const text = readFileSync(join(REPO_ROOT, f), 'utf8');
+    assert.deepEqual(findViolations(text, { mainPoller: true }), [], f);
+  }
+  const text = "const x = gitWithLockRetry(mainDir, ['status', '--porcelain']);";
+  const added = new Set([text]);
+  assert.equal(violationsIntroduced(text, added, { mainPoller: true }).length, 1);
+});
+
+test('plan 4237 review d9d5af: GIT_OPTIONAL_LOCKS counts only when it is set to 0', () => {
+  const on = "gitWithLockRetry(mainDir, ['status'], { env: { GIT_OPTIONAL_LOCKS: '1' } });";
+  assert.equal(findViolations(on, { mainPoller: true }).length, 1);
+  const direct = "execFileSync('git', ['status'], { env: { GIT_OPTIONAL_LOCKS: '1' } });";
+  assert.equal(findViolations(direct).length, 1);
+  const off = "gitWithLockRetry(mainDir, ['status'], { env: { GIT_OPTIONAL_LOCKS: '0' } });";
+  assert.deepEqual(findViolations(off, { mainPoller: true }), []);
 });

@@ -47,7 +47,7 @@ summary: "NO chain-template fast-path …"
 # NO chain-template homepage/pricelistUrl fast-path
 
 **Blocked-by:** plan 477's WS-4 chain lane (477 promoted to ready/ 2026-06-12) — revive when the chain-lane machinery lands
-> **Blocked-by:** the 474 NO-import family (NO clinics with country:"NO" + chain locations) **and** the WS-4 chain lane (the apply machinery these URLs feed). Revive when BOTH have landed.
+> **Blocked-by:** the 474 NO-import family (NO records with country:"NO" + chain locations) **and** the WS-4 chain lane (the apply machinery these URLs feed). Revive when BOTH have landed.
 
 ## What to build
 …
@@ -109,7 +109,7 @@ test('referencedBlockerIds: a 3-digit and a 4-digit id sort numerically, not lex
 
 test('referencedBlockerIds: prose-noise 3-digit tokens that are not real plans are dropped', () => {
   const body =
-    '**Blocked-by:** operator green-light + cost approval (~$227 remaining = 648 clinics × $0.35)';
+    '**Blocked-by:** operator green-light + cost approval (~$227 remaining = 648 records × $0.35)';
   // neither 227 nor 648 is a real plan → no phantom blockers
   assert.deepEqual(
     referencedBlockerIds(body, () => false),
@@ -117,7 +117,7 @@ test('referencedBlockerIds: prose-noise 3-digit tokens that are not real plans a
   );
   // plan 2417 (design A): both numerals sit inside a parenthetical aside with no
   // `plan[s]?`/`#`/basename cue, so neither grounds even when isPlanId would allow it —
-  // "~$227 remaining = 648 clinics" is cost-approval prose, not a blocker declaration.
+  // "~$227 remaining = 648 records" is cost-approval prose, not a blocker declaration.
   assert.deepEqual(
     referencedBlockerIds(body, (id) => id === '227' || id === '648'),
     [],
@@ -154,7 +154,7 @@ test('referencedBlockerIds: a range "478-479" yields both ids; a year "2026" yie
 // risk, worse than the phantom-blocker bug this plan fixes. INSIDE a parenthetical
 // aside a numeral only grounds when explicitly cued by `plan[s]?`/`#`/a
 // `NNNN-Category-slug` basename — that is where the corpus's genuine phantoms live (a
-// clinic-id list, a "plan-2299 precedent" citation, a bare date). Design B
+// record-id list, a "plan-2299 precedent" citation, a bare date). Design B
 // (belt-and-braces): inline-code spans and ISO dates are stripped before scanning
 // regardless of position, so a cue-adjacent code span or date can never ground.
 
@@ -196,15 +196,15 @@ test('classifyBlocked: a real cued blocker plus a backtick-quoted source-line ci
   assert.deepEqual(c.ids, ['2199']);
 });
 
-test('referencedBlockerIds: a top-level multi-blocker declaration grounds every id, but a parenthetical clinic-id list and an uncued citation do not (real corpus shape, plan 2369)', () => {
+test('referencedBlockerIds: a top-level multi-blocker declaration grounds every id, but a parenthetical record-id list and an uncued citation do not (real corpus shape, plan 2369)', () => {
   const body =
-    '**Blocked-by:** 2364 lands (fix + audit report), then the covering refreshes: 1055 (SE clinics 291/427/459/552/787) + 1541 (NO clinics 1191/1203) — national-refresh supersession (plans-workflow §, plan-2299 precedent).';
+    '**Blocked-by:** 2364 lands (fix + audit report), then the covering refreshes: 1055 (SE records 291/427/459/552/787) + 1541 (NO records 1191/1203) — national-refresh supersession (plans-workflow §, plan-2299 precedent).';
   const statusOf = corpus({
     2364: 'in-progress',
     1055: 'waiting-blocked',
     1541: 'waiting-blocked',
     291: 'archive', // grounded as a REAL (unrelated) plan id too — proves the parenthetical
-    2299: 'archive', // clinic list and the hyphenated "plan-2299" citation drop on their own
+    2299: 'archive', // record list and the hyphenated "plan-2299" citation drop on their own
   });
   assert.deepEqual(
     referencedBlockerIds(body, (id) => statusOf(id) != null),
@@ -287,7 +287,7 @@ test('classifyBlocked: sonnet-review regression — a struck plan-id blocker wit
 });
 
 test('classifyBlocked: a genuinely id-less line (pure trip/calendar gate) still classifies none — unaffected by the review fix', () => {
-  const body = '**Blocked-by:** cron surfaces ≥1 changed clinic';
+  const body = '**Blocked-by:** cron surfaces ≥1 changed record';
   const c = classifyBlocked(body, corpus({}), null, shippedAll);
   assert.equal(c.kind, 'none');
   assert.equal(c.gate, false);
@@ -298,7 +298,7 @@ test('hasNonPlanGate: bare ISO date is NOT a gate; operator/calendar/trip/cron A
   assert.equal(hasNonPlanGate('**Blocked-by:** operator green-light to promote'), true);
   assert.equal(hasNonPlanGate('**Blocked-by:** calendar: start on/after 2026-06-14'), true);
   assert.equal(hasNonPlanGate('**Blocked-by:** trip-condition — revive if reported'), true);
-  assert.equal(hasNonPlanGate('**Blocked-by:** cron surfaces ≥1 changed clinic'), true);
+  assert.equal(hasNonPlanGate('**Blocked-by:** cron surfaces ≥1 changed record'), true);
   assert.equal(hasNonPlanGate('**Blocked-by:** Run 3 due >=2026-06-15'), true);
 });
 
@@ -427,7 +427,7 @@ test('makeArchiveIsShipped: lazily reads content via the provided readFile, memo
 
 test('classifyBlocked: a pure trip/calendar gate with no plan id → none (not our concern)', () => {
   const body =
-    '**Blocked-by:** first natural price-page change — monthly-render-refresh.ps1 cron surfaces ≥1 changed clinic';
+    '**Blocked-by:** first natural price-page change — monthly-render-refresh.ps1 cron surfaces ≥1 changed record';
   const c = classifyBlocked(body, corpus({}), '213');
   assert.equal(c.kind, 'none');
   assert.deepEqual(c.ids, []);
@@ -812,7 +812,7 @@ test('2543: classifyBlocked.gate matches hasNonPlanGate(content) whenever a plan
   // value onto this path would silently change 'none' plans into 'review'.
   for (const content of [
     '**Blocked-by:** operator availability for the manual capture',
-    '**Blocked-by:** cron surfaces ≥1 changed clinic',
+    '**Blocked-by:** cron surfaces ≥1 changed record',
   ]) {
     const c = classifyBlocked(content, corpus({}), null, shippedAll);
     assert.equal(c.kind, 'none');

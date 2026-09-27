@@ -23,8 +23,8 @@ const STARVED_TAIL_3858 = [
   '______________ test_idle_guard_does_not_kill_a_slow_process_that_keeps_writing ______________',
   'E   OSError: [WinError 3221225794] the child process could not be created',
   '=========================== short test summary info ============================',
-  'FAILED backend/scripts/price-pipeline/__tests__/test_3732_codex_transport_idle_guard.py::test_idle_guard_does_not_kill_a_slow_process_that_keeps_writing - OSError: [WinError 3221225794] the child process could not be created',
-  "FAILED backend/scripts/price-pipeline/test_conftest_git_isolation.py::test_a_sibling_subtrees_git_fixture_cannot_commit_into_an_inherited_git_dir - subprocess.CalledProcessError: Command 'git' returned non-zero exit status 3221225794.",
+  'FAILED backend/scripts/data-pipeline/__tests__/test_3732_codex_transport_idle_guard.py::test_idle_guard_does_not_kill_a_slow_process_that_keeps_writing - OSError: [WinError 3221225794] the child process could not be created',
+  "FAILED backend/scripts/data-pipeline/test_conftest_git_isolation.py::test_a_sibling_subtrees_git_fixture_cannot_commit_into_an_inherited_git_dir - subprocess.CalledProcessError: Command 'git' returned non-zero exit status 3221225794.",
   'FAILED backend/scripts/tests/test_seed_boot_validation_gate.py::test_real_seed_passes_schema - AssertionError: Validator produced no output (exit=3221225794). stderr:',
   "FAILED backend/scripts/tests/test_seed_boot_validation_gate.py::test_free_text_verifiedby_rejected_as_schema_error - AssertionError: assert 'verifiedBy' in 'Validator produced no output (exit=3221225794). stderr:\\n'",
   '4 failed, 33966 passed, 20 skipped, 4 xfailed in 1027.12s (0:17:07)',
@@ -32,7 +32,7 @@ const STARVED_TAIL_3858 = [
 
 const MIXED_TAIL_ONE_GENUINE_FAILURE = [
   '=========================== short test summary info ============================',
-  'FAILED backend/scripts/price-pipeline/__tests__/test_3732_codex_transport_idle_guard.py::test_idle_guard_does_not_kill_a_slow_process_that_keeps_writing - OSError: [WinError 3221225794] the child process could not be created',
+  'FAILED backend/scripts/data-pipeline/__tests__/test_3732_codex_transport_idle_guard.py::test_idle_guard_does_not_kill_a_slow_process_that_keeps_writing - OSError: [WinError 3221225794] the child process could not be created',
   'FAILED backend/scripts/tests/test_real_regression.py::test_price_rounds_to_two_decimals - AssertionError: assert 199.999 == 200.0',
   '2 failed, 40000 passed in 812.03s (0:13:32)',
 ].join('\n');
@@ -113,7 +113,7 @@ test('looksSpawnStarved matches the WinError 1455 text signature (CreateProcess 
   );
   assert.equal(looksSpawnStarved('[winerror 1455]'), true); // case-insensitive
   // The bare number, with no "WinError" framing, must NOT match — 1455 alone is too small/generic.
-  assert.equal(looksSpawnStarved('1455 clinics processed'), false);
+  assert.equal(looksSpawnStarved('1455 records processed'), false);
   assert.equal(looksSpawnStarved('WinError 1455 without brackets'), false);
 });
 
@@ -187,7 +187,7 @@ test('allFailedTestsSpawnStarved is false when a FAILED line carries no reason t
 
 test('allFailedTestsSpawnStarved is true for a WinError 1455 tail (CreateProcess itself refused, no NTSTATUS exit code)', () => {
   const tail = [
-    'FAILED backend/scripts/price-pipeline/__tests__/test_x.py::test_a - OSError: [WinError 1455] The paging file is too small for this operation to complete',
+    'FAILED backend/scripts/data-pipeline/__tests__/test_x.py::test_a - OSError: [WinError 1455] The paging file is too small for this operation to complete',
     '1 failed in 0.31s',
   ].join('\n');
   assert.equal(allFailedTestsSpawnStarved(tail), true);

@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 // scripts/coord/git-safe.mjs — thin git passthrough that inherits the index.lock
 // retry behaviour of coord-git's gitWithLockRetry, for NON-Node callers that
-// shell out to git on the shared main `.git` (specifically the price-pipeline
+// shell out to git on the shared main `.git` (specifically the data-pipeline
 // `run-batch.py` phase-12 commit+push — the unprotected path behind the
 // `batch_commit_races_main_git_ops` incident, plan 230 Task 2).
 //
 // Usage (drop-in for `git`):
-//   node scripts/coord/git-safe.mjs add -- backend/src/data/seed/clinics/SE/clinic-001.json
+//   node scripts/coord/git-safe.mjs add -- backend/src/data/seed/records/SE/record-001.json
 //   node scripts/coord/git-safe.mjs commit -m "<msg>"
 //   node scripts/coord/git-safe.mjs push
 //

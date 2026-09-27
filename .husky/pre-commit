@@ -39,7 +39,7 @@ fi
 # state in git stash …") is what concurrent commits on the shared master checkout
 # race into orphaned `lint-staged automatic backup` entries (cleaned today only by
 # scripts/sweep-stray-stashes.mjs). With no backup stash there is nothing to orphan.
-# Verified (scripts/pre-commit-nostash.test.mjs): on lint-staged v17 --no-stash still
+# Verified (its own name-paired test): on lint-staged v17 --no-stash still
 # HIDES partially-staged changes (via patch, not the backup stash), so a partial
 # commit still records only the staged hunk (prettier-formatted) and leaves the
 # unstaged hunk untouched — no corruption, no sweep. The one trade-off: if a task

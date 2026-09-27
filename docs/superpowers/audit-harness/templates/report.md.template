@@ -1,0 +1,81 @@
+# Audit report — {{TARGET}}
+
+**Run:** `{{RUN_ID}}`
+**Date:** {{DATE}}
+**Target:** `{{TARGET}}` ({{TARGET_TYPE}})
+**Reviewers:** {{N_REVIEWERS}} × {{REVIEWER_MODEL}}
+**Verifier:** {{VERIFIER_MODEL}}
+**Wall time:** {{WALL_TIME}}
+**Tokens / cost:** {{TOKENS}} / {{COST}}
+
+## Headline
+
+- {{N_VERIFIED}} verified findings (fix queue below)
+- {{N_REJECTED}} rejected (reviewer claim not reproducible — see appendix)
+- {{N_AMBIGUOUS}} ambiguous (manual triage)
+- {{N_PRE_FILTERED}} pre-filtered (no coherent `repro_check`)
+
+Pruning rate: **{{PRUNE_PCT}}%** of raw reviewer findings were dropped by Stage-2 verification. (See runbook for how to interpret this.)
+
+---
+
+## ✅ Verified findings — fix queue
+
+Sorted by severity, then by reviewer.
+
+{{VERIFIED_FINDINGS_TABLE}}
+
+<!-- Per finding:
+### F-NNN — <title>
+
+- **Category:** <category> / **Severity:** <severity>
+- **Claim:** <claim>
+- **Verifier evidence:** <verifier_evidence>
+- **Screenshot:** ![](screenshots/F-NNN.png)  (web targets only)
+- **Suggested fix:** <suggested_fix or "—">
+- **Origin:** Reviewer <i>
+-->
+
+---
+
+## ❌ Rejected findings — reviewer claim contradicted
+
+{{REJECTED_FINDINGS_TABLE}}
+
+<!-- Per finding:
+### F-NNN — <title>
+
+- **Reviewer claimed:** <claim>
+- **Verifier observed:** <verifier_evidence>
+- **Verdict reason:** <reason>
+-->
+
+---
+
+## ⚠️ Ambiguous findings — manual triage
+
+{{AMBIGUOUS_FINDINGS_TABLE}}
+
+<!-- Per finding:
+### F-NNN — <title>
+
+- **Claim:** <claim>
+- **Verifier reason:** <reason>
+- **Action:** (operator decision)
+-->
+
+---
+
+## Appendix — pre-filtered findings
+
+Reviewers also surfaced **{{N_PRE_FILTERED}}** items that were dropped before Stage 2 because the `repro_check` was missing, malformed, or insufficiently specific. These appear in `findings.jsonl` with `pre_filter_reason` set. Not surfaced inline — open the JSONL to inspect.
+
+---
+
+## What to do with this report
+
+1. The **Verified** section is the fix queue. Convert each into a TodoWrite item, a plan entry, or a direct fix branch.
+2. The **Rejected** section is a calibration signal — if the reviewer's claim was wrong but felt confident, the reviewer prompt may need tightening. Look for systematic miscalibration (one reviewer rejected disproportionately = noise; all reviewers rejected on the same category = prompt issue).
+3. The **Ambiguous** section needs a human. Most commonly: the page requires login/consent the verifier couldn't get past, or the claim was structurally untestable.
+
+Reviewer prompts are at `docs/superpowers/audit-harness/templates/reviewer-prompt.md`. Verifier prompts at `docs/superpowers/audit-harness/templates/verifier-{web,code}-prompt.md`. Tune in place and re-run.

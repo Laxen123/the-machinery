@@ -326,7 +326,7 @@ export function assertUnblockOk(targetStatus, content, unblockFlag) {
 
 // plan 4069 (task 1); review round 2 (R2-9, key 79 efficiency): the axis vocabulary — AXIS_TAGS,
 // AXIS_TAGS_BY_UNBLOCK, GRILL_AXIS_TAGS, and the `[axis: …]` marker regex — now lives in the
-// zero-import leaf module scripts/axis-tags.mjs, so a consumer that needs only this DATA
+// zero-import leaf module scripts/coord/axis-tags.mjs, so a consumer that needs only this DATA
 // (drain-run.mjs's park writers) never has to import this whole CLI module (node:fs,
 // child_process, ~15 coordination modules) for three constants + one regex. Imported here and
 // RE-EXPORTED under their existing names so every pre-existing consumer/test keeps working
@@ -1045,7 +1045,7 @@ export function planRenameGrammar(
   if (!m) {
     errors.push(
       `"${name}" is not a plan basename — expected <id>-${LANE_MARKER_HINT}<Category>-<slug>.md ` +
-        '(plan 2329; docs/runbooks/plans-workflow.md § Plan naming).',
+        '(plan 2329; docs/coord/plan-lanes.md § Plan naming).',
     );
     return { errors, warnings };
   }

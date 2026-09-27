@@ -614,7 +614,7 @@ export function planNestingViolation(statusFolder, categorySegments, rel) {
   if (!PLAN_CATEGORY_RX.test(category)) {
     return (
       `${rel} — category folder "${category}" must be lowercase \`[a-z0-9-]+\` ` +
-      `(e.g. "denmark", "price-pipeline"); uppercase is reserved for the Category TAG ` +
+      `(e.g. "denmark", "data-pipeline"); uppercase is reserved for the Category TAG ` +
       `inside a plan filename.`
     );
   }
@@ -763,7 +763,7 @@ export const PLAN_FILENAME_RX = new RegExp(`^${PLAN_TAG_SOURCE}.+\\.md$`);
 // (next-plan-id.mjs, mint time) and planRenameGrammar (move-plan.mjs, rename time) each
 // resolve `loadCoordConfig(mainDir).planCategories.allowlist` once at their CLI entry and
 // pass it down. The country-token + uk-not-gb conventions neither gate CAN verify (scope,
-// not shape) live in docs/runbooks/plans-workflow.md § Plan naming and the spec-pass/
+// not shape) live in docs/coord/plan-lanes.md § Plan naming and the spec-pass/
 // board-pass checklists.
 
 // Basename grammar for a rename/mint target: `<id>-[FABLE-|SOL-]<Category>-<slug>.md`. A
@@ -789,7 +789,7 @@ const EVIDENCE_FLOOR_BASENAME_RX = new RegExp(
 //
 // The evidence-floor gate — a `ready/` target refuses a PRODUCT-FAMILY plan (Pipe/DQ/App/UI on
 // vetapp — Infra/Coord run their own, stricter severity floor and are exempt here; SEO/Biz/Other
-// are deliberately ungated for now, docs/runbooks/plans-workflow.md § Evidence floor) stamped
+// are deliberately ungated for now, docs/coord/plan-lanes.md § The evidence floor) stamped
 // `evidence: latent`: a latent finding (review/audit/code-reading "could go wrong", nothing
 // observed wrong) is never its own plan — it folds to a line, or the class gets upgraded by a
 // fresh observation. Category comes from EVIDENCE_FLOOR_BASENAME_RX above, with the optional
@@ -836,9 +836,9 @@ export function assertEvidenceFloorOk(
   throw Object.assign(
     new Error(
       `${label}: cannot promote to ready/ — ${basename} is stamped evidence: latent and category ` +
-        `"${category}" is a product family the evidence floor gates (docs/runbooks/plans-workflow.md ` +
-        '§ Evidence floor). A latent finding is never its own plan — return it by ONE of two paths: ' +
-        '(1) fold it to a line (docs/handoff/grammar-debt.md for a grammar/extraction edge case, or ' +
+        `"${category}" is a product family the evidence floor gates (docs/coord/plan-lanes.md ` +
+        '§ The evidence floor). A latent finding is never its own plan — return it by ONE of two paths: ' +
+        '(1) fold it to a line (a domain debt ledger the project keeps for its own edge cases, or ' +
         'docs/handoff/infra-debt.md for everything else) and archive/park this plan, or (2) upgrade ' +
         'the class once a fresh observation supports it: node scripts/stamp-evidence.mjs ' +
         `${basename} observed-wave|observed-live|observed-measured|operator, then re-run this move. ` +
@@ -1114,7 +1114,7 @@ export function isHighPriorityTier(content, opts) {
 // 'grammar-omnibus-carryforward' was a standing directive for the done-worktree auto-minted
 // grammar-omnibus successor; the omnibus carry-forward machinery (including
 // buildOmnibusSuccessorBody) was retired by plan 3961 (operator, 2026-09-14) — grammar/extraction
-// edge cases now route to a one-line entry in docs/handoff/grammar-debt.md instead. The directive
+// edge cases now route to a one-line entry in the project's domain debt ledger instead. The directive
 // name is removed rather than kept as a dead legal value.
 export const PRIORITY_BY_DIRECTIVES = ['2141-critical-path'];
 
@@ -1353,6 +1353,51 @@ export function upsertFrontmatterKey(
   return `---${eol}${line}${eol}---${eol}${eol}${content}`;
 }
 
+// plan 4202: the ONE reason sentence for a real specReview sha stamped with an undeclared
+// provenance. Plan 3943 introduced this refusal only at claim time (checkStubClaimGate,
+// claim-plan-lib.mjs) — every other lifecycle surface kept reading the OLDER, narrower gate
+// below (which only ever looked at `stage`/`specReview`, never `specReviewBy`), so a plan
+// the board/oracle/move-plan/next-plan-id promised as eligible was hard-refused the moment
+// it was actually claimed. `lead` is the caller's own sentence-subject: checkStubClaimGate
+// (the one surface with an operator-override lane) passes the bare word 'plan' and sets
+// `stubOkHint`; every other caller goes through specReviewGateErrorFromValues below, which
+// builds `lead` as `${context} ${basename}` and never sets the hint (design: "the oracle/
+// move-plan messages do NOT offer --stub-ok").
+export function undeclaredProvenanceReason(lead, specReview, { stubOkHint = false } = {}) {
+  return (
+    `${lead} has specReview: ${specReview} but specReviewBy: undeclared — a spec-pass of ` +
+    `unknown provenance cannot be drained (plan 3943, closing the same gap plan 1427 Gate 2 ` +
+    `closed for a bare stub; plan 4202 hoisted the check into this shared core). Run a real ` +
+    `spec-pass and stamp --provenance "<model>/<effort>" (/spec-pass)` +
+    (stubOkHint ? `, or claim with --stub-ok "<authorization note>".` : `.`)
+  );
+}
+
+// plan 4202: classifies which (if either) of the two lifecycle gates a plan trips, so a
+// caller that needs the EXCLUDE CODE — not just a human-readable message — can tell "no
+// spec-pass ran at all" (a bare stub) apart from "a spec-pass ran, but of undeclared
+// provenance" (queue-drain.mjs's oracle reports these as distinct codes, 'stub' vs
+// 'provenance', so the board and the drain routine point the operator at the right fix).
+// specReviewGateErrorFromValues below is built ON TOP of this — the two can never drift.
+//
+// Order (case-INSENSITIVE on stage/specReview/specReviewBy):
+//   1. specReview: exempt-mechanical (any case) → null, always — a self-declared no-judgment
+//      exemption is never gated on provenance (checkStubClaimGate's own 🟥 pipelineFields
+//      narrowing over exempt-mechanical stays claim-only, plan 4202 design 5).
+//   2. a real (non-exempt) specReview value stamped with specReviewBy: undeclared → 'provenance',
+//      checked BEFORE the stage gate below so it fires on `stage: specced` too, not only `stub`.
+//   3. stage absent/empty or not 'stub' → null (legacy grandfather / already past stub).
+//   4. stage: stub with any other specReview value (a sha, or an absent specReviewBy — the
+//      grandfathered legacy shape for every plan stamped before plan 3004) → null.
+//   5. stage: stub with no specReview at all → 'stub'.
+export function specReviewGateCode(stage, specReview, specReviewBy) {
+  if (specReview && String(specReview).toLowerCase() === 'exempt-mechanical') return null;
+  if (specReview && String(specReviewBy || '').toLowerCase() === 'undeclared') return 'provenance';
+  if (!stage || stage.toLowerCase() !== 'stub') return null;
+  if (specReview) return null;
+  return 'stub';
+}
+
 // Shared plan-lifecycle spec-pass gate (plan 1292 bugfix — previously
 // duplicated, case-sensitively and without comment-stripping, at both call
 // sites below). Pure core: takes already-normalized `stage`/`specReview`
@@ -1362,34 +1407,53 @@ export function upsertFrontmatterKey(
 // to run the gate. `context` is a caller-supplied lead-in sentence (ending
 // short of the basename) so each caller's message stays in its own voice;
 // `basename` is the plan's filename. Returns an actionable error string when
-// stage is `stub` with no specReview stamp, else null.
+// stage is `stub` with no specReview stamp, OR when a real specReview is
+// stamped with specReviewBy: undeclared (plan 4202 hoist — see
+// specReviewGateCode above for the full rule and order), else null.
 //
 // Rule (case-INSENSITIVE on stage, per plan 1292 Conventions):
 //   - stage absent/empty (legacy plan, minted before this gate landed) → null.
-//   - stage present but not 'stub' (already past stub, e.g. 'specced') → null.
+//   - stage present but not 'stub' (already past stub, e.g. 'specced') → null,
+//     UNLESS a real specReview carries specReviewBy: undeclared (plan 4202).
 //   - stage: stub WITH any specReview value (a sha, or the self-declared
-//     'exempt-mechanical' for a no-judgment mechanical plan) → null.
+//     'exempt-mechanical' for a no-judgment mechanical plan) → null, again
+//     unless that sha's specReviewBy is undeclared.
 //   - stage: stub WITHOUT a specReview stamp → the actionable message.
-export function specReviewGateErrorFromValues(stage, specReview, basename, context) {
-  if (!stage || stage.toLowerCase() !== 'stub') return null;
-  if (specReview) return null;
-  return (
-    `${context} ${basename} — stage: stub without a specReview stamp. Run /spec-pass (then ` +
-    `scripts/stamp-exec-model.mjs) or stamp 'specReview: exempt-mechanical' for a no-judgment ` +
-    `mechanical plan.`
-  );
+// `options.specReviewBy` is OPTIONAL (a 5th, options-shaped argument — every
+// pre-4202 caller passes only 4 positional args and keeps its old behaviour
+// untouched: an absent specReviewBy can never read as 'undeclared').
+export function specReviewGateErrorFromValues(
+  stage,
+  specReview,
+  basename,
+  context,
+  { specReviewBy } = {},
+) {
+  const code = specReviewGateCode(stage, specReview, specReviewBy);
+  if (code === 'provenance') {
+    return undeclaredProvenanceReason(`${context} ${basename}`, specReview);
+  }
+  if (code === 'stub') {
+    return (
+      `${context} ${basename} — stage: stub without a specReview stamp. Run /spec-pass (then ` +
+      `scripts/stamp-exec-model.mjs) or stamp 'specReview: exempt-mechanical' for a no-judgment ` +
+      `mechanical plan.`
+    );
+  }
+  return null;
 }
 
 // Thin wrapper over specReviewGateErrorFromValues for callers that only have
-// raw plan `content` on hand (move-plan.mjs, next-plan-id.mjs) — reads the two
-// scalars via readFrontmatterScalar (comment-stripped + unquoted) then
+// raw plan `content` on hand (move-plan.mjs, next-plan-id.mjs) — reads the
+// three scalars via readFrontmatterScalar (comment-stripped + unquoted) then
 // delegates. Callers that already derived stage/specReview for their own use
 // (queue-drain's parsePlanMeta) should call specReviewGateErrorFromValues
 // directly instead of re-parsing content here.
 export function specReviewGateError(basename, content, context) {
   const stage = readFrontmatterScalar(content, 'stage');
   const specReview = readFrontmatterScalar(content, 'specReview');
-  return specReviewGateErrorFromValues(stage, specReview, basename, context);
+  const specReviewBy = readFrontmatterScalar(content, 'specReviewBy');
+  return specReviewGateErrorFromValues(stage, specReview, basename, context, { specReviewBy });
 }
 
 // Return content with a leading `---`…`---` YAML frontmatter block removed, so

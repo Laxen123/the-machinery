@@ -31,7 +31,7 @@ test('master staging a coordination file IS blocked (plan 1279 — hand commit)'
 });
 
 test('master staging a wiki page or WIKI.md IS blocked (route via wiki-commit.mjs)', () => {
-  assert.equal(shouldBlock('master', ['wiki/entities/chains/evidensia.md'], {}), true);
+  assert.equal(shouldBlock('master', ['wiki/entities/chains/chaina.md'], {}), true);
   assert.equal(shouldBlock('master', ['WIKI.md'], {}), true);
   assert.equal(WIKI_RX.test('wiki/log.md'), true);
   assert.equal(WIKI_RX.test('backend/src/wiki/x.ts'), false, 'anchored at repo root');
@@ -75,13 +75,7 @@ test('detached HEAD is treated as non-worktree (coord guarded; wiki follows main
 test('linked worktree on a non-worktree-named branch: wiki allowed, coord still blocked', () => {
   const opts = { mainCheckout: false };
   assert.equal(
-    shouldBlock(
-      'staging-maptune',
-      ['wiki/entities/chains/evidensia.md'],
-      {},
-      COORDINATION_RX,
-      opts,
-    ),
+    shouldBlock('staging-maptune', ['wiki/entities/chains/chaina.md'], {}, COORDINATION_RX, opts),
     false,
   );
   assert.equal(shouldBlock('staging-maptune', ['docs/INDEX.md'], {}, COORDINATION_RX, opts), true);
@@ -105,7 +99,7 @@ test('worktree branch staging only code is allowed', () => {
 });
 
 test('worktree branch staging a wiki page is ALLOWED (own index — accepted 1279 residual)', () => {
-  assert.equal(shouldBlock('worktree-205-x', ['wiki/entities/chains/evidensia.md'], {}), false);
+  assert.equal(shouldBlock('worktree-205-x', ['wiki/entities/chains/chaina.md'], {}), false);
 });
 
 test('override env bypasses the block in both modes', () => {
@@ -125,7 +119,7 @@ test('COORDINATION_RX is exported and matches the coordination paths', () => {
 // 'doc' there, so a wiki-root rename that updates one set loudly breaks this test
 // instead of silently splitting the two layers.
 test('WIKI_RX agrees with main-checkout-allowlist DOC_RX (both classify wiki as doc)', () => {
-  for (const p of ['wiki/log.md', 'wiki/entities/chains/evidensia.md', 'WIKI.md']) {
+  for (const p of ['wiki/log.md', 'wiki/entities/chains/chaina.md', 'WIKI.md']) {
     assert.equal(WIKI_RX.test(p), true, `${p} guarded`);
     assert.equal(classifyAllowlist(p), 'doc', `${p} is allowlist 'doc'`);
   }
@@ -155,7 +149,7 @@ test('shouldBlock uses the passed rx (docs/handoff layout) on a worktree branch'
 });
 
 test('backslash-normalised staged paths still match (Windows porcelain)', () => {
-  assert.equal(shouldBlock('master', ['wiki\\entities\\platforms\\provet-cloud.md'], {}), true);
+  assert.equal(shouldBlock('master', ['wiki\\entities\\platforms\\acme-cloud.md'], {}), true);
   assert.equal(shouldBlock('master', ['docs\\INDEX.md'], {}), true);
 });
 

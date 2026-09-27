@@ -3,7 +3,7 @@
 //
 // WHY: plan 3974's T0 traced a land's rebase dying on a stray
 // `.git/worktrees/<slug>/index.lock` back to per-session read-only pollers/hooks
-// (`scripts/redgreen.mjs`'s statusline lamp, `scripts/hooks/coord-write-guard-pretooluse.mjs`'s
+// (a project-side statusline tool's status lamp, `scripts/hooks/coord-write-guard-pretooluse.mjs`'s
 // PreToolUse classifier) running `git status`/`git diff` in a worktree's cwd WITHOUT
 // `--no-optional-locks` — on a 131k-file tree a plain `git status` can itself WRITE the index
 // (refreshing stat cache / the untracked-cache extension), taking the same lock a concurrent
@@ -22,7 +22,7 @@
 // WHY A NEW MODULE, NOT A CASE FOLDED INTO scripts/assert-posix-path-assertions.mjs (the repo's
 // "fold into an existing name-paired test file" default): that gate's `SCOPE_PATHSPECS` covers
 // `scripts/**/*.test.mjs` and `backend/scripts/**/*.py` ONLY — test-assertion source. This rule
-// judges NON-test source (`scripts/redgreen.mjs`, `scripts/hooks/**`), a disjoint corpus with a
+// judges NON-test source (project-side status tooling, `scripts/hooks/**`), a disjoint corpus with a
 // disjoint violation shape (a missing spawn flag, not a platform-dependent assertion), so it is
 // the name-pair of a genuinely new module rather than a case in an existing one.
 //
@@ -87,6 +87,28 @@
 // assert-posix-path-assertions.mjs and assert-color-tokens.mjs). Fail-open SKIP on an unresolvable
 // base or a failed diff/blob read — the done-worktree land re-runs this gate.
 //
+// MAIN POLLERS (plan 4237 T2). On 2026-09-26 an index rewritten between two rebase picks on the
+// shared MAIN checkout became the 30-path rollback commit c8c55d9e704; the most plausible writer
+// was an unlocked MAIN read (pre-yield-guard's pre-lock `git status`) doing git's optional-lock
+// index write-back. Those reads do not spawn git themselves — they call the coord git wrappers
+// (`git` / `gitWithLockRetry` / `gitRaw` from coord-git.mjs, or a module-local `git`), so the
+// spawn-site shapes above never see them. For the NAMED files in `MAIN_POLLER_FILES` a third
+// shape is judged:
+//
+//   (c) WRAPPER CALL — `git(dir, ['status', …])` / `gitWithLockRetry(dir, ['diff', …], …)`: a
+//       call to one of `WRAPPER_CALLEES` whose second argument is an array literal carrying a
+//       `'status'`/`'diff'` element must carry the lock-free marker in the SAME call —
+//       `LOCK_FREE_READ_ENV` (scripts/coord/child-env.mjs, the env spelling
+//       `GIT_OPTIONAL_LOCKS=0`), a literal `GIT_OPTIONAL_LOCKS`, or `'--no-optional-locks'` — OR
+//       the callee must be a wrapper DEFINED IN THE SAME FILE whose own body carries that marker
+//       (index-sanity.mjs's local `git`: the helper-indirection rule above, one level up).
+//
+// The list is a NAMED short list, not a `scripts/coord/**` glob, for the same reason redgreen is
+// listed by name: a glob would sweep in lock modules and spine pushes whose `git diff` is scoped
+// to their own write, and change what the gate means. Add a file here when it polls MAIN.
+// A direct spawn whose call text carries `GIT_OPTIONAL_LOCKS` / `LOCK_FREE_READ_ENV` in its env
+// is lock-free too, and is accepted by shapes (a)/(b) in every in-scope file.
+//
 // NOT COVERED: `exec`/`execSync` (a shell-string command, `exec('git status')`) — neither file in
 // scope uses that shape; only `execFileSync`/`execFile`/`spawnSync`/`spawn` with an explicit `'git'`
 // program argument are matched. A future shell-string spawn is a new shape this gate does not see;
@@ -114,15 +136,25 @@ const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 // `scripts/coord/redgreen*.mjs` is listed explicitly, not folded into a `scripts/**` glob:
 // plan 3962 moved redgreen-lib.mjs into the coord core, and this rule judges POLLERS, which is a
 // named short list — widening the pathspec to the whole tree would change what the gate means.
+// plan 4237 T2: the modules that read the shared MAIN checkout outside any lock (see the header's
+// MAIN POLLERS section). Judged by shape (c) on top of (a)/(b).
+export const MAIN_POLLER_FILES = Object.freeze([
+  'scripts/coord/pre-yield-guard.mjs',
+  'scripts/coord/heal-main.mjs',
+  'scripts/coord/index-sanity.mjs',
+]);
+
 export const SCOPE_PATHSPECS = [
   ':(glob)scripts/hooks/**/*.mjs',
   ':(glob)scripts/redgreen*.mjs',
   ':(glob)scripts/coord/redgreen*.mjs',
+  ...MAIN_POLLER_FILES,
 ];
 
 export function inScope(path) {
   if (path.startsWith('scripts/hooks/') && path.endsWith('.mjs')) return true;
   if (/^scripts\/(?:coord\/)?redgreen[^/]*\.mjs$/.test(path)) return true;
+  if (MAIN_POLLER_FILES.includes(path)) return true;
   return false;
 }
 
@@ -257,11 +289,68 @@ export function hasStatusOrDiffEvidence(text) {
 // position) is evidence regardless of what precedes it off-line.
 const EVIDENCE_LINE_START_RX = /^(['"])(?:status|diff)\1\s*(?:,|$)/;
 
+// ── shape (c): wrapper calls in a MAIN poller (plan 4237 T2) ───────────────────────────────
+
+export const WRAPPER_CALLEES = ['git', 'gitWithLockRetry', 'gitRaw'];
+// A call of one of WRAPPER_CALLEES — not a member call (`s.git(`), not part of a longer name.
+const WRAPPER_CALL_RX = new RegExp(`(?<![.\\w$])(${WRAPPER_CALLEES.join('|')})\\s*\\(`, 'g');
+// The lock-free marker, in any of its three spellings.
+// `GIT_OPTIONAL_LOCKS` counts only when it is SET TO 0 in the same text (review finding
+// d9d5af: `GIT_OPTIONAL_LOCKS: '1'` names the variable and still takes the lock).
+const LOCK_FREE_MARKER_RX =
+  /\bLOCK_FREE_READ_ENV\b|\bGIT_OPTIONAL_LOCKS['"]?\s*[:=]\s*['"]?0\b|(['"])--no-optional-locks\1/;
+
+export function carriesLockFreeMarker(text) {
+  return LOCK_FREE_MARKER_RX.test(text);
+}
+
+// The ENV spellings only. Shapes (a)/(b) judge the argv flag's presence AND its position (a flag
+// after the subcommand makes git error), so a spawn is waved through early only on an env-borne
+// marker, never on the flag literal, which those shapes keep checking themselves.
+const LOCK_FREE_ENV_RX = /\bLOCK_FREE_READ_ENV\b|\bGIT_OPTIONAL_LOCKS['"]?\s*[:=]\s*['"]?0\b/;
+
+// The body text of `function <name>(…) { … }` defined in `text`, or null.
+function localFunctionBody(text, name) {
+  const m = new RegExp(`\\bfunction\\s+${name}\\s*\\(`).exec(text);
+  if (!m) return null;
+  const params = balancedSpan(text, m.index + m[0].length - 1);
+  if (!params) return null;
+  const braceIdx = text.indexOf('{', params[1]);
+  if (braceIdx === -1) return null;
+  const body = balancedSpan(text, braceIdx);
+  return body ? text.slice(body[0], body[1] + 1) : null;
+}
+
+// Every shape-(c) call: `{ start, end, callee, argText }` for a wrapper call whose second
+// argument is an array literal carrying a `'status'`/`'diff'` element.
+export function findWrapperStatusDiffCalls(text) {
+  const calls = [];
+  WRAPPER_CALL_RX.lastIndex = 0;
+  let m;
+  while ((m = WRAPPER_CALL_RX.exec(text))) {
+    // skip the wrapper's own declaration (`function git(dir, args…)`)
+    if (/\bfunction\s+$/.test(text.slice(Math.max(0, m.index - 12), m.index))) continue;
+    const parenIdx = m.index + m[0].length - 1;
+    const callSpan = balancedSpan(text, parenIdx);
+    if (!callSpan) continue;
+    const args = splitCallArgs(text, parenIdx);
+    const argText = args?.[1] ?? '';
+    if (!argText.startsWith('[')) continue;
+    if (
+      indexOfQuotedLiteral(argText, 'status') === -1 &&
+      indexOfQuotedLiteral(argText, 'diff') === -1
+    )
+      continue;
+    calls.push({ start: m.index, end: callSpan[1], callee: m[1], argText });
+  }
+  return calls;
+}
+
 // PURE core: every violation `text` contains, `{ line, endLine, kind, text, texts, detail }`
 // (1-based line numbers; `texts` is every trimmed, non-blank line of the call — the diff filter
 // matches on `texts` so a diff touching any line of a multi-line spawn call still counts as
 // introducing it, mirroring assert-posix-path-assertions.mjs's own multi-line assertion handling).
-export function findViolations(text) {
+export function findViolations(text, { mainPoller = false } = {}) {
   const violations = [];
   const lines = text.split('\n');
   const lineStarts = [0];
@@ -282,6 +371,8 @@ export function findViolations(text) {
     const startLine = lineNumberFor(call.start);
     const endLine = lineNumberFor(call.end);
     if (waivedFromAbove(lines, startLine)) continue;
+    // plan 4237 T2: a spawn whose own env carries GIT_OPTIONAL_LOCKS=0 is lock-free already.
+    if (LOCK_FREE_ENV_RX.test(text.slice(call.start, call.end + 1))) continue;
 
     let detail = null;
     if (call.argKind === 'literal') {
@@ -336,6 +427,31 @@ export function findViolations(text) {
       });
     }
   }
+
+  if (mainPoller) {
+    for (const call of findWrapperStatusDiffCalls(text)) {
+      const startLine = lineNumberFor(call.start);
+      const endLine = lineNumberFor(call.end);
+      if (waivedFromAbove(lines, startLine)) continue;
+      if (carriesLockFreeMarker(text.slice(call.start, call.end + 1))) continue;
+      const localBody = localFunctionBody(text, call.callee);
+      if (localBody && carriesLockFreeMarker(localBody)) continue;
+      violations.push({
+        line: startLine + 1,
+        endLine: endLine + 1,
+        kind: 'missing-lock-free-env',
+        text: lines[startLine].trim(),
+        texts: lines
+          .slice(startLine, endLine + 1)
+          .map((l) => l.trim())
+          .filter(Boolean),
+        detail:
+          `${call.callee}(…) reads git status/diff on the shared MAIN checkout without ` +
+          '`{ env: LOCK_FREE_READ_ENV }` — an optional-lock index write-back here can clobber a ' +
+          'concurrent rebase pick (plan 4237)',
+      });
+    }
+  }
   return violations;
 }
 
@@ -362,11 +478,11 @@ export function collectAddedByFile(diffText) {
 // violation in the file — including a line that only satisfies EVIDENCE_LINE_START_RX (a
 // multi-line array literal whose opening `[`/`,` sits on a different, unadded line; see that
 // regex's own comment).
-export function violationsIntroduced(fileText, addedTexts) {
+export function violationsIntroduced(fileText, addedTexts, { mainPoller = false } = {}) {
   const addedCarriesEvidence = [...addedTexts].some(
     (t) => EVIDENCE_ARG_RX.test(t) || EVIDENCE_LINE_START_RX.test(t),
   );
-  return findViolations(fileText).filter(
+  return findViolations(fileText, { mainPoller }).filter(
     (v) =>
       v.texts.some((t) => addedTexts.has(t)) ||
       (v.kind === 'missing-flag-passthrough' && addedCarriesEvidence),
@@ -384,6 +500,11 @@ const FIX_ADVICE = [
   '',
   "  execFileSync('git', ['--no-optional-locks', 'status', '--porcelain'], …)   // direct call",
   "  execFileSync('git', ['--no-optional-locks', ...args], …)                   // passthrough wrapper",
+  '',
+  'In a MAIN poller (plan 4237: pre-yield-guard / heal-main / index-sanity) pass the env layer',
+  'through the coord git wrapper instead:',
+  '',
+  "  gitWithLockRetry(mainDir, ['status', '--porcelain'], { env: LOCK_FREE_READ_ENV })",
   '',
   'Genuinely-deliberate case (a write path that legitimately needs the lock): waive it in place',
   'with `// lock-free-poll-ok: <reason>` on the line or the line above.',
@@ -448,7 +569,7 @@ export function listCorpusFiles() {
     ...redgreenSiblingsIn('scripts'),
     ...redgreenSiblingsIn('scripts/coord'),
   ];
-  return [...new Set([...hooks, ...redgreenSiblings])].sort();
+  return [...new Set([...hooks, ...redgreenSiblings, ...MAIN_POLLER_FILES])].sort();
 }
 
 function runCorpusSweep() {
@@ -456,7 +577,9 @@ function runCorpusSweep() {
   const byFile = new Map();
   let total = 0;
   for (const file of sorted) {
-    const vs = findViolations(readFileSync(join(REPO_ROOT, file), 'utf8'));
+    const vs = findViolations(readFileSync(join(REPO_ROOT, file), 'utf8'), {
+      mainPoller: MAIN_POLLER_FILES.includes(file),
+    });
     if (vs.length) {
       byFile.set(file, vs);
       total += vs.length;
@@ -508,9 +631,9 @@ function main() {
       }
       const existing = byFile.get(file) ?? [];
       const seenKeys = new Set(existing.map((v) => `${v.line}:${v.kind}`));
-      const fresh = violationsIntroduced(res.content, addedTexts).filter(
-        (v) => !seenKeys.has(`${v.line}:${v.kind}`),
-      );
+      const fresh = violationsIntroduced(res.content, addedTexts, {
+        mainPoller: MAIN_POLLER_FILES.includes(file),
+      }).filter((v) => !seenKeys.has(`${v.line}:${v.kind}`));
       if (fresh.length) byFile.set(file, [...existing, ...fresh]);
     }
   }
@@ -518,7 +641,7 @@ function main() {
   if (byFile.size === 0) {
     console.log(
       'assert-lock-free-git-polls: clean (no new lock-taking git status/diff spawn in ' +
-        'scripts/hooks/**/*.mjs or scripts/redgreen*.mjs).',
+        'scripts/hooks/**/*.mjs, scripts/redgreen*.mjs or the named MAIN pollers).',
     );
     process.exit(0);
   }

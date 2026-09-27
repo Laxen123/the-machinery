@@ -5,7 +5,7 @@
 //
 // F-004/F-015 (plan 1313, 2026-07-02 coord audit): the ONE slug/category charset every entry
 // point that can EVER write a raw slug into a filename, a branch name, or a PowerShell `-like`
-// pattern validates against. LLM-authored free text (a slug drafted from a clinic name, a plan
+// pattern validates against. LLM-authored free text (a slug drafted from a record name, a plan
 // description) can carry a space, an apostrophe, or a non-ASCII character (Swedish öäå) that
 // reaches:
 //   - a filename computeNextId's ASCII-only id-scanner then can't see (F-015 — a non-ASCII slug

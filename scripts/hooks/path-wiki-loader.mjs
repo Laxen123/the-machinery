@@ -3,7 +3,7 @@
 //
 // The FILE-TOUCH trigger the prompt/reply loaders can't provide. All the other wiki
 // loaders match TEXT (the user's prompt or the assistant's reply). Work that arrives as
-// "fix backend/src/adapters/provet-cloud.ts" — or via a plan doc that names files, not
+// "fix backend/src/adapters/some-platform.ts" — or via a plan doc that names files, not
 // subjects — never names the subject anywhere, so no text loader fires. That is exactly
 // when the model is most likely to confabulate. This hook fires on the tool event: when a
 // Read/Edit/Write/MultiEdit touches a file under a subject page's declared `triggerPaths:`,
@@ -13,12 +13,12 @@
 // Mapping source is `triggerPaths:` frontmatter on the wiki pages (a repo-relative path
 // prefix list), NOT a hand registry here — same philosophy as chain-wiki Pass 2: register
 // the page, matching lights up; no hook edit. Keyed by PAGE SLUG in the SHARED `subjects`
-// marker root, so a prior prompt-side injection (subject-wiki / price-pipeline) SUPPRESSES
-// the path-side one — no double-inject.
+// marker root, so a prior prompt-side injection (subject-wiki / a project's own dedicated
+// loader) SUPPRESSES the path-side one — no double-inject.
 //
 // SCOPE — platforms + inspectors + services ONLY (the shared subjectPageDirs), NOT the whole
-// wiki/entities tree. Chains/clinics have their OWN prompt loaders keyed under separate
-// marker roots (CACHE_ROOTS.chain / .clinic); scanning a chain/clinic page here would mark
+// wiki/entities tree. Chains/records have their OWN prompt loaders keyed under separate
+// marker roots (CACHE_ROOTS.chain / .record); scanning a chain/record page here would mark
 // it under the `subjects` root instead, so a prompt-side chain injection and a path-side
 // touch would NOT dedupe → the page fires twice. Restricting to the pages that live in the
 // shared root keeps the once-per-session invariant intact (plan 1254 review).
@@ -51,13 +51,13 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(HERE, '..', '..');
 // platforms + inspectors + services only (see SCOPE note above) — the pages that share the
-// `subjects` marker root with subject-wiki-loader + price-pipeline-loader.
+// `subjects` marker root with subject-wiki-loader + a project's own dedicated loaders.
 const SUBJECT_DIRS = subjectPageDirs(REPO_ROOT);
 const CACHE_ROOT = CACHE_ROOTS.subjects;
 
 // Path separators that count as a boundary AFTER a triggerPath prefix, so a prefix like
-// `backend/src/adapters/provet-cloud` matches `provet-cloud.ts` ('.'), `provet-cloud-
-// legacy.ts` ('-'), and `provet-cloud/…` ('/') — but not an unrelated `provet-cloudify`.
+// `backend/src/adapters/some-platform` matches `some-platform.ts` ('.'), `some-platform-
+// legacy.ts` ('-'), and `some-platform/…` ('/') — but not an unrelated `some-platformify`.
 const SEP = new Set(['/', '.', '-', '_']);
 
 function normPath(p) {

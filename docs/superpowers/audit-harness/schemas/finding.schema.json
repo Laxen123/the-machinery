@@ -1,0 +1,99 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AuditFinding",
+  "description": "A single audit claim produced by a Stage-1 reviewer subagent. The Stage-2 verifier consumes this and independently reproduces (or fails to reproduce) the repro_check.",
+  "type": "object",
+  "required": ["id", "category", "severity", "title", "claim", "evidence", "repro_check"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Reviewer-local ID (e.g., R3-F2). Orchestrator rewrites to global F-NNN after dedupe.",
+      "pattern": "^[A-Za-z0-9-]+$"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "a11y",
+        "perf",
+        "copy",
+        "ux",
+        "drift",
+        "security",
+        "type-safety",
+        "dead-code",
+        "data-quality",
+        "seo",
+        "i18n",
+        "other"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["high", "medium", "low"]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 120,
+      "description": "One-line summary — what is wrong."
+    },
+    "claim": {
+      "type": "string",
+      "minLength": 16,
+      "description": "Specific claim. Must be precise enough that a verifier with no prior context can decide it."
+    },
+    "evidence": {
+      "type": "string",
+      "description": "What the reviewer observed. Quoted DOM snippet, file content, screenshot description, etc. The verifier will NOT trust this — they re-observe independently."
+    },
+    "repro_check": {
+      "type": "object",
+      "description": "The reproducibility contract. The verifier executes this and judges whether the claim is observable. Findings without a coherent repro_check are auto-discarded before Stage 2.",
+      "required": ["type", "input", "expected"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "playwright_dom",
+            "playwright_visual",
+            "playwright_a11y",
+            "playwright_network",
+            "playwright_console",
+            "file_grep",
+            "file_read",
+            "command"
+          ],
+          "description": "Which verification primitive applies. playwright_* → web target; file_*/command → code/doc target."
+        },
+        "input": {
+          "type": "string",
+          "description": "URL (playwright_*), file path (file_*), or shell command (command)."
+        },
+        "expected": {
+          "type": "string",
+          "description": "What an adversarial verifier should observe to consider the claim VERIFIED. Be specific. Bad: 'page looks broken'. Good: 'querySelector(\\\"nav a[href=/akut]\\\") returns null OR computed color contrast < 4.5:1 on .vsm-hero h1'."
+        },
+        "selector": {
+          "type": "string",
+          "description": "(playwright_dom/_visual/_a11y only) CSS selector or ARIA query for the element under test."
+        },
+        "viewport": {
+          "type": "string",
+          "enum": ["375x812", "768x1024", "1280x800", "1920x1080"],
+          "description": "(playwright_* only) Viewport for verification. Default 375x812 (iPhone reference)."
+        }
+      }
+    },
+    "suggested_fix": {
+      "type": "string",
+      "description": "Optional. Not used by the verifier. Surfaced in report.md if verdict=verified."
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional free-text tags (e.g., 'mobile-only', 'i-think-this-also-affects-X')."
+    }
+  }
+}

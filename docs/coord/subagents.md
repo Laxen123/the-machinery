@@ -221,6 +221,24 @@ A single worker remains the right call when the items share a genuinely sequenti
 same files — sequence the phases instead of trying to force a parallel split onto a chain that
 cannot actually run in parallel.
 
+The same sizing applies to a batch fan-out of headless per-item workers — one model call per item
+over a list — with three additions:
+
+- **Default to a moderate width, about three concurrent workers, not strictly sequential.** Three is
+  fast enough to matter and gentle on a subscription quota that other parallel sessions draw from;
+  a wider fan-out hits the rate limit sooner. Treat any wider figure a tool happens to support as a
+  ceiling, not a default. Run sequentially only when the quota is already tight or the items are not
+  independent.
+- **Ask only above a spend threshold.** Below a fixed per-batch estimate, pick the default width and
+  go — an operator round-trip for a cheap batch costs more than it saves. At or over the threshold,
+  surface the width and scope choice before dispatching.
+- **Run more than one worker only on DISJOINT items, and never overlap a running loop.** A per-item
+  writer that is not atomic (open, write, no temp-and-rename) corrupts a file two processes touch at
+  once. A loop already running over a fixed item list has no claim logic and cannot be made to
+  cooperate with a second one launched beside it: let it finish, or stop it first, then relaunch in
+  parallel on what is left. Make each per-item output its own checkpoint, so a relaunch skips the
+  items already done.
+
 A worked dispatch for one cluster inside a burndown, showing the shape once concretely. It reuses
 the same four-part scope block above rather than restating it; what is shown here is the
 one-sentence Goal (which is never boilerplate — it is different for every dispatch, and a block

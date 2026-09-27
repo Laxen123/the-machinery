@@ -8,8 +8,8 @@ Each piece of work is a plan file. A session claims a plan, works on it in its o
 worktree, gets the change reviewed, and lands it on the main branch in turn. Everything is
 plain files and git: no server, no database.
 
-This is a one-time, MIT-licensed snapshot of a system extracted from a real project. It is not
-kept in sync with that project.
+This is an MIT-licensed copy of a system extracted from a real project. It is refreshed from
+that project from time to time, and only when every safety check on the copy passes.
 
 ## Why use it?
 
@@ -38,7 +38,7 @@ kept in sync with that project.
   agents each look at the diff from a different angle, a verifier checks every candidate
   finding, and a stronger model re-judges any finding a verifier rejects. The verdict is recorded
   against the exact commit, and each finding must be fixed, moved to its own plan, or consciously
-  waved before the land goes through. A round cap stops fix-and-re-review loops that no longer
+  waived before the land goes through. A round cap stops fix-and-re-review loops that no longer
   converge.
 - **Guardrails for agents.** Hooks stop common agent mistakes before they happen: writing in
   another session's worktree, putting coordination state on a feature branch, or looping on
@@ -80,8 +80,8 @@ You already run Claude Code, so this only lists what the kit needs on top of it.
 **Optional:**
 
 - Codex CLI with a ChatGPT subscription — powers `/gpt-review`, the `sol` executor lane, and
-  the `codex exec` steps in batch-train, spec-pass, pickup-plan, and cloud-routines. Without
-  it, use `/sonnet-review` instead.
+  the `codex exec` steps in batch-train, spec-pass, and pickup-plan. Without it, use
+  `/sonnet-review` instead.
 - Playwright — used by spec-pass checks and `/audit-with-verification`.
 - Obsidian — for browsing the `wiki/` vault; the wiki works without it.
 
@@ -108,6 +108,8 @@ node scripts/coord/coord-init.mjs --target /path/to/your-project
 
 Add `--dry-run` first to preview what it would write with nothing touched, and `--json` for a
 machine-readable summary. It creates the plan lanes, `docs/handoff/board.md`, `docs/INDEX.md`,
+the empty ledgers the skills write to (`docs/superpowers/plans/FOG.md`,
+`docs/handoff/infra-debt.md`, the `docs/superpowers/batches/` roster folder),
 a default `coord.config.json`, and merges the hooks into your project's `.claude/settings.json`
 — an existing entry is never overwritten, only added to. Pass `--no-wiki` to skip the wiki
 layer. It is idempotent: run it again any time, and a second run reports zero created, zero
@@ -119,8 +121,10 @@ merged.
 pnpm install
 ```
 
-This also runs the `prepare` script, which runs `husky` — it points git at `.husky/`, so the
-shipped pre-commit / pre-push / post-checkout / pre-rebase gates now run automatically.
+This also runs the `prepare` script: `husky` points git at `.husky/`, so the shipped
+pre-commit / pre-push / post-checkout / pre-rebase gates now run automatically, and
+`ensure-wiki-merge-driver.mjs` registers the wiki `updated:`-line merge driver into this
+repo's shared `.git/config` + `.git/info/attributes`.
 
 **5. Make the skills and commands visible to Claude Code.** `coord-init.mjs` copies the skill
 files to `coord/skills/**` in your project — the same folder they live in here — not to
@@ -212,4 +216,4 @@ MIT — see `LICENSE`.
 
 ---
 
-extracted from the project at aaa08a3dfaff8737487af558a37057c832cd31e0 on 2026-09-24; not synced afterwards
+extracted from the project at a04bd7693d74f37164ca9652712b9edbf7795f7b on 2026-09-27

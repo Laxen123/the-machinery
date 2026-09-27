@@ -1,8 +1,7 @@
 // scripts/coord/land/queue-probe.mjs — plan 3961 T3.4b: the queue-waiter pre-convergence probe
 // and the plan-2463 speculative-stacking no-laundering guards, moved out of
-// scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move).
+// scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's parity-test
+// suite against committed goldens, plus the full legacy test suite, both unchanged by this move).
 //
 // WHAT THIS MODULE OWNS. Two related but independent concerns that both live on the `--wait`
 // queue-residency path:
@@ -17,7 +16,7 @@
 // It is generic — no project-specific vocabulary anywhere in this file.
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
-// import only scripts/coord/** and node: builtins (Rule 3, docs/runbooks/scripts-module-layout.md)
+// import only scripts/coord/** and node: builtins (Rule 3, docs/coord/scripts-layout.md)
 // — so every one of the plain scripts/*.mjs modules this code used to reach directly is instead
 // read off the bound dependency container, `landDeps()` (scripts/coord/land/deps.mjs), AT CALL
 // TIME, inside each function — never at module top level. `D` (this module's convention:

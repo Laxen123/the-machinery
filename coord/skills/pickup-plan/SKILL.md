@@ -106,7 +106,7 @@ node scripts/claim-plan.mjs acquire <plan-id|basename> --slug <slug> --seed-writ
 - `{"won":false,…}` → another session holds it. **STOP, unconditionally. Never reinterpret this as your own resume.** The JSON `holder` names the session/host/time; pick another plan and write nothing. Three traps that make a held plan feel like yours: (1) the CAS-minted session NUMBER is independent of your session TITLE, so "a session-N claim exists on plan X" means _a_ session holds it, not that _you_ do; (2) a fresh claim whose `host` matches your OWN machine is a LIVE sibling, not you (the 6h-stale gate detects crashes, not concurrency); (3) the projected board / INDEX / `in-progress/` state is what a sibling's claim looks like, never proof it is yours. To treat work as YOUR resume you must POSITIVELY own it: you ran `acquire` THIS session and got `{won:true}`, or `claim-plan.mjs status <id>` reports `youAreHolder: true` (plan 958). Belt-and-suspenders since plan 958: the `worktree-owner-guard` PreToolUse hook physically blocks a write into a worktree a different session owns, so even a mis-read here can't corrupt the holder's work.
 - `{"won":true,…}` → you own the lock. The tool ALREADY minted your session number (CAS counter — no 329/330/331 scramble) and projected the claim onto master via the race-safe tools: board ACTIVE row, body Status flip + `git mv` to `in-progress/`, INDEX repath, and a session-entry stub. **Steps 2 and 5 are DONE — skip to step 6** (create the worktree). Flesh out the session-entry stub at completion (step 10).
 
-`release-claim.mjs` frees the ref on land (wired into `done-worktree`) or abandon; `reconcile-board.mjs` reports ref↔board drift. Model: `docs/runbooks/branch-hygiene.md` § "Atomic ref-CAS plan claims".
+`release-claim.mjs` frees the ref on land (wired into `done-worktree`) or abandon; `reconcile-board.mjs` reports ref↔board drift. Model: `docs/coord/claims.md`.
 
 **No-script fallback** (sibling subprojects / no `scripts/claim-plan.mjs`): use the manual steps 2 + 5 below — the optimistic board-row claim with the GATE probe.
 
@@ -125,7 +125,7 @@ The one thing `acquire` does NOT do is judge whether the gate may be bypassed �
 
 `--resume` and `--lock-only` are mutually exclusive and `acquire` refuses both together. If your takeover slug differs from the dead holder's, `--resume` adds a row for the NEW slug and **demotes the superseded row to `⏸ PAUSED` inside the SAME projection commit** (plan 2394), stamping its Resume cell `superseded by <new-slug> (takeover <date>)` — nothing to do by hand. The row is never removed or renamed, so the old worktree still survives its own teardown. **Two classes are deliberately spared** and still print the `board.mjs set-state <slug> PAUSED` line for you: a row carrying a `` · batch=`…` `` marker (a LIVE batch member, plan 1364 — demoting it would detach it from a running train) and a `🟢 LANDING` row (that row IS the cross-session land mutex). If one of those is genuinely stale, confirm it is dead and demote it yourself.
 
-Before plan 2353 this case had NO sanctioned route: `--lock-only` plus a hand-rolled projection, whose new session-entry file `coord-edit.mjs` refuses (untracked) and the pre-commit coord guard blocks — leaving `BOARD_GUARD_OVERRIDE=1`, itself classifier-denied without an explicit operator instruction. If you are on a checkout predating plan 2353, that old recipe is in the project `docs/runbooks/branch-hygiene.md` § "Atomic ref-CAS plan claims".
+Before plan 2353 this case had NO sanctioned route: `--lock-only` plus a hand-rolled projection, whose new session-entry file `coord-edit.mjs` refuses (untracked) and the pre-commit coord guard blocks — leaving `BOARD_GUARD_OVERRIDE=1`, itself classifier-denied without an explicit operator instruction. If you are on a checkout predating plan 2353, that old recipe is in the project `docs/coord/claims.md`.
 
 ### 1. Identify the plan
 
@@ -331,7 +331,7 @@ If `scripts/cut-worktree.mjs` exists (the project, plan 871), it owns this — o
 node scripts/cut-worktree.mjs <slug>          # fetch origin master → worktree add origin/master → push -u
 ```
 
-Since plan 3956 the cut is **SPARSE by default**: the worktree leaves the six heavy stores under `backend/data/price-pipeline` (`render-store`, `render-archive`, `render-fingerprints`, `batches`, `prompt-bench`, `llm-runs` — 87,000 of the repo's 131,000 tracked files, 3.7 GB) off disk unless the plan's class keeps it dense — a 🟥 / MAYBE / missing SEED-WRITE banner, a `Pipe`/`DQ` category, a body naming one of those stores / `price-pipeline` / `weekly-price-sweep`, an unresolvable plan file (batch slug), or an explicit `--dense`. The cut prints which rule decided it (`worktree add` ~45 s instead of ~7 min; `status` ~0.4 s instead of ~6 s). A sparse worktree that turns out to need a store **widens in place, never re-cuts**: `node scripts/cut-worktree.mjs <slug> --widen` — the pytest and price-trust gates do this by themselves. Detail: the project `docs/runbooks/branch-hygiene.md` § Plan worktrees are sparse.
+Since plan 3956 the cut is **SPARSE by default**: the worktree leaves the six heavy stores under `backend/data/data-pipeline` (`render-store`, `render-archive`, `render-fingerprints`, `batches`, `prompt-bench`, `llm-runs` — 87,000 of the repo's 131,000 tracked files, 3.7 GB) off disk unless the plan's class keeps it dense — a 🟥 / MAYBE / missing SEED-WRITE banner, a `Pipe`/`DQ` category, a body naming one of those stores / `data-pipeline` / `weekly-price-sweep`, an unresolvable plan file (batch slug), or an explicit `--dense`. The cut prints which rule decided it (`worktree add` ~45 s instead of ~7 min; `status` ~0.4 s instead of ~6 s). A sparse worktree that turns out to need a store **widens in place, never re-cuts**: `node scripts/cut-worktree.mjs <slug> --widen` — the pytest and price-trust gates do this by themselves. Detail: the project `docs/coord/worktrees.md` § Sparse checkouts as the default.
 
 Fallback (no `cut-worktree.mjs` — sibling subprojects):
 
@@ -371,7 +371,7 @@ Skip the whole `pnpm install` only when the plan is provably pure-Python / pure-
 
 ### 8.5. Read the plan's subject wiki — if the project keeps a subject vault
 
-If the project keeps a synthesis wiki (the project: `wiki/`, an Obsidian vault of subject pages), read the plan's SUBJECT page(s) IN FULL before the first edit. Derive the subject from the plan's category / slug / touched files and open the matching page — e.g. a price-pipeline plan reads `wiki/entities/inspectors/price-inspector.md`; a chain plan reads its chain page. That synthesis is what the seed / runbooks / code can't hold, and reading it here (not `hot.md` / `index` alone) is the difference between working from current truth and re-deriving it. Skip only if the project keeps no such vault.
+If the project keeps a synthesis wiki (the project: `wiki/`, an Obsidian vault of subject pages), read the plan's SUBJECT page(s) IN FULL before the first edit. Derive the subject from the plan's category / slug / touched files and open the matching page — e.g. a data-pipeline plan reads `wiki/entities/inspectors/price-inspector.md`; a chain plan reads its chain page. That synthesis is what the seed / runbooks / code can't hold, and reading it here (not `hot.md` / `index` alone) is the difference between working from current truth and re-deriving it. Skip only if the project keeps no such vault.
 
 ### 8.6. `execModel: fable` plans — the acquire output's doctrine block is BINDING
 
@@ -395,15 +395,15 @@ lane. If the SAME gate/review finding (same file, location, defect class) comes 
 two consecutive Sol rework rounds, finish that finding on the normal Claude lane and record the
 switch in the plan body naming the finding; a round that shrinks or changes the finding set keeps
 Sol, no round limit (operator ruling 2026-08-29, replacing the fixed 2-round cap; rule text:
-`docs/runbooks/plans-workflow.md` § Sol executor lane) — the lane never blocks real work. A plan
+`docs/coord/plan-lanes.md` § Executor lanes and model allocation) — the lane never blocks real work. A plan
 reaches this step either because the executor-lane toggle (`scripts/exec-model-default.json`, read
 with `node scripts/exec-model-default.mjs`) named `sol` at spec-pass time, or because someone
 stamped `sol` on it deliberately while the toggle named a Claude lane instead — either way the
 recipe below is identical. The lane's mechanics are untouched by which way the toggle currently
 points: an already-stamped `sol` plan is still drain-claimable and a drain that claimed it via
 `queue-drain.mjs` follows this same recipe, not only an interactive `pickup-plan` session. Full doctrine:
-`batch-train/references/thin-orchestrator.md`; lane facts: the project `docs/runbooks/plans-workflow.md`
-§ Sol executor lane.
+`batch-train/references/thin-orchestrator.md`; lane facts: the project `docs/coord/plan-lanes.md`
+§ Executor lanes and model allocation.
 
 ### 9. Do the work — and push after every commit
 
@@ -433,7 +433,7 @@ that case, self-move the plan out of `in-progress/` VISIBLY in the same run — 
 `[axis: <tag>]` marker, with any context indented underneath it, never as a bullet, bold line, or bare
 prose (the entry guard requires the section, its numbered-list shape, AND the tag) — then release the claim
 (`node scripts/release-claim.mjs release <id>`). Full mechanics, the `waiting-operator/` fallback, and
-why the claim is released rather than held: `docs/runbooks/plans-workflow.md` § Park visibility.
+why the claim is released rather than held: `docs/coord/plan-lanes.md` § Park visibility.
 
 ### 10. Write the COMPLETION update on master
 

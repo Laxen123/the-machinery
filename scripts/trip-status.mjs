@@ -2,7 +2,7 @@
 // scripts/trip-status.mjs  (plan 2679)
 //
 // The waiting-trip/ release valve: waiting-trip/ was the one waiting-* lane with
-// no tracked release valve (docs/runbooks/plans-workflow.md § waiting-trip) — the
+// no tracked release valve (docs/coord/plan-lanes.md § waiting-trip) — the
 // board-pass Phase-1 "evaluate each trip condition as far as it is cheaply
 // checkable" line was an eyeball pass that only ran when a board-pass happened
 // to run. This script gives it a machine-checkable, read-only status table.
@@ -12,7 +12,7 @@
 //   tripCheck: manual — <who would observe it, where>
 //   tripCheck: '<shell command>'   — exit 0 = TRIPPED, exit 1 = quiet,
 //                                    exit >=2 / timeout = probe error.
-// See docs/runbooks/plans-workflow.md § waiting-trip for the full convention.
+// See docs/coord/plan-lanes.md § waiting-trip for the full convention.
 //
 // Why tripCheck is parsed LOCALLY here rather than via build-index-lib's
 // readFrontmatterScalar: that shared reader strips a trailing ` #...` inline

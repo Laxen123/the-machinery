@@ -20,7 +20,7 @@
 #   - `${0%/*}` is WRONG on Windows: Git Bash hands this hook a backslash path
 #     (C:\…\.husky\pre-push), which contains no `/`, so the expansion strips
 #     nothing and yields `<file>/../scripts/…`.
-#   - `git rev-parse --show-toplevel` is WRONG under test: scripts/pre-push-hook.test.mjs
+#   - `git rev-parse --show-toplevel` is WRONG under test: this hook's own name-paired test
 #     runs this hook with a FAKE git on PATH whose catch-all answers with exit 0
 #     and no output, resolving the runner to an empty path.
 . ./scripts/hooks/pre-push.sh

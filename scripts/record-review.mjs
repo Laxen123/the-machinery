@@ -15,7 +15,7 @@
 // plan 3295 — the SEED-ONLY carry. Operator ruling 2026-08-19 ("Review stamp CARRIES across
 // seed-data-only commits"): a marker recorded at sha X is ALSO honored at a later tip Y when
 // `git diff --name-only X..Y` is non-empty and every path is under backend/src/data/seed/**
-// (clinic JSON, per-country order.json manifests, chains.json — never code). No re-record, no re-disposition
+// (per-record JSON, per-country order.json manifests, chains.json — never code). No re-record, no re-disposition
 // of findings is needed for a pure seed heal on top of an already-reviewed branch — the land's
 // REVIEW_NEEDED gate honors the old marker directly (done-worktree.mjs's `recordedReviewMarker`
 // / `markerStatusTable`, via `L.parseReviewMarkerFull`'s optional `seedOnlyDelta` predicate and
@@ -390,7 +390,7 @@ export function warnIfReviewRoundCapReached(
     warn(
       `review-round warning: session marker records round ${rounds} for ${slug}; launching round ` +
         `${nextRound} is ${position} the ${sanctionedDeltaRounds(lane)}-delta-round cap ` +
-        `(docs/runbooks/review-calibration.md § Stopping rule).${escapeNote}${laneNote}`,
+        `(docs/coord/review.md § Stopping rule).${escapeNote}${laneNote}`,
     );
   }
   return result(rounds, markerFound, markerSha);
@@ -481,8 +481,8 @@ function wikiMatchedNudgePaths(changedFiles, chainsChanged, chainsPath, needed) 
 // test fixture, an offline checkout) or an unreadable session entry both degrade to printing
 // nothing, never a thrown error and never a changed exit code.
 //
-// `clinicPageChanged` (the paged-clinic seed axis `pagedClinicChanged` computes) is deliberately
-// NOT computed here: it needs the shard base/head clinic views the land itself builds, which
+// `clinicPageChanged` (the paged-record seed axis `pagedClinicChanged` computes) is deliberately
+// NOT computed here: it needs the shard base/head record views the land itself builds, which
 // this advisory has no cheap access to from a plain `git diff --name-only`. A nudge that stays
 // silent on that one axis is still strictly better than today's zero coverage on the
 // review-record path — see plan 3764's execution notes.
@@ -1413,14 +1413,14 @@ function main() {
       warnOnce(
         `record-review: round ${rounds} recorded for this plan — this is delta round ` +
           `${SANCTIONED_DELTA_ROUNDS} of ${SANCTIONED_DELTA_ROUNDS}, the last sanctioned one ` +
-          `(docs/runbooks/review-calibration.md § Stopping rule). Past this, another ` +
+          `(docs/coord/review.md § Stopping rule). Past this, another ` +
           `re-review round needs a grounded defect or a ground-truth exit (run it / simplify / park).`,
       );
     } else if (rounds > AT_CAP_ROUND) {
       warnOnce(
         `record-review: round ${rounds} recorded for this plan — BEYOND the ` +
           `${SANCTIONED_DELTA_ROUNDS}-delta-round cap ` +
-          `(docs/runbooks/review-calibration.md § Stopping rule).`,
+          `(docs/coord/review.md § Stopping rule).`,
       );
     }
   };
@@ -1855,7 +1855,7 @@ const DISPOSITION_VALUE_HINTS = {
   '--wontfix': 'a reason, e.g. --wontfix "cosmetic, low value"',
   '--batch': 'a file path, e.g. --batch .scratch/dispositions.json',
   '--slug': 'a worktree slug, e.g. --slug 1234-Coord-thing',
-  '--observed': 'an observed-evidence pointer, e.g. --observed "wave-B b2 clinic-1095"',
+  '--observed': 'an observed-evidence pointer, e.g. --observed "wave-B b2 record-1095"',
 };
 const DISPOSITION_BOOL_FLAGS = new Set(['--fixed', '--reopen', '--dry', '--no-push']);
 // The four that SAY WHAT HAPPENED to a finding — mutually exclusive, and the set --batch refuses
@@ -2089,7 +2089,7 @@ function parseDispositionItems(argv, { has, flagVal }) {
     if (has('--observed') && !observed)
       return {
         code: usageErr(
-          '--observed needs an observed-evidence pointer, e.g. --observed "wave-B b2 clinic-1095".',
+          '--observed needs an observed-evidence pointer, e.g. --observed "wave-B b2 record-1095".',
         ),
       };
     disposition = dispositionForKind('plan', flagVal('--plan'), observed);
@@ -2167,17 +2167,17 @@ function markerRoundFromContents(contents) {
 
 // plan 4078 T3 (operator-pinned 2026-09-20 — warn, never deny): from review round 2 on, a
 // `--fixed` disposition on a finding tagged `preExisting: true` or `blocksLand: false` is the
-// split-rule violation `docs/runbooks/plans-workflow.md` § Disposition policy Step 0 now calls
+// split-rule violation `docs/coord/review.md` § Disposition policy Step 0 now calls
 // out explicitly. One line per key — never refuses the write, and never dedupes via `warnOnce`:
 // this shape is rare enough (round >= 2 AND optional) that naming every key stays readable.
 function warnOptionalFixedAtLaterRound(keys, markerRound) {
   for (const key of keys) {
     console.error(
       `record-review disposition: WARNING — ${key} is tagged preExisting/optional and is being ` +
-        `marked --fixed at review round ${markerRound} (>= 2). docs/runbooks/plans-workflow.md § ` +
+        `marked --fixed at review round ${markerRound} (>= 2). docs/coord/review.md § ` +
         `Disposition policy Step 0: from round 2 on, an optional finding defaults to --plan / a ` +
         `debt-list line / --wontfix, not --fixed (plan 4078 T3; the split rule, ` +
-        `docs/runbooks/review-calibration.md § A third addition). Recording anyway (warn-only).`,
+        `docs/coord/review.md § The calibration ladder). Recording anyway (warn-only).`,
     );
   }
 }
@@ -2224,9 +2224,9 @@ function dispositionMain(argv) {
         : shown;
     warnOnce(
       `record-review disposition: WARNING — ${namedKeys} deferred to a plan with no OBSERVED evidence pointer. ` +
-        `The evidence floor (docs/runbooks/plans-workflow.md § Evidence floor) mints a plan only for wrongness that was OBSERVED ` +
-        `(wave output, live site, measured corpus run, operator report); latent finding → line, not plan — grammar family → a ` +
-        `docs/handoff/grammar-debt.md line, everything else → a docs/handoff/infra-debt.md line. Recording anyway (warn-only). ` +
+        `The evidence floor (docs/coord/plan-lanes.md § The evidence floor) mints a plan only for wrongness that was OBSERVED ` +
+        `(wave output, live site, measured corpus run, operator report); latent finding → line, not plan — a domain edge case → a ` +
+        `line in the project's domain debt ledger, everything else → a docs/handoff/infra-debt.md line. Recording anyway (warn-only). ` +
         `Supply the pointer with --observed "<wave/live/measured/operator ref>".`,
     );
   };
@@ -2394,7 +2394,7 @@ function dispositionMain(argv) {
       if (effective?.type === 'plan' && !effective.observed) unobservedPlanKeys.push(key);
       // plan 4078 T3 (operator-pinned 2026-09-20, warn never deny): from round 2 on, a `--fixed`
       // disposition on a finding tagged preExisting or non-must-fix is the split-rule violation
-      // docs/runbooks/plans-workflow.md § Disposition policy Step 0 now calls out — checked
+      // docs/coord/review.md § Disposition policy Step 0 now calls out — checked
       // against the ORIGINAL (pre-disposition) finding, never `updated`, whose tags this write
       // does not change.
       if (effective?.type === 'fixed' && markerRound !== null && markerRound >= 2) {
@@ -2430,7 +2430,7 @@ function dispositionMain(argv) {
   // there — not this branch's. "0 still open" here can still be followed by a real FINDINGS_OPEN
   // halt naming findings this predicate silently already excused. That happened for real on
   // 2026-09-01 during plan 3545's own close-out (0 reported vs. 11 named at land time); see
-  // docs/runbooks/plans-workflow.md § Disposition policy for the bootstrap-hazard fix.
+  // docs/coord/review.md § Disposition policy for the bootstrap-hazard fix.
   //
   // plan existence uses the advisory probe, memoized per id so a sidecar with several findings
   // sharing one --plan id doesn't re-spawn `git ls-tree` per finding (review [1]).

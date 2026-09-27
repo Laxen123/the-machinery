@@ -13,10 +13,10 @@
 // coord-init, whatever it adopts into) that catches what the noun map cannot reach and any
 // personal detail a hand-written doc or skill body leaked on its own.
 //
-// SHIP CONSTRAINT (docs/runbooks/scripts-module-layout.md § Rule 3): this module lives under
+// SHIP CONSTRAINT (docs/coord/scripts-layout.md § Rule 3): this module lives under
 // scripts/coord/, which the kit ships verbatim, so it may import ONLY node: builtins and
 // scripts/coord/** siblings — no bare package specifier, no reach into scripts/ or
-// scripts/assert-coord-docs-generic.mjs. The e-mail regex SHAPE below is copied from that
+// the project's own docs/coord generic-prose gate. The e-mail regex SHAPE below is copied from that
 // gate's denylist entry, not imported — see that file's own header for the reasoning.
 //
 // NO PROJECT-SPECIFIC LITERAL LIVES IN THIS FILE (or its test): coord-kit ships this gate

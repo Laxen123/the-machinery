@@ -49,6 +49,7 @@ import { loadCoordConfig, loadCoordConfigAtOrigin, configDirCandidates } from '.
 import {
   STATUS_ORDER,
   IN_PROGRESS_FOLDER,
+  ARCHIVE_FOLDER,
   readSeedMarker,
   readFrontmatterScalar,
   isHighPriorityTier,
@@ -122,6 +123,7 @@ import {
   LEGACY_BATCH_MANIFEST_DIR_REL,
   RESERVED_BATCH_DIRS,
   findRunnableBatchForPlan,
+  readArchivedPlanIds,
 } from './batch-paths.mjs';
 // plan 1478: derail releases the member's claim ref through the SAME hardened, F-014-CAS,
 // owner-checked release the batch-train + done-worktree already use — not a re-rolled bare
@@ -481,7 +483,7 @@ export function gcReleasedClaimRefs(mainDir, { apply = false, _git = git } = {})
   return { reaped, failed, candidates, applied: true };
 }
 
-// plan 3812: the sibling garbage chore for scripts/coord-probe.mjs's throwaway namespace
+// plan 3812: the sibling garbage chore for the project-side coordination probe's throwaway namespace
 // (`refs/heads/coord/probes/zzz-<random>`, coord-refs.mjs's PROBE_GLOB).
 //
 // A probe ref is NOT a claim ref: it carries no holder state for anything to misread as
@@ -1943,8 +1945,9 @@ export function doAcquire(mainDir, idOrName, flags, deps = {}) {
     if (!gate.ok) throw new Error(`claim-plan acquire: ${gate.reason}`);
   }
   // plan 2459 Task 2 (leak B guard): refuse a solo claim on a member of a RUNNABLE batch
-  // (status: proposed, gate: null) unless the operator explicitly overrides. Read fresh
-  // from mainDir (never a ref-holding checkout — nothing has been claimed yet), mirroring
+  // (status: proposed, gate: null) unless the operator explicitly overrides. Read at the
+  // origin commit `gateSha` (plan 4246 review fix; never a ref-holding checkout — nothing has
+  // been claimed yet), mirroring
   // checkStubClaimGate's placement: an eligibility gate BEFORE any ref is acquired.
   //
   // Gated on `gateContent !== null` for the SAME reason checkStubClaimGate above is (plan 2459
@@ -1959,7 +1962,27 @@ export function doAcquire(mainDir, idOrName, flags, deps = {}) {
     // plan 2518 item 4: a TARGETED lookup that stops at the first batch holding this plan,
     // instead of building the whole membership map to answer about one id — and handed
     // straight to the gate, which takes the resolved slug (plan 2518 review).
-    const heldSlug = findRunnableBatchForPlan(join(mainDir, BATCHES_DIR_REL), planId);
+    //
+    // plan 4246: the SAME live-membership rule queue-drain applies (batch-paths.mjs's
+    // batchLiveness): archived co-members are dropped, and a batch left with fewer than two
+    // live members holds nothing — so the survivor of a train whose other car already landed
+    // passes here without --override-batch-solo. The archive listing is a lazy NAME-ONLY list of
+    // the configured archive lane (ARCHIVE_FOLDER, plan 3960) at `gateSha` — the SAME origin
+    // commit resolvePlanAtOrigin just resolved this plan against (non-null whenever gateContent
+    // is), so a co-member archived on origin but not yet pulled locally counts (review finding
+    // 47956f). Read only if some runnable batch is actually walked. The batch.md ROSTER is read
+    // at that same `gateSha` too (`at`, review finding b35525), so a stale local roster can never
+    // be combined with the origin archive; a git fault there throws and refuses the claim rather
+    // than guessing that the plan is unheld.
+    const heldSlug = findRunnableBatchForPlan(join(mainDir, BATCHES_DIR_REL), planId, {
+      at: { repoRoot: mainDir, ref: gateSha },
+      archivedIds: () =>
+        readArchivedPlanIds({
+          repoRoot: mainDir,
+          ref: gateSha,
+          archiveRel: `${PLANS_PREFIX}/${ARCHIVE_FOLDER}`,
+        }),
+    });
     const batchGate = checkBatchSoloClaimGate(planId, heldSlug, {
       overrideNote: overrideBatchSolo,
     });

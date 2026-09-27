@@ -14,6 +14,9 @@ import { randomUUID } from 'node:crypto';
 import { installCoordRerouteOnce } from './ensure-coord-reroute.mjs';
 import { resolveCommonDirPath } from './lock-path.mjs';
 import { childEnv, gitRepoIsolatedEnv, GIT_REPO_SELECTOR_VARS } from './child-env.mjs';
+// plan 4237 T2: re-exported so a MAIN poller importing its git wrappers from here gets the
+// lock-free read env from the same module.
+export { LOCK_FREE_READ_ENV } from './child-env.mjs';
 // plan 4071 T2: the vetapp sparse-cone exclude lists (coordCheckoutExcludedTopLevel /
 // planWorktreeExcludedPaths) moved to coord.config.json with an empty core default. This is a
 // genuine import CYCLE (coord-config.mjs itself imports `git` from this module) but a safe one:
@@ -245,8 +248,8 @@ export function isMetadataCorruption(msg) {
 // replacement: callers classify on the original error object's stdout/stderr/message
 // channels (isNonFastForward etc.), which must survive intact.
 export const METADATA_HEAL_HINT =
-  '\n[coord-git] this matches the plan-1771 NUL-fill corruption of shared .git metadata — ' +
-  'run `node scripts/git-metadata-heal.mjs --detect`, then `--repair` to heal the safe subset.';
+  '\n[coord-git] this matches a known NUL-fill corruption class of shared .git metadata — ' +
+  "run this project's git-metadata-heal tool (`--detect`, then `--repair`) to heal the safe subset.";
 
 // Annotate-and-return: appends the heal pointer to the error's message when the failure
 // matches the corruption class (idempotent — a retry loop may pass the same error twice).
@@ -1138,6 +1141,213 @@ export function ffMasterFromOrigin(
   throw err;
 }
 
+// ── plan 4237 T1: the rebase-retry REPLAY GUARD ──────────────────────────────────────────────
+// On 2026-09-26 heal-main's rebase-retry (this primitive) pushed c8c55d9e704: its second pick
+// recorded the PRE-REBASE tree because the index had been rewritten back to that state between
+// picks (an unlocked MAIN reader's optional-lock write-back is the most plausible writer; the
+// real race did not reproduce, the test simulates it). Git's two-way checkout keeps an index
+// entry at every path a pick does not change, so the rewritten commit silently rolled back all
+// 28 paths the skipped upstream commits had touched — 2 changed paths became 30 — and it was
+// pushed as a legitimate coord write. Nothing downstream can catch that shape once it is on
+// origin, so the check lives HERE, where the damage becomes a pushed commit, and every caller
+// (heal-main step 4, pre-yield-guard, drain-run's move sync, record-review) gets it by
+// construction.
+//
+// The rule, per rewritten commit, matched in order to its original by (author email, author
+// date, subject) — the fields a rebase preserves:
+//   - identical `git patch-id --stable` → accepted (the same change, whatever the paths);
+//   - else its changed-path set must be a SUBSET of the original's → accepted (a context line
+//     moved, or part of the change is already upstream and dropped out);
+//   - any EXTRA path, or a rewritten commit with no original at all → REFUSED.
+// An original with no rewrite is fine: the rebase drops a commit whose change is already
+// upstream or that became empty. A stale-index clobber always ADDS paths (it reverts the
+// upstream changes at paths the pick never touched), which is exactly what the subset rule sees.
+//
+// A refusal resets the branch to the captured pre-rebase tip (a rebased-but-unpushed master
+// would otherwise be pushed by the NEXT call's plain fast-forward push, with no rebase and so no
+// guard), journals a `push-rebase-replay-mismatch` coord-op line carrying both path sets, and
+// THROWS a non-retryable error (code PUSH_REBASE_REPLAY_MISMATCH) so the caller reports instead
+// of looping. A verification that cannot run fails CLOSED the same way: an unverified rewrite is
+// never pushed.
+const REPLAY_RS = '\x1e';
+const REPLAY_US = '\x1f';
+const REPLAY_JOURNAL_PATH_CAP = 200; // keep one journal line bounded; the counts ride alongside
+
+// The shape of every non-merge commit in `range`, oldest first: { sha, key, paths, patchId }.
+// Two spawns total, whatever the commit count (a per-commit diff-tree would cost 2N on a loaded
+// Windows box). Merges are excluded on both sides — a rebase linearizes them away and
+// `--name-only` lists no paths for a merge anyway.
+export function captureReplayShape(dir, range, { _git = git } = {}) {
+  const logOut = String(
+    _git(dir, [
+      'log',
+      '--reverse',
+      '--no-merges',
+      '--no-renames',
+      `--format=${REPLAY_RS}%H${REPLAY_US}%ae${REPLAY_US}%aI${REPLAY_US}%s`,
+      '--name-only',
+      range,
+    ]) ?? '',
+  );
+  const commits = [];
+  for (const chunk of logOut.split(REPLAY_RS)) {
+    const lines = chunk.split('\n');
+    const header = lines.shift();
+    if (!header || !header.includes(REPLAY_US)) continue;
+    const [sha, ae, aI, ...subject] = header.split(REPLAY_US);
+    commits.push({
+      sha: sha.trim(),
+      key: [ae, aI, subject.join(REPLAY_US)].join(REPLAY_US),
+      paths: lines.map((l) => l.trim()).filter(Boolean),
+      patchId: null,
+    });
+  }
+  if (!commits.length) return commits;
+  const patch = String(
+    _git(dir, ['log', '-p', '--no-merges', '--no-renames', '--no-color', '--no-ext-diff', range]) ??
+      '',
+  );
+  const ids = String(_git(dir, ['patch-id', '--stable'], { input: patch }) ?? '');
+  const bySha = new Map();
+  for (const line of ids.split('\n')) {
+    const [pid, sha] = line.trim().split(/\s+/);
+    if (pid && sha) bySha.set(sha, pid);
+  }
+  for (const c of commits) c.patchId = bySha.get(c.sha) ?? null;
+  return commits;
+}
+
+// Pure: every rewritten commit that fails the rule above, with the evidence. [] = clean.
+export function replayMismatches(originals, rewritten) {
+  const out = [];
+  let cursor = 0;
+  for (const r of rewritten) {
+    let idx = -1;
+    for (let i = cursor; i < originals.length; i++) {
+      if (originals[i].key === r.key) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0) {
+      out.push({
+        reason: 'no-original',
+        rewritten: r.sha,
+        original: null,
+        originalPaths: [],
+        rewrittenPaths: [...r.paths],
+        extraPaths: [...r.paths],
+      });
+      continue;
+    }
+    const o = originals[idx];
+    cursor = idx + 1;
+    if (r.patchId && r.patchId === o.patchId) continue;
+    const had = new Set(o.paths);
+    const extraPaths = r.paths.filter((p) => !had.has(p));
+    if (extraPaths.length)
+      out.push({
+        reason: 'extra-paths',
+        rewritten: r.sha,
+        original: o.sha,
+        originalPaths: [...o.paths],
+        rewrittenPaths: [...r.paths],
+        extraPaths,
+      });
+  }
+  return out;
+}
+
+// The pre-rebase baseline the replay guard compares against: the tip (the rollback target) and
+// the shape of every local commit the rebase is about to rewrite. Take it AFTER the fetch that
+// precedes the rebase, so the range is exactly the commits the rebase will replay.
+export function captureRebaseBaseline(mainDir, { _git = git } = {}) {
+  return {
+    preTip: String(_git(mainDir, ['rev-parse', 'HEAD']) ?? '').trim(),
+    before: captureReplayShape(mainDir, 'origin/master..HEAD', { _git }),
+  };
+}
+
+// Called after a SUCCESSFUL rebase and before the push retry, by BOTH rebase-retry loops on the
+// shared MAIN checkout (pushMasterWithRebase here, drain-run's syncIndexOnMaster — review
+// finding 4153a4: a guard in only one of two identical loops is the plan-2391 instance-fix
+// class). Returns silently when every rewrite passes; otherwise rolls back, journals and throws
+// (see above).
+export function verifyRebaseReplay(mainDir, { preTip, before, token, env, _git = git }) {
+  let mismatches;
+  let verifyError = null;
+  let rewrittenTip = null;
+  try {
+    rewrittenTip = String(_git(mainDir, ['rev-parse', 'HEAD']) ?? '').trim() || null;
+    mismatches = replayMismatches(
+      before,
+      captureReplayShape(mainDir, 'origin/master..HEAD', { _git }),
+    );
+  } catch (e) {
+    verifyError = errText(e).slice(0, 2000);
+    mismatches = [
+      {
+        reason: 'verify-failed',
+        rewritten: rewrittenTip,
+        original: null,
+        originalPaths: [],
+        rewrittenPaths: [],
+        extraPaths: [],
+      },
+    ];
+  }
+  if (!mismatches.length) return;
+  let rolledBack = false;
+  let rollbackError = null;
+  if (preTip) {
+    try {
+      gitWithLockRetry(mainDir, ['reset', '--hard', preTip], { _git, env });
+      rolledBack = true;
+    } catch (e) {
+      rollbackError = errText(e).slice(0, 2000);
+    }
+  }
+  const first = mismatches[0];
+  const cap = (a) => a.slice(0, REPLAY_JOURNAL_PATH_CAP);
+  journalCoordOp(mainDir, {
+    tool: 'push-rebase-replay-mismatch',
+    token,
+    reason: first.reason,
+    preTip: preTip || null,
+    rewrittenTip,
+    original: first.original,
+    rewritten: first.rewritten,
+    originalPaths: cap(first.originalPaths),
+    rewrittenPaths: cap(first.rewrittenPaths),
+    extraPaths: cap(first.extraPaths),
+    originalPathCount: first.originalPaths.length,
+    rewrittenPathCount: first.rewrittenPaths.length,
+    mismatchCount: mismatches.length,
+    rolledBack,
+    ...(verifyError ? { verifyError } : {}),
+    ...(rollbackError ? { rollbackError } : {}),
+  });
+  const where =
+    first.reason === 'verify-failed'
+      ? 'the post-rebase verification could not run'
+      : `rewritten commit ${String(first.rewritten).slice(0, 12)} changes ${first.rewrittenPaths.length} path(s) where its original ${String(first.original ?? '(none)').slice(0, 12)} changed ${first.originalPaths.length}` +
+        (first.extraPaths.length
+          ? ` (extra: ${first.extraPaths.slice(0, 5).join(', ')}${first.extraPaths.length > 5 ? ', …' : ''})`
+          : '');
+  const err = new Error(
+    `coord-git: REFUSED to push a rebase whose replay does not match the original commits — ${where}. ` +
+      (rolledBack
+        ? `Local master was reset to the pre-rebase tip ${String(preTip).slice(0, 12)}; nothing was pushed. `
+        : `Nothing was pushed, but the reset to the pre-rebase tip ${String(preTip || '(unknown)').slice(0, 12)} FAILED — inspect the checkout before any further push. `) +
+      `This is the plan-4237 stale-index shape (an index rewritten between rebase picks); see the ` +
+      `push-rebase-replay-mismatch line in the coord-op journal, then retry the push once the checkout is quiet.`,
+  );
+  err.code = 'PUSH_REBASE_REPLAY_MISMATCH';
+  err.replayMismatches = mismatches;
+  err.rolledBack = rolledBack;
+  throw err;
+}
+
 // Push the current master HEAD to origin, surviving concurrent pushes from the
 // ~6 parallel sessions on the shared `.git`. On a non-ff rejection: fetch +
 // rebase our local commit(s) onto origin/master, then retry. Assumes a CLEAN
@@ -1158,7 +1368,15 @@ export function ffMasterFromOrigin(
 // window, dead pid → abort immediately) from a LIVE one (open window, live pid → spare)
 // by process liveness instead of guessing from directory mtimes — git does not touch
 // rebase-merge/rebase-apply mtimes while a rebase sits mid-conflict.
-export function pushMasterWithRebase(mainDir, { retries = 8, _git = git } = {}) {
+// plan 4237 T3: `beforeRebase` (optional) is consulted after a non-ff rejection and BEFORE the
+// fetch + rebase; returning false throws PUSH_REBASE_DEFERRED with nothing touched — the local
+// commit stays, unpushed, for a later push (heal-main's master sync). A caller with a hard
+// deadline (the Stop hook's 60 s) uses it so it never starts a rebase it cannot finish: a
+// rebase killed mid-pick is the detached, half-rebased state that opened the 2026-09-26 window.
+export function pushMasterWithRebase(
+  mainDir,
+  { retries = 8, _git = git, beforeRebase = null } = {},
+) {
   const env = { HUSKY: '0' }; // plan 2604: gitRaw's spawnEnv supplies+scrubs process.env
   for (let i = 0; ; i++) {
     try {
@@ -1166,7 +1384,18 @@ export function pushMasterWithRebase(mainDir, { retries = 8, _git = git } = {}) 
       return;
     } catch (e) {
       if (!isNonFastForward(e) || i >= retries) throw e;
+      if (beforeRebase && beforeRebase() === false) {
+        const deferred = new Error(
+          'coord-git: push needs a rebase-retry but the caller vetoed starting one (no time ' +
+            'budget left to finish it); the local commit stays unpushed for the next heal-main pass',
+        );
+        deferred.code = 'PUSH_REBASE_DEFERRED';
+        throw deferred;
+      }
       gitWithLockRetry(mainDir, ['fetch', 'origin', 'master'], { _git });
+      // plan 4237 T1: capture the local commits' shape BEFORE the rebase rewrites them, so
+      // verifyRebaseReplay can refuse a pick that recorded a clobbered index.
+      const { preTip, before } = captureRebaseBaseline(mainDir, { _git });
       const token = `push-rebase-${process.pid}-${Math.floor(Math.random() * 1e9)}`;
       // plan 2948: stamp the OS process-identity token alongside the pid, so heal-main can
       // answer "is this window's owner still alive" without trusting either machine's clock.
@@ -1199,6 +1428,7 @@ export function pushMasterWithRebase(mainDir, { retries = 8, _git = git } = {}) 
         journalCoordOp(mainDir, { tool: 'push-rebase', token, phase: 'error' });
         throw annotated;
       }
+      verifyRebaseReplay(mainDir, { preTip, before, token, env, _git });
     }
   }
 }
@@ -2025,8 +2255,8 @@ export const COORD_SPARSE_MARKER = 'coord-sparse-v2';
 
 // plan 3956: the plan-worktree cone. A plan worktree keeps everything EXCEPT these paths, which are
 // nested (not top-level) directories -- see sparseConeDirs for how a nested exclude becomes a cone.
-// `backend/data/price-pipeline` is 93,095 of the repo's 131,025 tracked files (71%, 4.1 GB on disk
-// per worktree) and no plan outside the Pipe/DQ/seed-write classes reads its STORES from the
+// The configured job-output root was 93,095 of the repo's 131,025 tracked files (71%, 4.1 GB on
+// disk per worktree) and no plan outside the Pipe/DQ/seed-write classes reads its STORES from the
 // working tree -- those classes stay dense by rule (cut-worktree.mjs planWorktreeMode). The
 // exclude is the six heavy stores under it, NOT the folder itself: its 22 top-level files are
 // small CONTRACTS that code reads at IMPORT time from the tree -- `display-policy.json`
@@ -2134,10 +2364,11 @@ const COORD_CONE_REF = 'origin/master';
 // of an excluded path is descended into (`git ls-tree -d <ref> -- <ancestor>/`, one level) and its
 // siblings included instead. For a top-level exclude like `backend` that walk never descends, so
 // the coord cone is exactly what plan 3802 computed -- every top-level directory minus the excluded
-// ones, in ls-tree order. For `backend/data/price-pipeline` it yields every top-level directory
-// except `backend`, plus `backend/{scripts,src,tests}`, plus every `backend/data/*` except
-// `price-pipeline`. Cone mode materialises the FILES of every ancestor of an included directory on
-// its own, so `backend/package.json` and `backend/data/<files>` still land on disk.
+// ones, in ls-tree order. For a configured `backend/data/<job-output-dir>` exclude it yields every
+// top-level directory except `backend`, plus `backend/{scripts,src,tests}`, plus every
+// `backend/data/*` except that job-output dir. Cone mode materialises the FILES of every ancestor
+// of an included directory on its own, so `backend/package.json` and `backend/data/<files>` still
+// land on disk.
 //
 // Excludes must be DIRECTORIES: a file cannot be excluded in cone mode (its parent's files come
 // along with any included sibling), and `ls-tree -d` never lists it, so a file exclude is silently
@@ -2997,7 +3228,7 @@ export function releaseCoordLock(lockPath, token) {
 
 // plan 1621: a single rmSync attempt against a Windows file-lock class error (EBUSY|EPERM|ENOTEMPTY
 // — a killed process left an open handle under `.git/worktrees/<name>/`, the incident class
-// docs/runbooks/branch-hygiene.md documents). On that class, sleeps for `backoff(attempt)` and
+// docs/coord/worktrees.md documents). On that class, sleeps for `backoff(attempt)` and
 // returns the caught error so the CALLER's own retry loop can decide to try again; any other error
 // is not transient and rethrows immediately. Returns `null` on success. Generalized by plan 1640 out
 // of resolveCoordCheckout's inline try/catch so land-lib.mjs's reclaimLandDirIfSafe can share the
@@ -3087,7 +3318,7 @@ export function resolveCoordCheckout(
   //     in the sibling — not a corrupted push in us.
   // Therefore NO guard is added here (per the plan: a guard on an unreachable path is tech debt with
   // a comment attached). The structural remedy if the precondition ever changes is recorded in
-  // docs/runbooks/branch-hygiene.md § The coord-write critical section: run coordWrite's push +
+  // docs/coord/worktrees.md § The coord-write critical section: run coordWrite's push +
   // verify against the git COMMON DIR rather than this disposable checkout, which deletes the class
   // outright. Trip-wire to revisit: a `metadata-corruption` or rmSync-exhaustion `reason` appearing
   // on error lines in .git/coord-op-journal.jsonl (minable since item 2 of this same plan).
@@ -3123,7 +3354,7 @@ export function resolveCoordCheckout(
       // (coord-worktree1) instead of reusing the intended path.
       // Windows file-lock class (a killed process left an open handle under
       // .git/worktrees/<name>/, e.g. a crashed coord op — the same incident class
-      // docs/runbooks/branch-hygiene.md documents): retry with backoff instead of throwing
+      // docs/coord/worktrees.md documents): retry with backoff instead of throwing
       // uncaught, matching the worktree-add catch below. attemptRmSyncWithBackoff (plan 1621,
       // extracted for reuse by plan 1640) already slept on a transient hit and rethrows
       // anything non-transient itself, so this call site doesn't need its own try/catch.

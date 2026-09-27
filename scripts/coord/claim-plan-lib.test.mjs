@@ -24,6 +24,7 @@ import {
   checkBatchEligibility,
   boardBatchPlanClaimCell,
   checkBatchSoloClaimGate,
+  checkStubClaimGate,
   normalizeExecutorProvenance,
   DISPATCH_MODES,
   assertSessionEntryDate,
@@ -33,7 +34,11 @@ import {
 import { derivePaths } from './coord-config.mjs';
 import { extractPlanRefs } from './lint-board.mjs';
 import { scriptFile } from '../test-helpers/repo-script-path.mjs';
-import { MUTATION_BANNER_LABEL } from './build-index-lib.mjs';
+import {
+  MUTATION_BANNER_LABEL,
+  undeclaredProvenanceReason,
+  specReviewGateErrorFromValues,
+} from './build-index-lib.mjs';
 
 // plan 4071 D3: GATE1_PIPELINE_FIELDS was removed from this module — the historical Gate-1
 // field list now lives in coord.config.json's `land.specReviewGatedFields[]`, and
@@ -712,7 +717,7 @@ test('assertSlugCharset: rejects a space (the F-015 non-ASCII-scanner mismatch t
 });
 
 test('assertSlugCharset: rejects an apostrophe (the F-004 PowerShell-injection trigger)', () => {
-  assert.throws(() => assertSlugCharset("clinic's-fix", 'slug'), /--slug/);
+  assert.throws(() => assertSlugCharset("rec's-fix", 'slug'), /--slug/);
 });
 
 test('assertSlugCharset: rejects non-ASCII letters (Swedish öäå)', () => {
@@ -928,6 +933,85 @@ test('checkBatchEligibility: F1 — a 🟩 exempt-mechanical member (no seed-wri
     { id: '2', path: 'p', content: fmExempt({ seedWrite: 'NO', mentionsField: true }) },
   ];
   assert.equal(checkBatchEligibility(members).ok, true);
+});
+
+// ── plan 4202: checkStubClaimGate delegates its undeclared arm to the shared core ──────
+// (build-index-lib.mjs's undeclaredProvenanceReason) so the reason text can never drift
+// from what the oracle/board/move-plan surfaces say. These are the direct unit-level
+// counterparts of the doAcquire-level assertions in claim-plan.test.mjs.
+
+function fmUndeclared({
+  stage = 'specced',
+  specReview = '9f8e7d6',
+  specReviewBy = 'undeclared',
+} = {}) {
+  return [
+    '---',
+    `stage: ${stage}`,
+    `specReview: ${specReview}`,
+    `specReviewBy: ${specReviewBy}`,
+    '---',
+    '',
+    '# T',
+    '',
+    'body',
+    '',
+  ].join('\n');
+}
+
+test('checkStubClaimGate: a real specReview with specReviewBy: undeclared is refused, reason matches the shared core sentence', () => {
+  const r = checkStubClaimGate(fmUndeclared());
+  assert.equal(r.ok, false);
+  // Same base sentence the core (build-index-lib.mjs) builds for every other surface —
+  // only the claim gate's --stub-ok hint differs (design: oracle/move-plan don't offer it).
+  assert.equal(r.reason, undeclaredProvenanceReason('plan', '9f8e7d6', { stubOkHint: true }));
+  assert.match(r.reason, /--stub-ok "<authorization note>"/);
+});
+
+test('checkStubClaimGate: fires on stage: specced too, not only stage: stub (plan 3943 gap this hoist closes)', () => {
+  const r = checkStubClaimGate(fmUndeclared({ stage: 'specced' }));
+  assert.equal(r.ok, false);
+  assert.match(r.reason, /specReviewBy: undeclared/);
+});
+
+test('checkStubClaimGate: specReviewBy compare stays case-insensitive after the delegation', () => {
+  assert.equal(checkStubClaimGate(fmUndeclared({ specReviewBy: 'Undeclared' })).ok, false);
+  assert.equal(checkStubClaimGate(fmUndeclared({ specReviewBy: 'UNDECLARED' })).ok, false);
+});
+
+test('checkStubClaimGate: --stub-ok still overrides the undeclared refusal after the delegation', () => {
+  assert.equal(checkStubClaimGate(fmUndeclared(), { stubOk: true }).ok, true);
+});
+
+test('checkStubClaimGate: a DECLARED specReviewBy (or none at all — legacy) still passes', () => {
+  assert.equal(checkStubClaimGate(fmUndeclared({ specReviewBy: 'fable-5.1/xhigh' })).ok, true);
+  assert.equal(
+    checkStubClaimGate(
+      ['---', 'stage: specced', 'specReview: 9f8e7d6', '---', '', '# T', '', 'body', ''].join('\n'),
+    ).ok,
+    true,
+  );
+});
+
+test('checkStubClaimGate: exempt-mechanical is never gated on provenance (short-circuits before the undeclared check)', () => {
+  assert.equal(checkStubClaimGate(fmUndeclared({ specReview: 'exempt-mechanical' })).ok, true);
+});
+
+test('checkStubClaimGate and specReviewGateErrorFromValues agree on WHICH plans are refused for undeclared provenance', () => {
+  const cases = [
+    { stage: 'specced', specReview: '9f8e7d6', specReviewBy: 'undeclared' },
+    { stage: 'stub', specReview: '9f8e7d6', specReviewBy: 'undeclared' },
+    { stage: 'specced', specReview: '9f8e7d6', specReviewBy: 'fable-5.1/high' },
+    { stage: 'stub', specReview: 'exempt-mechanical', specReviewBy: 'undeclared' },
+  ];
+  for (const c of cases) {
+    const claimRefused = checkStubClaimGate(fmUndeclared(c)).ok === false;
+    const coreRefused =
+      specReviewGateErrorFromValues(c.stage, c.specReview, 'x.md', 'ctx:', {
+        specReviewBy: c.specReviewBy,
+      }) !== null;
+    assert.equal(claimRefused, coreRefused, JSON.stringify(c));
+  }
 });
 
 test('boardBatchPlanClaimCell: appends a batch pointer after boardPlanClaimCell, still lint-valid', () => {

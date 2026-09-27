@@ -675,6 +675,34 @@ test('move-plan: explicit FABLE lane wins over the exempt-mechanical default bac
   }
 });
 
+// plan 4202: a real specReview sha stamped with specReviewBy: undeclared must refuse the
+// SAME as a bare stub would — a spec-pass of unknown provenance cannot be drained. Nothing
+// may land in ready/ on origin, and no rename/mutation may survive the refusal.
+test('move-plan: refuses to promote a plan with specReview + specReviewBy: undeclared to ready/ (plan 4202)', () => {
+  const body = DEFAULT_PLAN_BODY.replace(
+    '---\nsummary: Test plan for the move-plan happy path\n---',
+    '---\nsummary: Test plan for the move-plan happy path\nstage: specced\nspecReview: 9f8e7d6\nspecReviewBy: undeclared\n---',
+  );
+  const repo = makeIsolatedRepo({ startFolder: 'pending-approval', body });
+  try {
+    const before = repo.g('rev-parse', 'origin/master').trim();
+    const res = runMovePlan(repo.dir, ['050', 'ready'], repo.movePlan);
+    assert.notEqual(
+      res.code,
+      0,
+      `expected a non-zero exit\nstdout:${res.stdout}\nstderr:${res.stderr}`,
+    );
+    assert.match(res.stderr, /specReviewBy: undeclared/);
+    assert.equal(repo.g('rev-parse', 'origin/master').trim(), before, 'no commit landed');
+    repo.g('fetch', '-q', 'origin', 'master');
+    const tree = repo.g('ls-tree', '-r', '--name-only', 'origin/master');
+    assert.doesNotMatch(tree, /ready\/050-Infra-foo\.md/, 'nothing landed in ready/');
+    assert.match(tree, /pending-approval\/050-Infra-foo\.md/, 'plan stays in pending-approval/');
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test('move-plan: in-progress/ is never auto-stamped, even with execModel: fable (worktree-coupled basename)', () => {
   const FABLE_BODY = DEFAULT_PLAN_BODY.replace(
     '---\nsummary: Test plan for the move-plan happy path\n---',
@@ -932,6 +960,38 @@ test('assertSpecReviewOk: ready target allows stage: specced regardless of specR
   );
 });
 
+// plan 4202: assertSpecReviewOk delegates to the shared specReviewGateError, which now also
+// refuses a real specReview sha stamped with specReviewBy: undeclared — a spec-pass of
+// unknown provenance must not promote to ready/ any more than a bare stub can.
+test('assertSpecReviewOk: ready target refuses stage: specced with specReview + specReviewBy: undeclared (plan 4202)', () => {
+  assert.throws(
+    () =>
+      assertSpecReviewOk(
+        'ready',
+        '---\nstage: specced\nspecReview: 9f8e7d6\nspecReviewBy: undeclared\n---\n# T\n\nbody',
+        '050-Infra-foo.md',
+      ),
+    /specReviewBy: undeclared/,
+  );
+});
+
+test('assertSpecReviewOk: a DECLARED specReviewBy (or none at all — legacy) still passes', () => {
+  assert.doesNotThrow(() =>
+    assertSpecReviewOk(
+      'ready',
+      '---\nstage: specced\nspecReview: 9f8e7d6\nspecReviewBy: fable-5.1/high\n---\n# T\n\nbody',
+      '050-Infra-foo.md',
+    ),
+  );
+  assert.doesNotThrow(() =>
+    assertSpecReviewOk(
+      'ready',
+      '---\nstage: specced\nspecReview: 9f8e7d6\n---\n# T\n\nbody',
+      '050-Infra-foo.md',
+    ),
+  );
+});
+
 // ── plan 1292 bugfix: assertSpecReviewOk now delegates to the shared
 // specReviewGateError, which is case-insensitive on `stage` and strips a
 // trailing YAML comment off `specReview` before checking it's non-empty.
@@ -1062,8 +1122,8 @@ test('assertEvidenceFloorOk: SEO/Biz/Other plans are deliberately ungated for no
 
 test('assertEvidenceFloorOk: plan 2896 — MAIL is ungated BY CONSTRUCTION, not "for now"', () => {
   // Distinct from the SEO/Biz/Other case above, which is a not-yet decision. A MAIL plan is
-  // minted by /clinic-correction-intake with `--evidence observed-live` always — a clinic
-  // reporting on the live site IS a live observation — so `evidence: latent` can never occur
+  // minted by the record-correction intake flow with `--evidence observed-live` always — a
+  // record reporting on the live site IS a live observation — so `evidence: latent` can never occur
   // on one and gating the category would only add a trap. The runbook (§ Mail-originated
   // plans) says "do not fix that by adding it"; this pins the promise so a later sweep that
   // adds MAIL to coord.config.json's planCategories.evidenceGated goes red here instead of

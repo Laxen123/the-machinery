@@ -1,8 +1,7 @@
 // scripts/coord/land/lane-merge.mjs — plan 3961 T3.6b: the land spine's lane-merge phase
 // (merge to master, claim release, resume-graft holds), moved out of scripts/done-worktree.mjs
-// behaviour-identical (parity proven by scripts/coord/land/parity.test.mjs's 12 scenarios against
-// committed goldens, plus the full 571-case scripts/done-worktree.test.mjs, both unchanged by
-// this move).
+// behaviour-identical (parity proven by this migration's parity-test suite against committed
+// goldens, plus the full legacy test suite, both unchanged by this move).
 //
 // WHAT THIS MODULE OWNS. `phaseLaneMerge` itself (the file header's five-phase landing sequence's
 // third phase: the landing-queue enqueue-and-gate, the at-head worktree-lock acquire, the
@@ -16,7 +15,7 @@
 // conceptually unrelated to it, the same pattern T3.1/T3.2 each found in their own zones).
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
-// import only scripts/coord/** and node: builtins (Rule 3, docs/runbooks/scripts-module-layout.md)
+// import only scripts/coord/** and node: builtins (Rule 3, docs/coord/scripts-layout.md)
 // — so every one of the plain scripts/*.mjs modules this code used to reach directly is instead
 // read off the bound dependency container, `landDeps()` (scripts/coord/land/deps.mjs), AT CALL
 // TIME, inside each function — never at module top level. `D` (this module's convention: `const D
@@ -787,7 +786,7 @@ export async function phaseLaneMerge(ctx) {
           `  1. pnpm exec prettier --write ${fileList}\n` +
           `  2. git commit -am "style: prettier --write for post-rebase config drift" && git push\n` +
           `  3. re-record the review — a prettier-only delta is "no new logic" (self-read + ` +
-          `\`node scripts/record-review.mjs PASS\`, per docs/runbooks/review-calibration.md)\n` +
+          `\`node scripts/record-review.mjs PASS\`, per docs/coord/review.md § The calibration ladder)\n` +
           `  4. re-run done-worktree (bare — the new commit re-runs every gate; there is no --resume ` +
           `skip for this seam).\n` +
           `(NEVER auto-fixed in-spine: an auto-commit would change the patch-id and bypass the ` +

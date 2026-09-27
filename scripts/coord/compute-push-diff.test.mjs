@@ -26,14 +26,18 @@ import {
   isSweepCheckpointOnlyPush,
   isSweepCheckpointOnlyPushStdin,
   renderStorePathRxFor,
+  sweepCheckpointRxFor,
 } from './compute-push-diff.mjs';
 
-// The real vetapp render-store regex, built the same way `main()` builds it — used wherever a
-// test below needs the checkpoint exemption's render-store half to actually match (plan 4071 T3).
+// A representative render-store regex, built the same way `main()` builds it from a
+// derivedShardDirs list — used wherever a test below needs the checkpoint exemption's
+// render-store half to actually match (plan 4071 T3). renderStorePathRxFor is generic (the
+// caller supplies the directory list), so this fixture's own path text is arbitrary and does
+// not need to match any real project's actual coord.config.json.
 const RENDER_STORE_RX = renderStorePathRxFor([
-  'backend/data/price-pipeline/render-fingerprints',
-  'backend/data/price-pipeline/render-store',
-  'backend/data/price-pipeline/removal-proposals',
+  'backend/data/data-pipeline/render-fingerprints',
+  'backend/data/data-pipeline/render-store',
+  'backend/data/data-pipeline/removal-proposals',
 ]);
 
 const Z40 = '0'.repeat(40);
@@ -316,7 +320,7 @@ test('computeChangedFiles: a done-worktree master-land push diffs the merge, not
   const diff = (range) => {
     calls.push(range);
     return range === `${SHA_B}..${SHA_A}`
-      ? ['backend/src/data/seed-clinics.json']
+      ? ['backend/src/data/seed-records.json']
       : ['SHOULD-NOT-APPEAR'];
   };
   const changed = computeChangedFiles(stdin, {
@@ -324,7 +328,7 @@ test('computeChangedFiles: a done-worktree master-land push diffs the merge, not
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
   });
-  assert.deepEqual(changed, ['backend/src/data/seed-clinics.json']);
+  assert.deepEqual(changed, ['backend/src/data/seed-records.json']);
   assert.deepEqual(calls, [`${SHA_B}..${SHA_A}`]);
 });
 
@@ -446,50 +450,61 @@ test('isDrainStatusOnlyPushStdin: a push mixing a status file with code is NOT e
 // negative tests are the ones that matter: a push carrying real code must not ride it.
 
 test('renderStorePathRxFor: matches paths under the configured render-store dir, bounded at the next segment', () => {
-  const rx = renderStorePathRxFor(['backend/data/price-pipeline/render-store']);
-  assert.equal(rx.test('backend/data/price-pipeline/render-store/clinic-1/x.json'), true);
+  const rx = renderStorePathRxFor(['backend/data/data-pipeline/render-store']);
+  assert.equal(rx.test('backend/data/data-pipeline/render-store/rec-1/x.json'), true);
   // A sibling directory sharing the prefix must NOT match — the regex requires a "/" right after
   // the configured dir, not merely a matching prefix string.
-  assert.equal(rx.test('backend/data/price-pipeline/render-store-other/x.json'), false);
+  assert.equal(rx.test('backend/data/data-pipeline/render-store-other/x.json'), false);
 });
 
 test('renderStorePathRxFor: an empty list, or a list with no render-store row, matches nothing (never throws)', () => {
-  assert.equal(renderStorePathRxFor([]).test('backend/data/price-pipeline/render-store/x'), false);
+  assert.equal(renderStorePathRxFor([]).test('backend/data/data-pipeline/render-store/x'), false);
   assert.equal(renderStorePathRxFor(undefined).test('anything'), false);
   assert.equal(
-    renderStorePathRxFor(['backend/data/price-pipeline/render-fingerprints']).test(
-      'backend/data/price-pipeline/render-store/x',
+    renderStorePathRxFor(['backend/data/data-pipeline/render-fingerprints']).test(
+      'backend/data/data-pipeline/render-store/x',
     ),
     false,
   );
 });
 
-test('isSweepCheckpointOnlyPush: a checkpoint-file-only set is exempt', () => {
+// plan 4172: the checkpoint path is config (`sweepCheckpointPattern`), injected by the caller —
+// every case below runs against this fixture pattern, never a project literal.
+const SWEEP_RX = sweepCheckpointRxFor('^data/jobs/sweep-checkpoints/[^/\\\\]+\\.json$');
+const onlyPush = (files, opts = {}) =>
+  isSweepCheckpointOnlyPush(files, { sweepCheckpointRx: SWEEP_RX, ...opts });
+const onlyPushStdin = (stdin, opts = {}) =>
+  isSweepCheckpointOnlyPushStdin(stdin, { sweepCheckpointRx: SWEEP_RX, ...opts });
+
+test('plan 4172 sweepCheckpointRxFor: no configured pattern matches nothing, so a checkpoint-only set is NOT exempt', () => {
+  assert.equal(sweepCheckpointRxFor(null).test('data/jobs/sweep-checkpoints/x.json'), false);
   assert.equal(
-    isSweepCheckpointOnlyPush([
-      'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json',
-    ]),
-    true,
+    isSweepCheckpointOnlyPush(['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json']),
+    false,
   );
+  assert.equal(SWEEP_RX.test('data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'), true);
+});
+
+test('isSweepCheckpointOnlyPush: a checkpoint-file-only set is exempt', () => {
+  assert.equal(onlyPush(['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json']), true);
 });
 
 test('isSweepCheckpointOnlyPush: a render-store-only set is exempt', () => {
   assert.equal(
-    isSweepCheckpointOnlyPush(
-      ['backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json'],
-      { renderStoreRx: RENDER_STORE_RX },
-    ),
+    onlyPush(['backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json'], {
+      renderStoreRx: RENDER_STORE_RX,
+    }),
     true,
   );
 });
 
 test('isSweepCheckpointOnlyPush: checkpoint + render-store together are exempt', () => {
   assert.equal(
-    isSweepCheckpointOnlyPush(
+    onlyPush(
       [
-        'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json',
-        'backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json',
-        'backend/data/price-pipeline/render-store/clinic-2/playwright/h2/index.html',
+        'data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json',
+        'backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json',
+        'backend/data/data-pipeline/render-store/rec-2/playwright/h2/index.html',
       ],
       { renderStoreRx: RENDER_STORE_RX },
     ),
@@ -503,29 +518,27 @@ test('isSweepCheckpointOnlyPush: checkpoint + render-store together are exempt',
 // regex in; a caller that does not is the generic-core posture, not a vetapp regression.
 test('isSweepCheckpointOnlyPush: a render-store-only set is NOT exempt with no renderStoreRx supplied', () => {
   assert.equal(
-    isSweepCheckpointOnlyPush([
-      'backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json',
-    ]),
+    onlyPush(['backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json']),
     false,
   );
 });
 
 test('isSweepCheckpointOnlyPush: an EMPTY change set is NOT exempt', () => {
-  assert.equal(isSweepCheckpointOnlyPush([]), false);
-  assert.equal(isSweepCheckpointOnlyPush(null), false);
+  assert.equal(onlyPush([]), false);
+  assert.equal(onlyPush(null), false);
 });
 
 test('isSweepCheckpointOnlyPush: ONE real-code file in the push defeats the exemption', () => {
   assert.equal(
-    isSweepCheckpointOnlyPush([
-      'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json',
-      'backend/scripts/price-pipeline/weekly-price-sweep.py',
+    onlyPush([
+      'data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json',
+      'backend/scripts/data-pipeline/weekly-price-sweep.py',
     ]),
     false,
   );
   assert.equal(
-    isSweepCheckpointOnlyPush([
-      'backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json',
+    onlyPush([
+      'backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json',
       'scripts/hooks/pre-push.sh',
     ]),
     false,
@@ -534,20 +547,20 @@ test('isSweepCheckpointOnlyPush: ONE real-code file in the push defeats the exem
 
 test('isSweepCheckpointOnlyPush: near-miss paths outside the two allowed trees are NOT exempt', () => {
   for (const path of [
-    'backend/data/price-pipeline/sweep-checkpoints/nested/weekly-sweep-2026-09-05.json', // nested
-    'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.mjs', // not JSON
-    'backend/data/render-store/clinic-1/playwright/h/_meta.json', // wrong render-store path (no price-pipeline/)
-    'a/backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json', // not at repo root
-    'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json.bak',
+    'data/jobs/sweep-checkpoints/nested/weekly-sweep-2026-09-05.json', // nested
+    'data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.mjs', // not JSON
+    'backend/data/render-store/rec-1/playwright/h/_meta.json', // wrong render-store path (no data-pipeline/)
+    'a/data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json', // not at repo root
+    'data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json.bak',
   ]) {
-    assert.equal(isSweepCheckpointOnlyPush([path]), false, `${path} must not be exempt`);
+    assert.equal(onlyPush([path]), false, `${path} must not be exempt`);
   }
 });
 
 test('isSweepCheckpointOnlyPushStdin: a real checkpoint-only push (new branch) is exempt', () => {
   const stdin = `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${Z40}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => SHA_C,
     isAncestor: () => false,
   });
@@ -557,10 +570,10 @@ test('isSweepCheckpointOnlyPushStdin: a real checkpoint-only push (new branch) i
 test('isSweepCheckpointOnlyPushStdin: a cadence push onto an EXISTING worktree branch is exempt', () => {
   // The fast-forward case, which is what every cadence push after the first one actually is.
   const stdin = `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${SHA_B}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
+  const exempt = onlyPushStdin(stdin, {
     diff: (range) =>
       range === `${SHA_B}..${SHA_A}`
-        ? ['backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json']
+        ? ['backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json']
         : ['nope.ts'],
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
@@ -574,24 +587,18 @@ test('isSweepCheckpointOnlyPushStdin: stdin with NO qualifying ref line is never
   // (no ref line on stdin — a manual/test invocation) must never be trusted as the basis for
   // an exemption, even when the diff itself looks perfectly checkpoint-only.
   const checkpointOnly = {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => SHA_C,
     isAncestor: () => false,
   };
-  assert.equal(isSweepCheckpointOnlyPushStdin('', checkpointOnly), false, 'empty stdin');
+  assert.equal(onlyPushStdin('', checkpointOnly), false, 'empty stdin');
   assert.equal(
-    isSweepCheckpointOnlyPushStdin(
-      `refs/claims/3682 ${SHA_A} refs/claims/3682 ${Z40}\n`,
-      checkpointOnly,
-    ),
+    onlyPushStdin(`refs/claims/3682 ${SHA_A} refs/claims/3682 ${Z40}\n`, checkpointOnly),
     false,
     'coord-only stdin has no qualifying ref',
   );
   assert.equal(
-    isSweepCheckpointOnlyPushStdin(
-      `(delete) ${Z40} refs/heads/worktree-3682-x ${SHA_B}\n`,
-      checkpointOnly,
-    ),
+    onlyPushStdin(`(delete) ${Z40} refs/heads/worktree-3682-x ${SHA_B}\n`, checkpointOnly),
     false,
     'a deletion has no qualifying ref',
   );
@@ -599,10 +606,10 @@ test('isSweepCheckpointOnlyPushStdin: stdin with NO qualifying ref line is never
 
 test('isSweepCheckpointOnlyPushStdin: a push mixing a checkpoint file with code is NOT exempt', () => {
   const stdin = `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${SHA_B}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
+  const exempt = onlyPushStdin(stdin, {
     diff: () => [
-      'backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json',
-      'backend/scripts/price-pipeline/weekly-price-sweep.py',
+      'data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json',
+      'backend/scripts/data-pipeline/weekly-price-sweep.py',
     ],
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
@@ -617,8 +624,8 @@ test('isSweepCheckpointOnlyPushStdin: a push mixing a checkpoint file with code 
 // watches `worktree-*` branches.
 test('isSweepCheckpointOnlyPushStdin: a checkpoint-only-shaped push to master is NOT exempt', () => {
   const stdin = `refs/heads/master ${SHA_A} refs/heads/master ${SHA_B}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
   });
@@ -627,8 +634,8 @@ test('isSweepCheckpointOnlyPushStdin: a checkpoint-only-shaped push to master is
 
 test('isSweepCheckpointOnlyPushStdin: a checkpoint-only-shaped push to a non-worktree branch is NOT exempt', () => {
   const stdin = `refs/heads/some-other-branch ${SHA_A} refs/heads/some-other-branch ${Z40}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/render-store/clinic-1/playwright/h/_meta.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['backend/data/data-pipeline/render-store/rec-1/playwright/h/_meta.json'],
     base: () => SHA_C,
     isAncestor: () => false,
   });
@@ -639,8 +646,8 @@ test('isSweepCheckpointOnlyPushStdin: multiple refs where ONE destination is not
   const stdin =
     `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${SHA_B}\n` +
     `refs/heads/master ${SHA_B} refs/heads/master ${SHA_C}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => 'unused',
     isAncestor: () => true,
   });
@@ -658,8 +665,8 @@ test('isSweepCheckpointOnlyPushStdin: a mixed push deleting master alongside a c
   const stdin =
     `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${SHA_B}\n` +
     `(delete) ${Z40} refs/heads/master ${SHA_C}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
   });
@@ -677,8 +684,8 @@ test('isSweepCheckpointOnlyPushStdin: deleting an unrelated worktree branch alon
   const stdin =
     `refs/heads/worktree-3682-x ${SHA_A} refs/heads/worktree-3682-x ${SHA_B}\n` +
     `(delete) ${Z40} refs/heads/worktree-9999-other ${SHA_C}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => 'unused',
     isAncestor: ordinaryFF(SHA_B, SHA_A),
   });
@@ -693,8 +700,8 @@ test('isSweepCheckpointOnlyPushStdin: deleting an unrelated worktree branch alon
 // branch" means.
 test('isSweepCheckpointOnlyPushStdin: a checkpoint-only-shaped push to the EMPTY-slug worktree ref is NOT exempt', () => {
   const stdin = `refs/heads/worktree- ${SHA_A} refs/heads/worktree- ${Z40}\n`;
-  const exempt = isSweepCheckpointOnlyPushStdin(stdin, {
-    diff: () => ['backend/data/price-pipeline/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
+  const exempt = onlyPushStdin(stdin, {
+    diff: () => ['data/jobs/sweep-checkpoints/weekly-sweep-2026-09-05.json'],
     base: () => SHA_C,
     isAncestor: () => false,
   });

@@ -11,7 +11,7 @@
     "test": "node --test \"scripts/**/*.test.mjs\"",
     "lint": "prettier --check .",
     "format": "prettier --write .",
-    "prepare": "husky"
+    "prepare": "husky && node scripts/ensure-wiki-merge-driver.mjs"
   },
   "lint-staged": {
     "*": "prettier --ignore-unknown --write"

@@ -1,4 +1,4 @@
-// scripts/coord/review-markers.mjs — moved from scripts/done-worktree-lib.mjs (plan 3959 T2).
+// scripts/coord/review-markers.mjs — moved from scripts/done-worktree-lib.mjs (plan 3959 T2). (dangling-ok: historical pre-move path, code lives here now)
 //
 // The generic review-tooling core: session-entry resolution, the sha-pinned marker family
 // (review/wiki/conclusion parse+upsert+identity), and the findings-sidecar/disposition
@@ -7,7 +7,7 @@
 // functions git/fs output and consumes their decisions). No vetapp-specific vocabulary: nothing
 // here mentions a clinic, a market, or a deploy target.
 //
-// Rule 3 (docs/runbooks/scripts-module-layout.md): a non-test module under scripts/coord/ may
+// Rule 3 (docs/coord/scripts-layout.md): a non-test module under scripts/coord/ may
 // import only scripts/coord/** and node: builtins. Two callers this module's functions used to
 // default a parameter FROM broke that boundary — LEGACY_PATHS (scripts/coord/coord-config.mjs) and
 // SESSION_ENTRY_DATE_SHAPE (scripts/coord/build-handoff-lib.mjs) both live outside scripts/coord/. No
@@ -390,7 +390,7 @@ function markerWalkEntries(r, carried, paths) {
 // that halts, never as "nothing recorded" (review 4fcf38/2a36b2/5ffd98/41f896/8a3528/33ce2a).
 //
 // Why not import seam-guard-lib.mjs's PATH_ABSENT_RX (review 3f6485): Rule 3 of
-// docs/runbooks/scripts-module-layout.md forbids a scripts/coord/ module from importing anything
+// docs/coord/scripts-layout.md forbids a scripts/coord/ module from importing anything
 // outside scripts/coord/. This is therefore the single copy that record-marker-cli, record-review
 // and done-worktree all route through; it is a superset of that regex (it also knows the
 // missing-REF wordings `git show` and `git grep` print).
@@ -745,6 +745,15 @@ export const MARKER_FAMILIES = {
   conclusion: {
     label: 'Conclusion',
     verdicts: ['UPHELD', 'REFUTED', 'UNDERDETERMINED'],
+    hasDetail: true,
+    resultField: 'verdict',
+  },
+  // plan 4219: an independent judge's verdict on the branch's live pages. PASS-NOTES is listed
+  // before PASS so the alternation never settles on the shorter prefix. The detail names the
+  // judge, the recipes it covered and the evidence directory.
+  liveCheck: {
+    label: 'LiveCheck',
+    verdicts: ['PASS-NOTES', 'PASS', 'FAIL', 'BLOCKED', 'SKIP'],
     hasDetail: true,
     resultField: 'verdict',
   },
@@ -1153,7 +1162,7 @@ export function findingWithCanonicalKey(rawFinding, index) {
   const identity = normalizeFindingIdentity(rawFinding);
   if (!identity) {
     // Keep the raw path: every sidecar read comes through HERE first, so dropping `file` on the
-    // floor here would mean `{file:'scripts/foo.mjs', summary:' '}` reaches the fix worker as a
+    // floor here would mean `{file:'scripts/<name>.mjs', summary:' '}` reaches the fix worker as a
     // synthetic '(malformed finding)' with nothing to inspect, land still blocked. The gate's own
     // halt message was equally pathless. One owner for the malformed shape now.
     const { malformedFile, malformedNote } = malformedFindingEntry(rawFinding, index);
@@ -1189,7 +1198,7 @@ export function normalizeRounds(rounds) {
 const CONFLICTING_DUPLICATE = Symbol('conflicting-duplicate-disposition');
 
 // plan 2864: `rounds` is the content-distinct review-round counter
-// (docs/runbooks/review-calibration.md § Stopping rule) — the caller (record-review.mjs's
+// (docs/coord/review.md § Stopping rule) — the caller (record-review.mjs's
 // prepare()) computes it against the prior record's `rounds` and the crossSha/patch-id-rework
 // decision; this builder just stamps whatever integer it's handed, defaulting to 1 (the
 // first-record case, and every existing call site that predates this field). Not derived from

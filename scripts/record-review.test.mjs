@@ -1220,7 +1220,7 @@ test('record-review disposition <key> --plan <id> with NO --observed: warns, sti
     const res = runRRCapture(r.wtDir, ['disposition', keys[0], '--plan', '9999', '--no-push']);
     assert.equal(res.status, 0, res.stderr);
     assert.match(res.stderr, /latent finding → line, not plan/, 'names the failed default');
-    assert.match(res.stderr, /Evidence floor/, 'points at the runbook section');
+    assert.match(res.stderr, /evidence floor/, 'points at the docs/coord section');
     assert.match(res.stderr, new RegExp(keys[0]), 'names the affected finding key');
     const rec = parseFindingsRecord(readFileSync(sidecar, 'utf8'));
     assert.deepEqual(rec.findings[0].disposition, { type: 'plan', planId: '9999' });
@@ -1239,7 +1239,7 @@ test('record-review disposition <key> --plan <id> --observed "…": no warn, poi
       '--plan',
       '9999',
       '--observed',
-      'wave-B b2 clinic-1095',
+      'wave-B b2 record-1095',
       '--no-push',
     ]);
     assert.equal(res.status, 0, res.stderr);
@@ -1252,7 +1252,7 @@ test('record-review disposition <key> --plan <id> --observed "…": no warn, poi
     assert.deepEqual(rec.findings[0].disposition, {
       type: 'plan',
       planId: '9999',
-      observed: 'wave-B b2 clinic-1095',
+      observed: 'wave-B b2 record-1095',
     });
   } finally {
     r.cleanup();
@@ -1310,7 +1310,7 @@ test('record-review disposition: --observed alongside --fixed refuses (exit 2), 
         keys[0],
         '--fixed',
         '--observed',
-        'wave-B b2 clinic-1095',
+        'wave-B b2 record-1095',
         '--no-push',
       ]);
     } catch (e) {
@@ -1407,13 +1407,13 @@ test('plan 2942 review [4d70b6]: an N-arity round keeps the [observed: …] brac
       '--plan',
       '9999',
       '--observed',
-      'wave-B b2 clinic-1095',
+      'wave-B b2 record-1095',
       '--no-push',
     ]);
     assert.equal(res.status, 0, res.stderr);
     assert.match(
       res.stdout,
-      /\[observed: wave-B b2 clinic-1095\]/,
+      /\[observed: wave-B b2 record-1095\]/,
       'the multi-finding report must not drop the pointer to the short form',
     );
   } finally {
@@ -1532,14 +1532,14 @@ test('plan 2942 review round 3: the rendered description is RETRY-STABLE — req
       '--plan',
       '9999',
       '--observed',
-      'wave-B b2 clinic-1095',
+      'wave-B b2 record-1095',
       '--no-push',
     ]);
     const res = runRRCapture(r.wtDir, ['disposition', keys[0], '--plan', '9999', '--no-push']);
     assert.equal(res.status, 0, res.stderr);
     assert.deepEqual(
       parseFindingsRecord(readFileSync(sidecar, 'utf8')).findings[0].disposition,
-      { type: 'plan', planId: '9999', observed: 'wave-B b2 clinic-1095' },
+      { type: 'plan', planId: '9999', observed: 'wave-B b2 record-1095' },
       'the authoritative record keeps the carried-forward pointer',
     );
     assert.doesNotMatch(
@@ -1562,7 +1562,7 @@ test('plan 2942 review [674d53]: re-applying the SAME plan without --observed KE
       '--plan',
       '9999',
       '--observed',
-      'wave-B b2 clinic-1095',
+      'wave-B b2 record-1095',
       '--no-push',
     ]);
     // The ordinary re-run: same plan id, no pointer. The evidence must survive, and it must not warn.
@@ -1571,7 +1571,7 @@ test('plan 2942 review [674d53]: re-applying the SAME plan without --observed KE
     assert.deepEqual(parseFindingsRecord(readFileSync(sidecar, 'utf8')).findings[0].disposition, {
       type: 'plan',
       planId: '9999',
-      observed: 'wave-B b2 clinic-1095',
+      observed: 'wave-B b2 record-1095',
     });
     assert.doesNotMatch(
       res.stderr,
@@ -2527,16 +2527,16 @@ test('plan 3295: a review recorded at X is honored at Y for a seed-only X..Y del
     const seedOnlyDelta = (recordedSha, currentSha) =>
       isSeedOnlyDelta(diffNameOnly(recordedSha, currentSha), SEED_SHARD_DIR);
 
-    // Y = X + ONE seed-only commit (a per-clinic shard file under backend/src/data/seed/)
-    mkdirSync(join(r.wtDir, 'backend', 'src', 'data', 'seed', 'clinics', 'SE'), {
+    // Y = X + ONE seed-only commit (a per-record shard file under backend/src/data/seed/)
+    mkdirSync(join(r.wtDir, 'backend', 'src', 'data', 'seed', 'records', 'SE'), {
       recursive: true,
     });
     writeFileSync(
-      join(r.wtDir, 'backend', 'src', 'data', 'seed', 'clinics', 'SE', 'clinic-001.json'),
-      '{"id":"clinic-001"}\n',
+      join(r.wtDir, 'backend', 'src', 'data', 'seed', 'records', 'SE', 'record-001.json'),
+      '{"id":"record-001"}\n',
     );
-    r.g(r.wtDir, 'add', 'backend/src/data/seed/clinics/SE/clinic-001.json');
-    r.g(r.wtDir, 'commit', '-qm', 'seed heal: clinic-001 price fix');
+    r.g(r.wtDir, 'add', 'backend/src/data/seed/records/SE/record-001.json');
+    r.g(r.wtDir, 'commit', '-qm', 'seed heal: record-001 price fix');
     const shaY = r.g(r.wtDir, 'rev-parse', 'HEAD');
 
     assert.equal(
@@ -2603,7 +2603,7 @@ test('plan 3295: a review recorded at X is honored at Y for a seed-only X..Y del
 // vetapp vocabulary.
 test('plan 3961 T2.7b: isSeedOnlyDelta with no configured seed shard dir (null) is false even for seed-shaped paths', () => {
   assert.equal(
-    isSeedOnlyDelta(['backend/src/data/seed/clinics/SE/clinic-001.json'], null),
+    isSeedOnlyDelta(['backend/src/data/seed/records/SE/record-001.json'], null),
     false,
     'no configured seed root ⇒ no carry — the strict sha/patch-id rule stands',
   );
@@ -3127,7 +3127,7 @@ test('plan 2864: rounds==4 prints the at-cap warning on stderr; exit code and bl
     assert.equal(res.status, 0, res.stderr);
     assert.equal(recordedReviewRound(readFileSync(join(r.mainDir, r.sf), 'utf8')), 4);
     assert.match(res.stderr, /delta round 3 of 3, the last sanctioned one/);
-    assert.match(res.stderr, /docs\/runbooks\/review-calibration\.md § Stopping rule/);
+    assert.match(res.stderr, /docs\/coord\/review\.md § Stopping rule/);
     assert.doesNotMatch(res.stderr, /BEYOND/);
   } finally {
     r.cleanup();
@@ -3147,7 +3147,7 @@ test('plan 2864: rounds>=5 prints the BEYOND warning on stderr; exit code and bl
     assert.equal(res.status, 0, res.stderr);
     assert.equal(recordedReviewRound(readFileSync(join(r.mainDir, r.sf), 'utf8')), 5);
     assert.match(res.stderr, /BEYOND the 3-delta-round/);
-    assert.match(res.stderr, /docs\/runbooks\/review-calibration\.md § Stopping rule/);
+    assert.match(res.stderr, /docs\/coord\/review\.md § Stopping rule/);
   } finally {
     r.cleanup();
   }
@@ -4284,22 +4284,22 @@ test('plan 3415 finding 5b: NITS without --findings still inherits a legacy side
 // plan 3958: this module ships as-is into the public coord-kit, whose own coord.config.json
 // carries no wikiSubjectPatterns at all — wikiCheckpointNeeded's self-resolved default
 // therefore never fires there, so the three tests below (which used to rely on that default
-// matching 'backend/scripts/price-pipeline/x.py') inject a portable, fixed pattern via
+// matching 'backend/scripts/data-pipeline/x.py') inject a portable, fixed pattern via
 // wikiCheckpointNeeded's own injectable 4th parameter instead — the SAME technique
 // wiki-checkpoint.test.mjs now uses, threaded through here via wikiDecisionNudge's existing
 // `needed` override (added for exactly this kind of test injection, per its own doc comment).
-const WIKI_TEST_PATTERNS = [/^backend\/scripts\/price-pipeline\//];
+const WIKI_TEST_PATTERNS = [/^backend\/scripts\/data-pipeline\//];
 const neededForTest = (changedFiles, chainsChanged) =>
   wikiCheckpointNeeded(changedFiles, chainsChanged, false, WIKI_TEST_PATTERNS);
 
 test('wikiDecisionNudge: fires the full advisory block when a wiki-owned subject changed and no marker is recorded', () => {
   // Sanity: pin the fixture path against the injected portable predicate, so this test rots
   // loudly if WIKI_TEST_PATTERNS ever stops matching it, instead of silently testing nothing.
-  assert.equal(neededForTest(['backend/scripts/price-pipeline/x.py']), true);
+  assert.equal(neededForTest(['backend/scripts/data-pipeline/x.py']), true);
 
   const headSha = 'a'.repeat(40);
   const text = wikiDecisionNudge({
-    changedFiles: ['backend/scripts/price-pipeline/x.py'],
+    changedFiles: ['backend/scripts/data-pipeline/x.py'],
     chainsChanged: false,
     marker: null,
     headSha,
@@ -4311,13 +4311,13 @@ test('wikiDecisionNudge: fires the full advisory block when a wiki-owned subject
   assert.match(text, /record-wiki\.mjs SKIP/);
   assert.match(text, /WIKI_CHECKPOINT/);
   assert.match(text, /exit 26/);
-  assert.match(text, /backend\/scripts\/price-pipeline\/x\.py/);
+  assert.match(text, /backend\/scripts\/data-pipeline\/x\.py/);
 });
 
 test('wikiDecisionNudge: a marker recorded for the SAME sha prints the one-line recorded state, no warning block', () => {
   const headSha = 'b'.repeat(40);
   const text = wikiDecisionNudge({
-    changedFiles: ['backend/scripts/price-pipeline/x.py'],
+    changedFiles: ['backend/scripts/data-pipeline/x.py'],
     chainsChanged: false,
     marker: { decision: 'WROTE', sha: headSha, patchId: null },
     headSha,
@@ -4332,7 +4332,7 @@ test('wikiDecisionNudge: a marker recorded for the SAME sha prints the one-line 
 test('wikiDecisionNudge: a STALE-sha marker still counts as recorded when its range patch-id matches HEAD (plan 2743 identity)', () => {
   const headSha = 'c'.repeat(40);
   const text = wikiDecisionNudge({
-    changedFiles: ['backend/scripts/price-pipeline/x.py'],
+    changedFiles: ['backend/scripts/data-pipeline/x.py'],
     chainsChanged: false,
     marker: { decision: 'SKIP', sha: 'd'.repeat(40), patchId: 'deadbeef' },
     headSha,
@@ -4429,7 +4429,7 @@ test('wikiDecisionNudge: follows the injected `needed` predicate (defaulting to 
   assert.ok(fired, 'an injected needed:true predicate fires the nudge even off a non-wiki path');
 
   const silent = wikiDecisionNudge({
-    changedFiles: ['backend/scripts/price-pipeline/x.py'], // a REAL wiki-owned path
+    changedFiles: ['backend/scripts/data-pipeline/x.py'], // a REAL wiki-owned path
     chainsChanged: false,
     marker: null,
     headSha: 'b2'.repeat(20),
@@ -4458,7 +4458,7 @@ test('record-review.mjs PASS: the report hook prints the wiki-decision nudge whe
   try {
     // plan 3958: the trigger is the seed shard's chains.json (the chainsChanged signal
     // wikiCheckpointNeeded's FIRST, pattern-independent check fires on unconditionally) rather
-    // than a backend/scripts/price-pipeline/ path — this module ships as-is into the public
+    // than a backend/scripts/data-pipeline/ path — this module ships as-is into the public
     // coord-kit, whose own coord.config.json carries no wikiSubjectPatterns at all, so the
     // pattern-matching half of the checkpoint can never fire there; chainsChanged only needs
     // THIS fixture's own configured seedShardDir, which is fully portable.
@@ -4667,8 +4667,8 @@ test('record-review.mjs identicalReRecord under --dry stays silent on the wiki-d
   const slug = 'wiki-nudge-identical-rerecord-dry';
   const r = makeRepoForRepin(slug);
   try {
-    mkdirSync(join(r.wtDir, 'backend/scripts/price-pipeline'), { recursive: true });
-    writeFileSync(join(r.wtDir, 'backend/scripts/price-pipeline/x.py'), 'x = 1\n');
+    mkdirSync(join(r.wtDir, 'backend/scripts/price-pipeline'), { recursive: true }); // project-word-ok: real wikiSubjectPatterns config literal this repo's default resolves
+    writeFileSync(join(r.wtDir, 'backend/scripts/price-pipeline/x.py'), 'x = 1\n'); // project-word-ok: real wikiSubjectPatterns config literal this repo's default resolves
     r.g(r.wtDir, 'add', '-A');
     r.g(r.wtDir, 'commit', '-qm', 'add price pipeline file');
 

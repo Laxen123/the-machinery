@@ -16,6 +16,9 @@ import {
   boundArchiveRegion,
   checkIndexStale,
   findNestingViolations,
+  findDuplicateIdViolations,
+  checkDuplicateIdInvariant,
+  GRANDFATHERED_DUPLICATE_ID_PATHS,
 } from './lint-plan-index.mjs';
 
 // ── findInheritedPremisesViolations (plan 3943) ────────────────────────────
@@ -662,4 +665,51 @@ test('checkIndexStale: missing docs/INDEX.md on disk → not stale, fails safe (
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ── plan 4237 T4: the same-id invariant ──────────────────────────────────────────────────────
+
+test('plan 4237 T4: two plan files sharing an id are flagged; distinct ids, non-plan names and a 4-digit prefix are not', () => {
+  const P = 'docs/superpowers/plans';
+  assert.equal(
+    findDuplicateIdViolations([`${P}/ready/900-Infra-a.md`, `${P}/archive/900-DQ-b.md`], {
+      waivedPaths: [],
+    }).length,
+    1,
+  );
+  assert.deepEqual(
+    findDuplicateIdViolations(
+      [
+        `${P}/ready/900-Infra-a.md`,
+        `${P}/ready/9000-Infra-b.md`, // a longer id sharing the prefix is a different id
+        `${P}/archive/900-addendum-notes.md`, // not plan-shaped (lowercase tag)
+        `${P}/archive/2026-05-17-legacy.md`, // dated legacy name, claims no id
+      ],
+      { waivedPaths: [] },
+    ),
+    [],
+  );
+});
+
+test('plan 4237 T4: the grandfathered 4232 pair passes, but a THIRD 4232 file is still a duplicate', () => {
+  const P = 'docs/superpowers/plans';
+  const pair = [
+    `${P}/archive/4232-Pipe-stage6-shared-service-tag-meaning.md`,
+    `${P}/waiting-operator/4232-FABLE-Coord-cloud-drains-as-cloud-sessions-spend-promo-credit.md`,
+  ];
+  assert.deepEqual(findDuplicateIdViolations(pair), []);
+  const three = findDuplicateIdViolations([...pair, `${P}/ready/4232-Infra-new.md`]);
+  assert.equal(three.length, 1);
+  assert.match(three[0], /plan id 4232 is carried by 2 files/);
+  assert.ok(GRANDFATHERED_DUPLICATE_ID_PATHS.includes(pair[0]));
+  // review 98b87e/d933f5: a COPY of the waived basename in another folder is not waived
+  const copy = findDuplicateIdViolations([
+    ...pair,
+    `${P}/ready/4232-Pipe-stage6-shared-service-tag-meaning.md`,
+  ]);
+  assert.equal(copy.length, 1, 'the waiver covers the archived path only');
+});
+
+test('plan 4237 T4: the real tracked plan tree has no unwaived duplicate id', () => {
+  assert.equal(checkDuplicateIdInvariant(), 0);
 });

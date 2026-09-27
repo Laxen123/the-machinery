@@ -40,6 +40,7 @@ import {
   moduleFiles,
   walk,
   SCRIPTS_DIR,
+  stripJs,
 } from './module-graph.mjs';
 
 function scratchTree(files) {
@@ -806,6 +807,11 @@ test('stripJs handles a nested template literal and scans its ${…} code', () =
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('stripJs keeps code after an object brace and regex brace inside interpolation', () => {
+  const src = 'const x = `${({ ok: /}/.test(v) }).ok && import("./real.mjs")}`;';
+  assert.match(stripJs(src), /import\s*\(/);
 });
 
 test('a division operator is not mistaken for a regex literal', () => {

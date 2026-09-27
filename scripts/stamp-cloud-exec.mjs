@@ -36,7 +36,7 @@
 // `browser`. One tool owns both axes — `--env` is only legal alongside a `true`
 // stamp (a `false` plan is not cloud-runnable anywhere, so routing it is
 // meaningless; the tool REFUSES), and both keys are written in the same atomic
-// commit. Semantics reference: docs/runbooks/cloud-drain-autonomy.md § The
+// commit. Semantics reference: docs/coord/cloud-drains.md § The
 // cloudEnv axis.
 //
 // The 2241 lesson, encoded as a CHECK not prose (plan 2250, extended plan 2313):
@@ -189,14 +189,14 @@ export const CLOUD_ENV_RUNGS = [
       'cloudEnv: browser — needs a lane with verified live headless-Chromium egress ' +
       '(a plain Full-egress environment has fetch/WebKit egress but not verified ' +
       'Chromium-TLS egress, see the 2241 evidence in ' +
-      'docs/runbooks/cloud-drain-autonomy.md); since plan 3823 the browser body is ' +
+      'docs/coord/cloud-drains.md § The autonomy axis); since plan 3823 the browser body is ' +
       'the FLEET DEFAULT rather than a single-account exception — the account registry marks ' +
       'BOTH drain slots on all three live accounts `browser`, and the reconciler ' +
       'renders sonnet-browser.md / fable-browser.md for them. WHICH slots have that ' +
       'body pushed onto the live trigger, and which are enabled, are both LIVE state ' +
-      'this literal must never assert: read the dated log in ' +
-      'docs/runbooks/cloud-drain-landing.md, and ask ' +
-      'node scripts/sync-trigger-bodies.mjs --dry-run which bodies are actually in ' +
+      'this literal must never assert: read the dated fleet log for the current binding, ' +
+      'and ask ' +
+      'the trigger-body sync tool (in dry-run mode) which bodies are actually in ' +
       'sync. ' +
       'You are seeing this code because the run that produced it asked for a LOWER ' +
       'rung: re-run with --env browser, or route to a local/interactive session.',
@@ -240,7 +240,7 @@ export function assertNoBrowserDowngrade(body, newEnv) {
         'acceptance needs live headless-Chromium egress (the 2241 evidence: a Full-egress ' +
         'environment passes curl/Node fetches but every headless-Chromium TLS handshake ' +
         'resets, and a Trusted environment blocks live-host fetches outright — see ' +
-        'docs/runbooks/cloud-drain-autonomy.md § The cloudEnv axis), and its acceptance ' +
+        'docs/coord/cloud-drains.md § The cloudEnv axis), and its acceptance ' +
         'consumes pixels/vision output a WebKit engine swap would silently change (the ' +
         'plan-2313 DOM-vs-pixels split). No lesser lane can actually run this plan. If a ' +
         'cloud lane has since gained verified Chromium egress, stamp --env browser instead.',

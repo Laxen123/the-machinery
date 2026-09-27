@@ -5,8 +5,8 @@
 //
 // WHY THIS EXISTS. Every raw `Edit`/`Write` under `.claude/**` raises a `safetyCheck`
 // permission ask in the cloud that nobody is there to approve — two drains froze 109 and
-// 225 minutes on exactly that (2026-07-20, plans 2096 and 2071+2099; the anatomy lives in
-// `docs/runbooks/cross-account-claude-ui.md`). The classifier flags the TOOL CALL on the
+// 225 minutes on exactly that (2026-07-20, plans 2096 and 2071+2099; the anatomy is
+// recorded in this project's own incident history). The classifier flags the TOOL CALL on the
 // path, not the underlying file op: a write issued through a Bash coord tool
 // (`edit-plan.mjs`, `move-plan.mjs`, `board.mjs`) is never flagged (plan 2055 fallback,
 // same runbook). This script is that mechanism for `.claude/workflows/**` — and ONLY that
@@ -28,7 +28,7 @@
 //       fragility is the failure mode the coord tools already rejected) and prints one
 //       audit line (target, byte count, content sha256).
 //
-// Per docs/runbooks/scripts-module-layout.md this module imports only from within
+// Per docs/coord/scripts-layout.md this module imports only from within
 // `scripts/` and node builtins — the isolated-plan-repo test scaffold runs COPIES of the
 // `scripts/` tree, so an escaping import would die there.
 
@@ -150,8 +150,8 @@ export function assertTargetContained({ target, repoRoot = REPO_ROOT } = {}) {
  *  TWO PASSES, because a workflow script is NOT a plain module. The Workflow runtime executes
  *  the script BODY inside an async function ("the script body runs in an async context"), so a
  *  top-level `return` — the standard early-exit in these files — is legal there and illegal to
- *  a bare `node --check`. Measured: `.claude/workflows/price-cohort-apply.mjs:52` and
- *  `price-cohort-extract-apply.mjs:51` both early-return, so a one-pass gate refuses 2 of the 3
+ *  a bare `node --check`. Measured: two of this project's own workflow files early-return at
+ *  their own top level, so a one-pass gate refuses 2 of the 3
  *  real workflow files and the sanctioned route cannot update them at all (gpt-review c8e951).
  *  Pass 1 checks the content as written (this is what `sonnet-review.js` needs — it uses
  *  top-level `export`, which is legal in a module and illegal inside a function wrapper, so the

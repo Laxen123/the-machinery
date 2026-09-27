@@ -30,7 +30,7 @@ yes|no` (single plan) or `claim-plan.mjs batch <id1> <id2> […≤5] --slug <bat
   a board `🔄 ACTIVE` row, the plan body's `Status:` flip (plus an `**Override:**` note if the claim
   bypassed a `waiting-*/` gate), `git mv` into `in-progress/`, an INDEX repath, and a session-entry stub
   (one shared entry listing every member, for a batch) plus — for a batch — the write-once manifest
-  `docs/handoff/batches/<batch-slug>.json`.
+  `docs/superpowers/batches/<batch-slug>/manifest.json`.
 - **On loss (`{"won":false,…}`)** the JSON names the holder (session/host/time). STOP unconditionally —
   never reinterpret a plan that already looks claimed as your own resume. Positive ownership requires
   EITHER a `{won:true}` you personally received this session, OR `claim-plan.mjs status <id>` reporting
@@ -43,7 +43,8 @@ yes|no` (single plan) or `claim-plan.mjs batch <id1> <id2> […≤5] --slug <bat
   it claims unconditionally; that human judgment belongs to whoever calls `acquire` on a gated plan.
 - **`release-claim.mjs release <id>`** releases the claim — since plan 3756 by appending a tombstone
   commit, not by deleting the ref (the proxy 403s deletes by verb); actual ref deletion is the separate,
-  off-critical-path `reap-dead-claims.mjs --gc-refs` chore. Wired into `done-worktree` on land, or called
+  off-critical-path dead-claim reaper chore, run from an environment whose pushes may delete. Wired
+  into `done-worktree` on land, or called
   directly on abandon. **`reconcile-board.mjs`** reports ref↔board drift when the two disagree.
 
 ## The land half — `done-worktree.mjs` is the deterministic spine

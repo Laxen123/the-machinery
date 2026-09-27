@@ -298,7 +298,7 @@ const ID_TOKEN_RX = /\b\d{3,}\b/g;
 // `plan`/`plans` or `#` immediately preceding an id, or a `NNNN-Category-slug`
 // basename shape — the only cues that ground a numeral sitting INSIDE a parenthetical
 // aside (design A, plan 2417). A parenthetical is where the corpus's genuine phantoms
-// live — a clinic-id list ("(SE clinics 291/427/459/552/787)"), a citation
+// live — a record-id list ("(SE records 291/427/459/552/787)"), a citation
 // ("(plan-2299 precedent)"), a bare date ("(CMA Dec 2026)") — so a bare uncued numeral
 // there does not ground even though one at the declaration's TOP LEVEL does (below).
 const CUE_BEFORE_RX = /(?:\bplans?\b|#)\s*$/i;
@@ -384,7 +384,7 @@ function cuedIdsInSpan({ text: spanText, cuedByEnclosing }) {
  * 1541 ...", "1551/1552/1554 ready, 1917 waiting-blocked on 1551, ..."). INSIDE a
  * parenthetical aside — at ANY nesting depth — a numeral only counts when explicitly
  * cued by `plan[s]?`/`#`/a `NNNN-Category-slug` basename, or chained to such a cue via
- * a list separator — that is where the corpus's genuine phantoms live (a clinic-id
+ * a list separator — that is where the corpus's genuine phantoms live (a record-id
  * list, a source-line citation, a bare date), and stripping code spans + ISO dates
  * first (design B) removes the rest (the 2403 false-positive class this plan fixes).
  * Operates on one already-strikethrough-stripped line at a time.
@@ -461,7 +461,7 @@ export function hasNonPlanGate(content) {
 // A **Status:** line carrying the ✅ COMPLETED stamp done-worktree's normal
 // archive close-out writes — ported verbatim (plan 1836) from queue-drain.mjs's
 // ARCHIVE_COMPLETED_RX so the two never drift. `archive/` holds plans that are
-// "shipped OR closed" (docs/runbooks/plans-workflow.md § Plan folder layout) —
+// "shipped OR closed" (docs/coord/plan-lanes.md § The lane set) —
 // mere archive/ presence does NOT prove the blocking WORK landed: a plan can be
 // archived 🗄️ SUPERSEDED / abandoned without ever shipping. Only this exact
 // stamp counts as "shipped"; anything else (SUPERSEDED, a stray non-terminal

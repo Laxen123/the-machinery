@@ -1,7 +1,7 @@
 // scripts/coord/land/queue.mjs — plan 3961 T3.3: the land spine's queue lifecycle, moved out
-// of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move).
+// of scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's
+// parity-test suite against committed goldens, plus the full legacy test suite, both unchanged
+// by this move).
 //
 // WHAT THIS MODULE OWNS. The landing-queue lifecycle: the FIFO enqueue-and-wait loop
 // (queueEnqueueAndGate) and its heartbeat/discovery helpers, the waiter-side auto-recovery
@@ -15,7 +15,7 @@
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
 // import only scripts/coord/** and node: builtins (Rule 3,
-// docs/runbooks/scripts-module-layout.md) — so every one of the plain scripts/*.mjs modules
+// docs/coord/scripts-layout.md) — so every one of the plain scripts/*.mjs modules
 // this code used to reach directly is instead read off the bound dependency container,
 // `landDeps()` (scripts/coord/land/deps.mjs), AT CALL TIME, inside each function — never at
 // module top level. `D` (this module's convention: `const D = landDeps();` as the first line of
@@ -68,7 +68,7 @@
 // `export` is added to each as the one mechanical exception the "byte-identical except…" rule
 // below already names. `queueViewShowsRealSlot`, `recentEnqueueAttempt`,
 // `RECOVERY_VERBS`, and `recoveryLadderForTick` have NO spine caller of their own — they are
-// exported ONLY because scripts/done-worktree.test.mjs imports them directly (a deliberate,
+// exported ONLY because the legacy module's own test suite imports them directly (a deliberate,
 // temporary re-export from done-worktree.mjs; T4 moves those test cases into this module's own
 // queue.test.mjs and drops it). `dequeueQueueIfHeld` is ALSO imported directly by
 // scripts/coord/land/close-out.mjs (a sibling core module reaching another core module's export

@@ -41,7 +41,7 @@
 //
 // Modes and exit codes mirror assert-doc-pointers.mjs exactly:
 //   node scripts/assert-plan-pointers.mjs                 # full corpus (the weekly run)
-//   node scripts/assert-plan-pointers.mjs docs/a.md …     # just these files
+//   node scripts/assert-plan-pointers.mjs docs/<page>.md …     # just these files
 //   … | node scripts/assert-plan-pointers.mjs --stdin     # how pre-push scopes to the diff
 //   --check · --no-grandfather · --json
 // 0 clean or WARN-only findings · 1 findings + --check · 2 usage error.

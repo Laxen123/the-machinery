@@ -23,6 +23,7 @@ import {
   GRANDFATHER_FILE,
   REF_ANCHORS,
   REF_EXTENSIONS,
+  extractCodeRefs,
   extractRefs,
   isCheckableRef,
   isCorpusFile,
@@ -78,6 +79,18 @@ test('only markdown, and only inside the corpus roots', () => {
   assert.equal(isCorpusFile('backend/src/x.md'), false);
 });
 
+// plan 4218: skill and slash-command prose is where an agent is told to "read and follow" a path,
+// so a dead pointer there costs the most — and an adopting project keeps this lint after the kit
+// builder's own gate is gone.
+test('skills and slash commands are in the corpus; other .claude/ and coord/ markdown is not', () => {
+  assert.equal(isCorpusFile('coord/skills/batch-train/SKILL.md'), true);
+  assert.equal(isCorpusFile('coord/skills/batch-train/references/thin-orchestrator.md'), true);
+  assert.equal(isCorpusFile('.claude/commands/orchestrate.md'), true);
+  assert.equal(isCorpusFile('.claude/commands/orchestrate.js'), false); // markdown only
+  assert.equal(isCorpusFile('.claude/agents/grok.md'), false);
+  assert.equal(isCorpusFile('coord/README.md'), false);
+});
+
 test('listCorpus filters whatever the file lister hands it', () => {
   const files = listCorpus('/nowhere', () => [
     'docs/runbooks/a.md',
@@ -92,14 +105,14 @@ test('listCorpus filters whatever the file lister hands it', () => {
 
 test('a checkable reference is anchored on a doc-bearing dir AND names a file', () => {
   assert.equal(isCheckableRef('docs/runbooks/x.md'), true);
-  assert.equal(isCheckableRef('backend/scripts/price-pipeline/run-batch.py'), true);
+  assert.equal(isCheckableRef('backend/scripts/data-pipeline/run-batch.py'), true);
   assert.equal(isCheckableRef('frontend/src/components/Icons.tsx'), true);
   assert.equal(isCheckableRef('coord/skills/batch-train/SKILL.md'), true);
 });
 
 test('directory references are NOT checked — a named file is what moves', () => {
   assert.equal(isCheckableRef('docs/runbooks/'), false);
-  assert.equal(isCheckableRef('backend/scripts/price-pipeline/'), false);
+  assert.equal(isCheckableRef('backend/scripts/data-pipeline/'), false);
 });
 
 test('unanchored prose shorthand, URLs and package specifiers are invisible', () => {
@@ -111,6 +124,19 @@ test('unanchored prose shorthand, URLs and package specifiers are invisible', ()
   assert.equal(isCheckableRef('./render-freshness.md'), false);
   assert.equal(isCheckableRef('../runbooks/x.md'), false);
   assert.equal(isCheckableRef('schemas.ts'), false); // no slash at all
+});
+
+// plan 4218: `.claude/` is an anchor, so the `./`/`../` rejection must not swallow every
+// dot-directory — while a dot-directory that is NOT an anchor stays invisible.
+test('`.claude/` is anchored; `./`, `../` and unlisted dot-directories stay out of contract', () => {
+  assert.equal(isCheckableRef('.claude/commands/orchestrate.md'), true);
+  assert.equal(isCheckableRef('.claude/settings.json'), true);
+  assert.equal(isCheckableRef('.scratch/x.json'), false);
+  assert.equal(isCheckableRef('.husky/x.sh'), false); // not a doc-lint anchor
+  assert.equal(isCheckableRef('./.claude/settings.json'), false);
+  assert.equal(isCheckableRef('../.claude/settings.json'), false);
+  // A caller may widen the anchors (the coord-kit builder's gate does).
+  assert.equal(isCheckableRef('.husky/x.sh', { anchors: ['.husky'] }), true);
 });
 
 test('an unlisted extension is out of contract', () => {
@@ -129,7 +155,7 @@ test('trap 1 — interpolation is not a path', () => {
 });
 
 test('trap 2 — elided prose is not a path', () => {
-  assert.equal(isNotAPath('backend/scripts/price-pipeline/...url_discovery.py'), true);
+  assert.equal(isNotAPath('backend/scripts/data-pipeline/...url_discovery.py'), true);
   assert.equal(isNotAPath('backend/scripts/…/x.py'), true);
 });
 
@@ -141,12 +167,12 @@ test('trap 3 — a torn brace group is not a path, a balanced one still checks',
 });
 
 test('template placeholders become globs, in all three house forms', () => {
-  // The `<CC>` + `clinic-NNN` pair is the sharded seed's house form, spelled here against a
+  // The `<CC>` + `record-NNN` pair is the sharded seed's house form, spelled here against a
   // stand-in tree: quoting the real seed path in a script would trip the seed-io seam guard,
   // and this test is about the placeholder grammar, not about the seed.
   assert.equal(
-    placeholdersToGlobs('backend/scripts/cohorts/<CC>/clinic-NNN.json'),
-    'backend/scripts/cohorts/*/clinic-*.json',
+    placeholdersToGlobs('backend/scripts/cohorts/<CC>/record-NNN.json'),
+    'backend/scripts/cohorts/*/record-*.json',
   );
   assert.equal(
     placeholdersToGlobs('wiki/meta/lint-report-YYYY-MM-DD.md'),
@@ -196,8 +222,56 @@ test('plan paths are skipped — they move between status folders by design', ()
 });
 
 test('backend/data paths are skipped — a per-run artifact store, not a source tree', () => {
-  const refs = extractRefs('`backend/data/price-pipeline/removal-proposals/x.json`');
+  const refs = extractRefs('`backend/data/data-pipeline/removal-proposals/x.json`');
   assert.deepEqual(refs, []);
+});
+
+test('skipPrefixes overrides the moved-by-design set (the coord-kit gate skips lane folders only)', () => {
+  const doc = '`docs/superpowers/plans/ready/1-x.md` and `docs/superpowers/plans/FOG.md`';
+  assert.deepEqual(
+    extractRefs(doc).map((r) => r.path),
+    [],
+    'default: every plan path is skipped',
+  );
+  assert.deepEqual(
+    extractRefs(doc, { skipPrefixes: ['docs/superpowers/plans/ready/'] }).map((r) => r.path),
+    ['docs/superpowers/plans/FOG.md'],
+  );
+});
+
+// ── extractCodeRefs: the code-file mode (plan 4218) ──────────────────────────────
+
+test('extractCodeRefs reads comments and string literals, with the same per-token contract', () => {
+  const src = [
+    '// Rule: docs/runbooks/scripts-layout.md § Rule 3 (and see `docs/coord/hooks.md`).',
+    "const msg = 'run node scripts/heal-main.mjs first';",
+    'const tpl = `read docs/coord/review.md`;',
+    "import { x } from './coord/x.mjs'; // relative — out of contract",
+    'const re = /^docs\\/runbooks\\/.+\\.md$/; // escaped regex — not a path',
+    'const dyn = `docs/runbooks/${name}.md`; // interpolated — not a path',
+    "const dir = 'docs/runbooks/'; // a directory — not a file",
+    "readFileSync('docs/coord/a.md'); // scripts/coord/b.mjs's own rule",
+  ].join('\n');
+  assert.deepEqual(
+    extractCodeRefs(src).map((r) => `${r.line}:${r.path}`),
+    [
+      '1:docs/runbooks/scripts-layout.md',
+      '1:docs/coord/hooks.md',
+      '2:scripts/heal-main.mjs',
+      '3:docs/coord/review.md',
+      '8:docs/coord/a.md',
+      '8:scripts/coord/b.mjs',
+    ],
+  );
+});
+
+test('extractCodeRefs honours anchors, extensions and skipPrefixes like extractRefs', () => {
+  const src = "x('.husky/pre-push.sh'); y('docs/superpowers/plans/ready/1-x.md');";
+  assert.deepEqual(extractCodeRefs(src), []);
+  assert.deepEqual(
+    extractCodeRefs(src, { anchors: ['.husky', 'docs'], skipPrefixes: [] }).map((r) => r.path),
+    ['.husky/pre-push.sh', 'docs/superpowers/plans/ready/1-x.md'],
+  );
 });
 
 // ── waivers ──────────────────────────────────────────────────────────────────────

@@ -350,7 +350,7 @@ export function parseStatusPaths(text) {
     const rest = line.slice(3).trim();
     // A rename reports BOTH sides (`R  old -> new`) and BOTH are dirt: the source path has
     // left its closure and the destination has entered one. Keeping only the destination
-    // (the first cut) was a stale-green — `git mv backend/src/util.ts scripts/util.ts` staged
+    // (the first cut) was a stale-green — `git mv backend/src/util.ts scripts/<name>.ts` staged
     // but uncommitted left the tsc/vitest/pytest closures looking clean while the tree those
     // gates actually compile no longer had the file (xhigh review finding, plan 2462).
     const arrow = rest.indexOf(' -> ');
@@ -432,6 +432,36 @@ export function computeGateKey({ gate, oids, nodeMajor, gitVersion, gates }) {
   };
   const key = createHash('sha256').update(JSON.stringify(components)).digest('hex').slice(0, 32);
   return { key, components };
+}
+
+// plan 4192: the same key, taken over a COMMITTED revision rather than HEAD's working tree — the
+// land spine's once-per-land proof for `build` / `mobile` records the key of the tree the gate
+// actually ran against, and a later invocation compares it with the key of the tree it now sits
+// on. Same `computeGateKey`, same closure (probe script folded in), same "every closure path must
+// exist" refusal as `gateVerdict`, so the land and the pre-push probe cannot disagree about what a
+// gate's content is. Dirt and `envUncacheable` files are deliberately NOT consulted: the land
+// compares committed trees (its own proof carries the untracked-input digest separately), and a
+// revision has no working tree to be dirty. Returns the key string, or null when the gate is
+// unknown or its closure is not fully present at `rev`. `git(args, input)` is the same injected
+// seam `gatherRepoState` takes; a throw from it propagates — the caller decides what doubt means.
+export function gateKeyAtRev(git, gates, gate, rev, { nodeMajor } = {}) {
+  const spec = gates[gate];
+  if (!spec) return null;
+  const paths = [...new Set(closurePaths(spec))];
+  if (!paths.length) return null;
+  const batch = git(
+    ['cat-file', '--batch-check'],
+    `${paths.map((p) => `${rev}:${p}`).join('\n')}\n`,
+  );
+  const oids = parseBatchCheck(paths, batch);
+  if (!paths.every((p) => oids.has(p))) return null;
+  return computeGateKey({
+    gate,
+    oids,
+    nodeMajor: nodeMajor ?? Number(process.versions.node.split('.')[0]),
+    gitVersion: git(['version']).trim(),
+    gates,
+  }).key;
 }
 
 // plan 3766: a SELECTION-scoped sibling of computeGateKey, for the ONE gate whose subset arm has

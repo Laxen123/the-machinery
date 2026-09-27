@@ -371,7 +371,62 @@ function envPytestMemoryFreeBytes(env) {
 // same two injection points reachable through the environment instead of `opts`, for a real CLI
 // subprocess a test cannot pass `opts` into directly — see envPytestMemoryBudget above; `opts`
 // always wins when both are supplied.
+// ── plan 4236 T2 (H2): a FAIL-OPENED run is CLAMPED, never full-width ─────────────────────────
+// Past MAX_WAIT_MS (and on the other bail() exits) acquire() lets the waiter run UNSERIALIZED so a
+// queue bug can never wedge every push. Before this plan that run was also UNCLAMPED: under
+// sustained load a correctly-full queue (two live full-box holders) pushed the next waiter over 20
+// min and it started a THIRD full-box job — the box got slower, so the next waiter timed out too
+// (the 2026-09-26 incident, 4228's battery). The fail-open stays; its width does not. The caller
+// that spawns the run (queued-run.mjs, run-land-tests.mjs) sets TEST_QUEUE_FAIL_OPEN=1 in the
+// child's env, and THIS is the one place the clamp value lives for every runner that sizes itself
+// from the per-slot budget at load time (pytest-workers.mjs, both vitest configs): under the flag
+// both axes answer FAIL_OPEN_CONCURRENCY. It equals battery-lock.mjs's OVERFLOW_TEST_CONCURRENCY
+// (plan 1795, the clamp an unserialized battery already runs at) — a test pins the two together;
+// it is not imported from there because the vitest configs load this module and must not pull the
+// lock module's git-facing import graph in with it.
+export const FAIL_OPEN_CONCURRENCY = 2;
+export const FAIL_OPEN_ENV = 'TEST_QUEUE_FAIL_OPEN';
+
+// The child env for a fail-opened run: the flag above, PLUS the two runner-policy override vars
+// (`PYTEST_WORKERS` / `VITEST_WORKERS`, read by scripts/pytest-workers.mjs) clamped to the same
+// value — gpt-review r1 (8fd10a/87bf88): that policy replaces the per-slot budget with a
+// `min(4, cpu)` ceiling on a remote sandbox, so the flag alone did not reach a cloud vitest run,
+// while an override is honoured on every host (it can tune down, never up). An explicit override
+// already at or below the clamp is kept — a fail-open never WIDENS a run. Pure: returns a new env.
+// The ONE worker-value clamp every fail-open rewrite uses (gpt-review r2 ff21dd — queued-run's
+// argv rewrite and failOpenEnv below share it so they cannot drift): a positive integer at or below
+// FAIL_OPEN_CONCURRENCY is kept (a fail-open never widens); anything else — larger, zero, negative,
+// `auto`, junk, absent — becomes FAIL_OPEN_CONCURRENCY. Returns a string (argv/env shaped).
+export function clampWorkerValue(v) {
+  const s = v == null ? '' : String(v);
+  return /^[0-9]+$/.test(s) && Number(s) >= 1 && Number(s) <= FAIL_OPEN_CONCURRENCY
+    ? s
+    : String(FAIL_OPEN_CONCURRENCY);
+}
+
+export function failOpenEnv(env = process.env) {
+  const clamp = clampWorkerValue;
+  return {
+    ...env,
+    [FAIL_OPEN_ENV]: '1',
+    PYTEST_WORKERS: clamp(env.PYTEST_WORKERS),
+    VITEST_WORKERS: clamp(env.VITEST_WORKERS),
+  };
+}
+
 export function perSlotWorkerBudgetDetail(cpu, env = process.env, opts = {}) {
+  if (env?.[FAIL_OPEN_ENV] === '1') {
+    return {
+      workers: FAIL_OPEN_CONCURRENCY,
+      cpuBudget: FAIL_OPEN_CONCURRENCY,
+      memoryBudget: null,
+      binding: 'fail-open',
+      perWorkerPeakBytes: null,
+      controllerPeakBytes: 0,
+      freeBytes: null,
+      memoryShareBytes: null,
+    };
+  }
   const envFreeBytes = envPytestMemoryFreeBytes(env);
   const freemem = opts.freemem ?? (envFreeBytes !== undefined ? () => envFreeBytes : osFreemem);
   let budget;
@@ -526,6 +581,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // acquire — wait for a slot (or a fail-open condition), return an idempotent
 // release() fn. Never throws and never waits past maxWaitMs: a queue bug or a
 // full queue degrades to "run unserialized, loudly", never a wedged push.
+// plan 4236 T2: the returned fn carries `admitted` — true for a genuine slot (and for the
+// deliberate TEST_QUEUE_DISABLE=1 bypass, which is an opt-out, not a failure), false for every
+// bail() fail-open — so the caller can clamp a run the queue never admitted. Every existing
+// caller that only calls the fn is unaffected.
 // opts (tests / callers with special needs — production callers pass only `tier`):
 //   dir, concurrency, staleMs, pollMs, maxWaitMs, heartbeatMs, lowPromoteMs, pid, tier, log
 //
@@ -537,7 +596,7 @@ export async function acquire(label, opts = {}) {
   const log = opts.log ?? ((m) => console.error(m));
   if (process.env.TEST_QUEUE_DISABLE === '1') {
     log(`test-queue: TEST_QUEUE_DISABLE=1 — bypassing the queue for "${label}"`);
-    return () => {};
+    return Object.assign(() => {}, { admitted: true });
   }
   if (process.env.TEST_QUEUE_DIR) {
     // The override must never be ambient/invisible: a TEST_QUEUE_DIR leaked
@@ -601,7 +660,7 @@ export async function acquire(label, opts = {}) {
   const bail = (msg) => {
     log(msg);
     release();
-    return () => {};
+    return Object.assign(() => {}, { admitted: false });
   };
 
   try {
@@ -734,7 +793,7 @@ export async function acquire(label, opts = {}) {
       }
     }, heartbeatMs);
     heartbeatTimer.unref();
-    return release;
+    return Object.assign(release, { admitted: true });
   } catch (e) {
     // FAIL-OPEN: an I/O failure during setup (mkdir / first ticket write)
     // degrades to an unserialized run immediately.
@@ -747,10 +806,11 @@ export async function acquire(label, opts = {}) {
 // withTestSlot — the one-call wrapper run-land-tests.mjs uses: hold a slot for
 // the duration of fn(), releasing in a finally (signals/exit are wired inside
 // acquire for the paths finally can't reach).
+// plan 4236 T2: fn receives `{ admitted }` (see acquire) so a fail-opened run can be clamped.
 export async function withTestSlot(label, fn, opts = {}) {
   const release = await acquire(label, opts);
   try {
-    return await fn();
+    return await fn({ admitted: release.admitted !== false });
   } finally {
     release();
   }

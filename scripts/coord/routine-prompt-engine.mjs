@@ -1,7 +1,7 @@
 // scripts/coord/routine-prompt-engine.mjs (plan 3964 T2)
 //
-// GENERIC unattended-agent prompt-template engine, split out of the vetapp-specific
-// scripts/cloud-routine-prompt-lib.mjs (plan 1947). This module holds the SHAPE — the
+// GENERIC unattended-agent prompt-template engine, split out of the project's own
+// vetapp-specific prompt-template module (plan 1947). This module holds the SHAPE — the
 // section scaffold, the section ORDERING, the ruling-banner grammar (a bold marker
 // sentence followed by its explanation), the attribution-report contract's grammar, and
 // the generic (lane, env) axis-validation + axis-gloss-list formatting a project's own
@@ -9,7 +9,7 @@
 // e-mail, repo URL, env-var names, or pipeline vocabulary — every such fact is a field on
 // the `RoutineSpec` object the caller (scripts/project/cloud-routine-specs.mjs) supplies.
 //
-// Rule 3 (docs/runbooks/scripts-module-layout.md, scripts/assert-scripts-self-contained.mjs):
+// Rule 3 (docs/coord/scripts-layout.md, scripts/assert-scripts-self-contained.mjs):
 // a module under scripts/coord/ may import only scripts/coord/** and node: builtins. This
 // file imports nothing but ./axis-tags.mjs (already inside scripts/coord/) — no fs, no
 // child_process, no project module — so it stays a pure content-generation leaf exactly
@@ -23,7 +23,7 @@
 //     worktree, then its own batch/orchestrator block, before Execute); every other lane
 //     value takes the "secondary" ordering (orchestrator doctrine before Execute, then
 //     claim + worktree, then its own batch block after Execute) — this is the ordering
-//     scripts/cloud-routine-prompt-lib.mjs's `renderPrompt` hardcoded as `lane === 'sonnet'`
+//     the project's own prompt-template module's `renderPrompt` hardcoded as `lane === 'sonnet'`
 //   - `isFullEgress(env)` — a project-supplied predicate for the full-egress-family branch
 //   - one content-generating function or zero-arg function per named section (see the
 //     call sites inside `renderRoutinePrompt` below for the exact contract each one must
@@ -96,7 +96,7 @@ export function attributionReportParagraph({
 
 // ─── Assembly ────────────────────────────────────────────────────────────────
 // Renders the full canonical body for `spec.lane`/`spec.env`. This is the exact section
-// scaffold and ordering scripts/cloud-routine-prompt-lib.mjs's own `renderPrompt` used to
+// scaffold and ordering the project's own prompt-template module's `renderPrompt` used to
 // hardcode (see plan 1947's body comment there): the primary lane interleaves claim+worktree
 // before its own batch/orchestrator block and has no secondary-orchestrator section; every
 // other lane has its orchestrator doctrine before Execute and claim+worktree after Execute.

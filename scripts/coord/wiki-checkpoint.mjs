@@ -22,7 +22,7 @@ import { repoRootFrom } from './scripts-anchor.mjs';
 // REPO_ROOT for the load below, ANCHORED on the `scripts/` directory name rather than on a fixed
 // depth (plan 3962's scripts-anchor seam). Not `process.cwd()`, which is wherever the calling
 // command happened to be invoked from; and not a hand-counted `../../`, which is right at exactly
-// one depth and silently starts reading `scripts/coord.config.json` the moment this file moves —
+// one depth and silently starts reading `scripts/coord.config.json` the moment this file moves — (dangling-ok: names the wrong path the bug would read)
 // a fail-open narrowing, not a throw, which is the failure shape scripts-anchor.mjs exists for.
 const REPO_ROOT = repoRootFrom(dirname(fileURLToPath(import.meta.url)));
 
@@ -76,12 +76,12 @@ export function wikiSubjectPatterns(repoRoot = REPO_ROOT) {
 
 /**
  * Pure: does this land's diff touch a subject the wiki OWNS (subject synthesis: how a
- * platform/inspector/pricing-concept WORKS) — as DISTINCT from plain per-clinic seed DATA edits,
+ * platform/inspector/pricing-concept WORKS) — as DISTINCT from plain per-record seed DATA edits,
  * which the seed, not the wiki, is the record for.
  *
  * Kept deliberately NARROW by whoever configures `wikiSubjectPatterns`: a checkpoint that fired
  * on every backend diff would normalise SKIP and decay into the toothless advisory plan 1074
- * warns about. Plain clinic-row edits do NOT trip it; the seed `chains[]` registry (a chain that
+ * warns about. Plain data-row edits do NOT trip it; the seed `chains[]` registry (a chain that
  * has a wiki page) DOES, via the `chainsChanged` signal the spine computes from the seed diff.
  *
  * `patterns` is a PARAMETER with a default (the same lazy, memoized `wikiSubjectPatterns()` read
@@ -93,10 +93,12 @@ export function wikiSubjectPatterns(repoRoot = REPO_ROOT) {
 export function wikiCheckpointNeeded(
   changedFiles,
   chainsChanged = false,
-  clinicPageChanged = false,
+  // Positional (a project caller, e.g. land-seams.mjs, keeps its own name for this argument —
+  // renaming it here is call-site-compatible by construction).
+  subjectPageChanged = false,
   patterns = wikiSubjectPatterns(),
 ) {
   if (chainsChanged) return true;
-  if (clinicPageChanged) return true;
+  if (subjectPageChanged) return true;
   return (changedFiles || []).some((f) => patterns.some((re) => re.test(f)));
 }

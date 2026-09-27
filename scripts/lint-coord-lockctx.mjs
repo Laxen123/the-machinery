@@ -10,7 +10,7 @@
 // AFTER it runs unserialized against a shared checkout a sibling may already be resetting
 // (`resolveCoordCheckout` does `reset --hard` + `clean -fd` on it). Until this lint the rule
 // was enforced by nothing but an inline comment at each of the four wired call sites plus a
-// paragraph in docs/runbooks/branch-hygiene.md § The coord-write critical section — so a future
+// paragraph in docs/coord/worktrees.md § The coord-write critical section — so a future
 // caller that forwards the handle and then keeps touching the tree got NO signal at all, which is
 // the exact class lever 1 was careful to avoid. Cheapest of the three mechanisms the plan weighed
 // (vs a runtime "spent ctx" tripwire, or a sentinel coordWrite return): static, zero runtime cost,
@@ -275,7 +275,7 @@ export function main(argv = process.argv.slice(2)) {
         `(resolveCoordCheckout does \`reset --hard\` + \`clean -fd\` on it).\n` +
         `Fix EITHER by moving the mutation BEFORE the coordWrite call, or by not taking the lock handle\n` +
         `in this callback at all (a one-arg callback keeps the whole-op hold — correct, just slower).\n` +
-        `Rationale: docs/runbooks/branch-hygiene.md § The coord-write critical section ends at the COMMIT.\n` +
+        `Rationale: docs/coord/worktrees.md § The coord-write critical section ends at the COMMIT.\n` +
         `  Emergency escape: git push --no-verify (but fix the violation first).`,
     );
     return 1;

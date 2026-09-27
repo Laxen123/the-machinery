@@ -1,9 +1,9 @@
-// scripts/coord/plan-id-index.mjs — moved from scripts/done-worktree-lib.mjs (plan 3959 T2).
+// scripts/coord/plan-id-index.mjs — moved from scripts/done-worktree-lib.mjs (plan 3959 T2). (dangling-ok: historical pre-move path, code lives here now)
 //
 // Generic plan-file lookup: given a `git ls-files docs/superpowers/plans` listing and a set of
 // plan ids, resolve each id's live and/or archived path in ONE pass. No fs, no git, no
 // vetapp-specific vocabulary — pure string/regex work over an already-read listing, Rule 3
-// compliant (docs/runbooks/scripts-module-layout.md § Rule 3): no import at all, in fact.
+// compliant (docs/coord/scripts-layout.md § Rule 3): no import at all, in fact.
 
 // plan 1364 review R1 (F6, CONFIRMED): resolvePlanRelById re-splits + re-scans the ENTIRE
 // `git ls-files docs/superpowers/plans` listing (1300+ files in this repo) on every call —

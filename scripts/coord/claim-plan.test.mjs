@@ -54,6 +54,7 @@ import {
   INDEX_PLANS_END,
   INDEX_SPECS_START,
   INDEX_SPECS_END,
+  ARCHIVE_FOLDER,
 } from './build-index-lib.mjs';
 import { splitBoard } from './board-lib.mjs';
 import { releaseClaim } from './release-claim.mjs';
@@ -830,7 +831,7 @@ test('plan 2502: Gate-2 seedLane read is pinned to the SAME origin/master sha as
         '',
         sw('> 🟥 **SEED-WRITE: YES** — flips acceptsAcuteCases.'),
         '',
-        'Demotes acceptsAcuteCases on clinic-1097.',
+        'Demotes acceptsAcuteCases on rec-1097.',
         '',
       ].join('\n'),
     );
@@ -960,7 +961,7 @@ test('F-004 (plan 1313): doAcquire REJECTS an apostrophe in --slug BEFORE acquir
   const { dir, lsClaims, cleanup } = makeBareOrigin();
   try {
     assert.throws(
-      () => doAcquire(dir, '869-UI-x', { slug: "869-UI-clinic's-fix", 'lock-only': true }),
+      () => doAcquire(dir, '869-UI-x', { slug: "869-UI-rec's-fix", 'lock-only': true }),
       /--slug/,
     );
     assert.doesNotMatch(lsClaims(), /refs\/claims\/869/, 'no ref leaked — the guard ran first');
@@ -2087,7 +2088,7 @@ test('Gate 2: specReview: exempt-mechanical on a 🟥 plan mentioning a Gate-1 p
   const r = makeRepoWithPlan({
     frontmatterLines: ['stage: stub', 'specReview: exempt-mechanical'],
     bodyExtra: sw(
-      '\n> 🟥 **SEED-WRITE: YES** — flips acceptsAcuteCases.\n\nDemotes acceptsAcuteCases on clinic-1097.\n',
+      '\n> 🟥 **SEED-WRITE: YES** — flips acceptsAcuteCases.\n\nDemotes acceptsAcuteCases on rec-1097.\n',
     ),
     seedLane: true,
   });
@@ -2105,7 +2106,7 @@ test('Gate 2: specReview: exempt-mechanical on a 🟥 plan mentioning a Gate-1 p
 test('Gate 2: specReview: exempt-mechanical on a 🟥 plan NOT mentioning any Gate-1 field PASSES', () => {
   const r = makeRepoWithPlan({
     frontmatterLines: ['stage: stub', 'specReview: exempt-mechanical'],
-    bodyExtra: sw('\n> 🟥 **SEED-WRITE: YES** — adds a new clinic shard.\n'),
+    bodyExtra: sw('\n> 🟥 **SEED-WRITE: YES** — adds a new record shard.\n'),
     seedLane: true,
   });
   try {
@@ -2208,8 +2209,16 @@ test('doAcquire: foreign dirt in MAIN does NOT block a claim — it projects via
 
 // --- plan 2459 Task 2: runnable-batch hold gate (single-plan claim path) -----
 
-function writeBatchMdFixture(dir, slug, { members, gate = null, status = 'proposed' }) {
-  const abs = join(dir, 'docs', 'superpowers', 'batches', slug, 'batch.md');
+// plan 4246 review fix (b35525): the solo gate reads the roster at the ORIGIN commit it resolved
+// the plan against, so the fixture commits and pushes batch.md unless told not to (`push: false`
+// leaves it on local disk only — the stale-local-roster cases below).
+function writeBatchMdFixture(
+  dir,
+  slug,
+  { members, gate = null, status = 'proposed', push = true },
+) {
+  const rel = `docs/superpowers/batches/${slug}/batch.md`;
+  const abs = join(dir, ...rel.split('/'));
   mkdirSync(dirname(abs), { recursive: true });
   writeFileSync(
     abs,
@@ -2228,6 +2237,11 @@ function writeBatchMdFixture(dir, slug, { members, gate = null, status = 'propos
       '',
     ].join('\n'),
   );
+  if (!push) return;
+  const g = (...a) => execFileSync('git', ['-C', dir, ...a], { encoding: 'utf8' });
+  g('add', '--', rel);
+  g('commit', '-qm', `batch ${slug}`, '--', rel);
+  g('push', '-q', 'origin', 'master');
 }
 
 test('Batch-solo guard: single acquire of a runnable-batch member is REFUSED before the ref is acquired (plan 2459 Task 2)', () => {
@@ -2338,6 +2352,109 @@ test('Batch-solo guard: a batch roster naming a DIFFERENT plan id does not refus
   const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
   try {
     writeBatchMdFixture(r.dir, 'batch-other', { members: ['999'] });
+    const res = doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true });
+    assert.equal(res.won, true);
+  } finally {
+    r.cleanup();
+  }
+});
+
+// --- plan 4246: an ARCHIVED co-member dissolves the hold at the claim gate too ------------
+// The gate must answer exactly as queue-drain does (batch-paths.mjs's batchLiveness): a batch
+// left with fewer than two live members holds nothing, a batch with ≥2 live members still holds
+// them, and a co-member that is merely parked (waiting-*) — not archived — changes nothing.
+// The gate reads archive membership at the ORIGIN commit it resolved the plan against (review
+// finding 47956f), so the fixture PUSHES the archived file unless told not to.
+function writeArchivedPlanFixture(r, basename, { push = true } = {}) {
+  const rel = `docs/superpowers/plans/${ARCHIVE_FOLDER}/${basename}`;
+  const abs = join(r.dir, ...rel.split('/'));
+  mkdirSync(dirname(abs), { recursive: true });
+  writeFileSync(abs, '# landed\n\n**Status:** ✅ COMPLETED — test.\n');
+  if (!push) return;
+  r.g('add', '--', rel);
+  r.g('commit', '-qm', `archive ${basename}`, '--', rel);
+  r.g('push', '-q', 'origin', 'master');
+}
+
+test('Batch-solo guard: the survivor of a 2-member batch whose co-member is ARCHIVED passes without --override-batch-solo (plan 4246)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050'] });
+    // A date-slugged archive name (review finding b6ad2d) must still count as archived.
+    writeArchivedPlanFixture(r, '049-2026-05-21-landed-solo.md');
+    const res = doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true });
+    assert.equal(res.won, true);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('Batch-solo guard: a 3-member batch with 1 ARCHIVED member still holds its 2 live members (plan 4246)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050', '051'] });
+    writeArchivedPlanFixture(r, '049-Infra-landed-solo.md');
+    assert.throws(
+      () => doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true }),
+      /member of runnable batch "batch-x"/,
+    );
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('Batch-solo guard: a co-member archived only on LOCAL disk (not on origin) keeps the hold (plan 4246, review 47956f)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050'] });
+    writeArchivedPlanFixture(r, '049-Infra-archived-locally.md', { push: false });
+    assert.throws(
+      () => doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true }),
+      /member of runnable batch "batch-x"/,
+    );
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('Batch-solo guard: a co-member parked in waiting-* (NOT archived) keeps the hold (plan 4246 rule 4)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050'] });
+    const parked = join(r.dir, 'docs', 'superpowers', 'plans', 'waiting-operator');
+    mkdirSync(parked, { recursive: true });
+    writeFileSync(join(parked, '049-Infra-parked.md'), '# parked\n');
+    assert.throws(
+      () => doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true }),
+      /member of runnable batch "batch-x"/,
+    );
+  } finally {
+    r.cleanup();
+  }
+});
+
+// Review finding b35525: the roster must come from the SAME origin commit as the archive list.
+// Origin lists 3 members with 1 archived (still a live 2-car train → held); a stale LOCAL batch.md
+// that lists only 2 members (which would read as dissolved) must be ignored.
+test('Batch-solo guard: a stale LOCAL batch.md is ignored — the origin roster (3 members, 1 archived) still holds (plan 4246, review b35525)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050', '051'] });
+    writeArchivedPlanFixture(r, '049-Infra-landed-solo.md');
+    writeBatchMdFixture(r.dir, 'batch-x', { members: ['049', '050'], push: false });
+    assert.throws(
+      () => doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true }),
+      /member of runnable batch "batch-x"/,
+    );
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('Batch-solo guard: a batch.md that exists only on LOCAL disk (never pushed) holds nothing (plan 4246, review b35525)', () => {
+  const r = makeRepoWithPlan({ full: true, basename: '050-Infra-foo.md' });
+  try {
+    writeBatchMdFixture(r.dir, 'batch-local', { members: ['050', '051'], push: false });
     const res = doAcquire(r.dir, '050-Infra-foo', { slug: '050-Infra-foo', 'lock-only': true });
     assert.equal(res.won, true);
   } finally {
@@ -3244,7 +3361,7 @@ test('plan 2536: doAcquireBatch eligibility gate reads member bodies AND coord.c
             '',
             sw('> 🟥 **SEED-WRITE: YES** — flips acceptsAcuteCases.'),
             '',
-            'Demotes acceptsAcuteCases on clinic-1097.',
+            'Demotes acceptsAcuteCases on rec-1097.',
             '',
           ].join('\n'),
         },
@@ -3260,7 +3377,7 @@ test('plan 2536: doAcquireBatch eligibility gate reads member bodies AND coord.c
             '',
             '# 2537-Infra-batch-b.md',
             '',
-            sw('> 🟩 **SEED-WRITE: NO** — no clinic data.'),
+            sw('> 🟩 **SEED-WRITE: NO** — no record data.'),
             '',
             'Body.',
             '',
@@ -3314,7 +3431,7 @@ test('plan 2536: a batch member with a STALE local mainDir copy is judged agains
         '',
         '# 2536-Infra-batch-stale.md',
         '',
-        sw('> 🟩 **SEED-WRITE: NO** — no clinic data.'),
+        sw('> 🟩 **SEED-WRITE: NO** — no record data.'),
         '',
         'Body.',
         '',
@@ -3333,7 +3450,7 @@ test('plan 2536: a batch member with a STALE local mainDir copy is judged agains
         '',
         '# 2537-Infra-batch-stale-b.md',
         '',
-        sw('> 🟩 **SEED-WRITE: NO** — no clinic data.'),
+        sw('> 🟩 **SEED-WRITE: NO** — no record data.'),
         '',
         'Body.',
         '',
@@ -3372,7 +3489,7 @@ test('plan 2536: a batch member with a STALE local mainDir copy is judged agains
             '',
             sw('> 🟥 **SEED-WRITE: YES** — flips acceptsAcuteCases.'),
             '',
-            'Demotes acceptsAcuteCases on clinic-1097.',
+            'Demotes acceptsAcuteCases on rec-1097.',
             '',
           ].join('\n'),
         },
@@ -3419,7 +3536,7 @@ test('F-004 (plan 1313): doAcquireBatch REJECTS a batch slug outside the ASCII c
   const r = makeRepoWithPlans([{ basename: '1362-DQ-a.md' }, { basename: '1365-Infra-b.md' }]);
   try {
     assert.throws(
-      () => doAcquireBatch(r.dir, ['1362', '1365'], { slug: "batch-2026-07-03-clinic's" }),
+      () => doAcquireBatch(r.dir, ['1362', '1365'], { slug: "batch-2026-07-03-record's" }),
       /--slug/,
     );
     assert.doesNotMatch(r.lsClaims(), /refs\/claims\//);

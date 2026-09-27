@@ -72,13 +72,13 @@ test('commitWikiMarker: routes add+commit through lock-retry and pushes on a rea
 });
 
 test('commitWikiMarker: idempotent re-run short-circuits to a no-op (unchanged entry)', () => {
-  const r = makeRepoWithSession('session entry\nWiki: WROTE:evidensia.md @ abcdef012\n');
+  const r = makeRepoWithSession('session entry\nWiki: WROTE:chain-a.md @ abcdef012\n');
   try {
     const before = r.g('rev-parse', 'HEAD').trim();
     const res = commitWikiMarker(r.dir, SF, {
       slug: '1074-plan',
       decision: 'WROTE',
-      detail: 'evidensia.md',
+      detail: 'chain-a.md',
       sha: 'abcdef0123456789',
       noPush: true,
     });
@@ -209,13 +209,13 @@ test('plan 1312 / F-001: routed record-wiki lands the marker on ORIGIN via the c
   const r = makeOriginWikiRepo('plan-routed-wiki');
   try {
     const mainTipBefore = r.g(r.mainDir, 'rev-parse', 'master');
-    runRW(r.wtDir, ['WROTE', 'evidensia.md']); // NO --no-push → the routed default path
+    runRW(r.wtDir, ['WROTE', 'chain-a.md']); // NO --no-push → the routed default path
     // marker commit is on origin, carrying the coordWrite trailer
     const msg = r.g(r.mainDir, 'log', '-1', '--format=%B', 'origin/master');
     assert.match(msg, /chore\(wiki\): record WROTE @/);
     assert.match(msg, /Coord-Write: record-wiki/);
     const originSf = r.g(r.mainDir, 'show', `origin/master:${r.sf}`);
-    assert.match(originSf, /Wiki: WROTE:evidensia\.md @ /);
+    assert.match(originSf, /Wiki: WROTE:chain-a\.md @ /);
     // MAIN: no local commit, working tree untouched, HEAD still attached to master (the whole point)
     assert.equal(r.g(r.mainDir, 'rev-parse', 'master'), mainTipBefore, 'no commit on MAIN');
     assert.equal(r.g(r.mainDir, 'symbolic-ref', 'HEAD'), 'refs/heads/master');
@@ -241,7 +241,7 @@ test('plan 1312 / F-001: a REJECTED push leaves no committed-but-unpushed wiki m
     const mainTipBefore = r.g(r.mainDir, 'rev-parse', 'master');
     const originTipBefore = r.g(r.mainDir, 'rev-parse', 'origin/master');
     assert.throws(
-      () => runRW(r.wtDir, ['WROTE', 'evidensia.md']),
+      () => runRW(r.wtDir, ['WROTE', 'chain-a.md']),
       /./,
       'the failed push must surface (exit != 0)',
     );

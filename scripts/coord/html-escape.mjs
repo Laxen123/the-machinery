@@ -1,6 +1,6 @@
 // scripts/coord/html-escape.mjs — the ONE HTML-escape helper (plan 4096 T6).
 //
-// Four lines, moved out of scripts/lib/decision-dossier/inline.mjs so that a caller needing ONLY
+// Four lines, moved out of this project's decision-dossier inliner so that a caller needing ONLY
 // this can stop importing the dossier renderer. `batches-view.mjs` is a coord-kit command and its
 // single offending closure edge was exactly that: it wanted `escapeHtml` and got the whole
 // inliner, which reads sibling CSS/JS ASSETS off disk and belongs to the dossier feature, not to

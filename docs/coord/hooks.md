@@ -92,7 +92,8 @@ this tool tree may import only from siblings inside the same tree, plus the lang
 arrives as an explicit parameter or through an injected dependency container, resolved by whoever
 calls the module, never as a bare import reaching across the boundary. This rule is itself
 mechanically enforced — a violation is caught the same way any other guard catches a violation,
-rather than relying on a reviewer to notice an out-of-place import line.
+rather than relying on a reviewer to notice an out-of-place import line. The numbered rules and the
+gate that enforces them are in [`scripts-layout.md`](scripts-layout.md).
 
 ## Diff-scoping
 
@@ -106,6 +107,44 @@ existing debt elsewhere in the file, or in a sibling file the push never touched
 the gate; it will be judged the day some push actually changes it, and not before. This is what lets
 a gate be strict without becoming a permanent source of unrelated friction: strictness is cheap to
 sustain exactly because it is scoped to what a given agent actually did.
+
+Diff-scoping decides _which lines_ a gate judges. A second axis decides _when_ a heavy gate runs at
+all, and it matters as soon as the full test suites take minutes rather than seconds and several
+agents push to one trunk many times a day. Running every heavy suite on every intermediate push is
+where most of the gate cost goes, and almost none of it buys safety, because the only push that must
+be proven is the one that merges. The tiering that follows from that:
+
+- **Cheap gates run on every push, unchanged.** A floor of lints and type-checks costing seconds is
+  never worth tiering.
+- **A heavy suite splits by selection size.** Each push still runs the _selected subset_ — the tests
+  that exercise what this push actually changed — so an agent gets immediate feedback on its own
+  edit. A large or full selection defers from the push to the merge step's own preflight.
+- **The merge step's preflight runs the full heavy suites, once per merge**, before the item enters
+  the landing queue. It is fail-closed (the merge program runs it directly and cannot proceed past a
+  red), it sits off the landing-queue mutex so a slow suite never holds the queue head, and a proof
+  cache keeps it to one run per merge rather than one per re-invocation (see
+  [`land-spine.md`](land-spine.md) § The once-per-land proof cache).
+- **The tiering is scoped to the execution environment, not applied uniformly.** On a shared machine
+  where several sessions contend for one set of cores and a human is waiting, heavy suites defer. In
+  a single-session sandbox — one agent per machine, nobody waiting, nothing contended — they keep
+  running in full on every push, which also preserves whatever platform coverage that sandbox
+  provides and the shared machine does not.
+
+Two alternatives look simpler and are worse. **Marking "this push is a merge" with an environment
+flag** so the push hook knows when to run the heavy tiers makes the default state "flag absent ⇒ skip
+verification", so any failure to propagate the flag silently skips verification on exactly the push
+that matters — fail-open on the one push where it must not be. **Demoting heavy suites to a periodic
+schedule** (nightly, weekly) saves the same time but lets an unverified change rest on the trunk
+until the schedule runs; merge-time verification saves the time without that window. A periodic full
+run is still worth keeping as a backstop for what a narrowed selection could miss, provided a red run
+reports a finding and never freezes merges.
+
+The cost, stated plainly: an intermediate push no longer surfaces a defect outside its own selected
+subset, so a break that the third work-in-progress push would have shown now surfaces at merge
+time instead. The preflight runs before the queue, so that red costs only the merging agent's own
+time, never another agent's queue slot. And measure before tiering: a gate that emits no outcome
+telemetry can only be judged on cost, never on "it has never caught anything", because nothing
+recorded what it caught.
 
 ## Waiver-in-place
 

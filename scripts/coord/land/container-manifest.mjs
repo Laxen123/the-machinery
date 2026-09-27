@@ -28,7 +28,7 @@
 //
 // CYCLE-FREE BY CONSTRUCTION. This file imports the ten core modules and deps.mjs; nothing under
 // scripts/coord/land/ imports this file back — only scripts/done-worktree.mjs does, right after its
-// own `bindLandDeps({...})` call closes. Rule 3 (docs/runbooks/scripts-module-layout.md) is
+// own `bindLandDeps({...})` call closes. Rule 3 (docs/coord/scripts-layout.md) is
 // satisfied the same way every other core module satisfies it: imports stay inside scripts/coord/**
 // and node: builtins.
 import { landDeps, requireDeps } from './deps.mjs';

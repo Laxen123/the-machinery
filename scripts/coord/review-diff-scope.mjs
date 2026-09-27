@@ -5,7 +5,7 @@
 // WHY THIS EXISTS. The 3035 land's range (origin/master...worktree-3035-FABLE-Pipe-
 // run-2141-study-wave-b) was 719 changed files / 19.5 MB of `diff.patch`, and the bulk
 // of it was committed wave artifacts (backend/data/regression-study-2141/**,
-// backend/data/price-pipeline/** batches and renders) rather than code. Two of the 11
+// backend/data/job-pipeline/** batches and renders) rather than code. Two of the 11
 // `/gpt-review` finder angles (A and C) hit the hardcoded 900 s per-finder cap on BOTH
 // genuine attempts while the other nine finished in 371-685 s, and the Claude
 // data-grounding arm died `spawn ENAMETOOLONG` on an argument built from the same

@@ -431,7 +431,7 @@ export function classifyAheadCommit(paths) {
 // plan-909 cut-worktree convention — the DIRECTORY basename is capped, the BRANCH stays full
 // length (landBranchViaEphemeral's git operations always address `branch`, never the dir name).
 // A long slug's `_land-worktree-<slug>` dir plus a deep committed path (e.g.
-// backend/data/price-pipeline/render-store/clinic-NNN/chrome-devtools-mcp/<64-char sha256>/…)
+// backend/data/job-pipeline/render-store/record-NNN/chrome-devtools-mcp/<64-char sha256>/…)
 // exceeded MAX_PATH on an untruncated dir (session 1436 incident, 2026-07-07); capping the
 // basename to MAX_LAND_DIR_SLUG chars restores the same ~30-char headroom cut-worktree relies on.
 // (plan 1616: the `40` value itself now lives in dir-basename-truncate.mjs's
@@ -650,7 +650,7 @@ export function reclaimLandDirIfSafe(
   if (existsSync(dir)) {
     // plan 1621 (coord-git.mjs's resolveCoordCheckout) hit the identical rmSync EBUSY/EPERM/
     // ENOTEMPTY class here — a killed process leaving an open handle under
-    // `.git/worktrees/<name>/` (docs/runbooks/branch-hygiene.md). Generalized by plan 1640:
+    // `.git/worktrees/<name>/` (docs/coord/worktrees.md). Generalized by plan 1640:
     // retry with backoff via the shared helper instead of giving up on the first throw. A
     // still-locked dir after exhausting the budget, or any non-transient rmSync error, falls
     // through unchanged to the existing best-effort contract below — caller re-checks and
@@ -1065,12 +1065,12 @@ export function mergeTreeWriteTree(MAIN, ours, theirs, { run: _run = run } = {})
 // parents and the same message.
 //
 // WHY THIS IS SAFE, and how it was established rather than assumed (2026-07-26, git 2.53.0):
-//   - Tree equivalence is not taken on faith. `scripts/ephemeral-merge-equivalence.test.mjs`
+//   - Tree equivalence is not taken on faith. This module's own ephemeral-merge-equivalence test
 //     pins byte-identical trees across renames, binaries, a CUSTOM merge driver, the `union`
 //     attribute, and conflict-detection parity — and drives the REAL lander, not raw git.
 //   - Custom merge drivers DO run under merge-tree. This mattered: the repo registers
 //     `merge=wiki-updated` (.git/info/attributes) and `merge=union` on wiki/log.md and both
-//     price-pipeline observations .jsonl files — and that observations log rides inside
+//     data-pipeline observations .jsonl files — and that observations log rides inside
 //     concurrent seed lands, i.e. exactly the merge this path performs. Measured: merge-tree
 //     invokes the driver and yields the identical tree oid. Had it silently fallen back to the
 //     built-in 3-way merge, this path would have pushed a DIFFERENTLY-merged tree with nothing
@@ -1916,8 +1916,8 @@ export function assertLandable(MAIN, { run: _run = run } = {}) {
       'orphan autostash present on the shared main tree — a prior landing left a `git stash` ' +
         "undropped. Resolve manually: `git stash show --name-only 'stash@{N}'`, " +
         "`git restore --source='stash@{N}' -- <paths>` (keep newer working-tree copies on " +
-        "overlap), then `git stash drop 'stash@{N}'` — see docs/runbooks/plans-workflow.md " +
-        '§ "Pre-land guard (`assertLandable`)" — before re-landing.',
+        "overlap), then `git stash drop 'stash@{N}'` — see docs/coord/land-spine.md " +
+        '(the pre-land guard, `assertLandable`) — before re-landing.',
     );
     e.reason = 'orphan-autostash';
     throw e;

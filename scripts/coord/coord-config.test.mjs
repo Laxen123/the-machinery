@@ -168,7 +168,37 @@ test('normalizeConfig: agnostic defaults when raw is null', () => {
     // plan 3958 — generic, unclaimed env-var-name defaults (see the loadCoordConfig test below).
     gitPatEnvVar: 'GIT_PUSH_TOKEN',
     codexAuthEnvVar: 'CODEX_LOGIN_B64',
+    // plan 4172 — the project-vocabulary knobs, all null ("not configured") in the core.
+    legacyScopeKeys: null,
+    wikiRecordDir: null,
+    worktreeExcludeBasenames: null,
+    sweepCheckpointPattern: null,
+    wikiAliasDeny: null,
+    bulkItemNouns: null,
   });
+});
+
+// --- plan 4172: nullable project-vocabulary keys ---------------------------------------------
+
+test('normalizeConfig: plan 4172 keys pass through when set and fail loudly when malformed', () => {
+  const c = normalizeConfig({
+    legacyScopeKeys: ['old-key'],
+    wikiRecordDir: 'wiki\\entities\\records/',
+    worktreeExcludeBasenames: ['pipeline'],
+    sweepCheckpointPattern: '^data/checkpoints/[^/]+\\.json$',
+    wikiAliasDeny: ['word'],
+    bulkItemNouns: ['record'],
+  });
+  assert.deepEqual(c.legacyScopeKeys, ['old-key']);
+  assert.equal(c.wikiRecordDir, 'wiki/entities/records/');
+  assert.deepEqual(c.worktreeExcludeBasenames, ['pipeline']);
+  assert.equal(c.sweepCheckpointPattern, '^data/checkpoints/[^/]+\\.json$');
+  assert.deepEqual(c.wikiAliasDeny, ['word']);
+  assert.deepEqual(c.bulkItemNouns, ['record']);
+  assert.throws(() => normalizeConfig({ legacyScopeKeys: 'old-key' }), /legacyScopeKeys/);
+  assert.throws(() => normalizeConfig({ bulkItemNouns: [''] }), /bulkItemNouns/);
+  assert.throws(() => normalizeConfig({ wikiRecordDir: '' }), /wikiRecordDir/);
+  assert.throws(() => normalizeConfig({ sweepCheckpointPattern: '(' }), /sweepCheckpointPattern/);
 });
 
 // --- plan 3960 T1: the six new config keys ------------------------------------------------
@@ -209,8 +239,8 @@ test('normalizeConfig: jobOutputPrefixes/externalTreePrefixes default to [] and 
   assert.deepEqual(normalizeConfig(null).jobOutputPrefixes, []);
   assert.deepEqual(normalizeConfig(null).externalTreePrefixes, []);
   assert.deepEqual(
-    normalizeConfig({ jobOutputPrefixes: ['backend\\data\\price-pipeline/'] }).jobOutputPrefixes,
-    ['backend/data/price-pipeline/'],
+    normalizeConfig({ jobOutputPrefixes: ['backend\\data\\data-pipeline/'] }).jobOutputPrefixes,
+    ['backend/data/data-pipeline/'],
   );
   assert.deepEqual(normalizeConfig({ externalTreePrefixes: ['backend/'] }).externalTreePrefixes, [
     'backend/',
@@ -272,9 +302,9 @@ test('normalizeConfig: planWorktreeExcludedPaths defaults to [] and validates sh
   assert.deepEqual(normalizeConfig(null).planWorktreeExcludedPaths, []);
   assert.deepEqual(
     normalizeConfig({
-      planWorktreeExcludedPaths: ['backend\\data\\price-pipeline\\render-store/'],
+      planWorktreeExcludedPaths: ['backend\\data\\data-pipeline\\render-store/'],
     }).planWorktreeExcludedPaths,
-    ['backend/data/price-pipeline/render-store'],
+    ['backend/data/data-pipeline/render-store'],
   );
   assert.throws(
     () => normalizeConfig({ planWorktreeExcludedPaths: [42] }),
@@ -625,7 +655,7 @@ test('normalizeConfig: cloudRepos defaults to [] and validates row shape', () =>
 
 test('normalizeConfig: shardIdPattern defaults to null (plan 4071) and validates compilability and exactly one capture group', () => {
   // plan 4071: CORE default is now null ("no sharded records"), the same contract seedShardDir
-  // already has — a config-less repo has no per-clinic shard filename shape.
+  // already has — a config-less repo has no per-record shard filename shape.
   assert.equal(normalizeConfig(null).shardIdPattern, null);
   assert.equal(normalizeConfig({}).shardIdPattern, null);
   assert.equal(normalizeConfig({ shardIdPattern: null }).shardIdPattern, null);
@@ -640,23 +670,23 @@ test('normalizeConfig: shardIdPattern defaults to null (plan 4071) and validates
   assert.throws(() => normalizeConfig({ shardIdPattern: '(unterminated' }), /does not compile/);
   // zero capture groups
   assert.throws(
-    () => normalizeConfig({ shardIdPattern: 'clinics/[A-Z]{2}/clinic-\\d+\\.json' }),
+    () => normalizeConfig({ shardIdPattern: 'records/[A-Z]{2}/record-\\d+\\.json' }),
     /exactly one capture group/,
   );
   // two capture groups
   assert.throws(
-    () => normalizeConfig({ shardIdPattern: 'clinics/([A-Z]{2})/(clinic-\\d+)\\.json' }),
+    () => normalizeConfig({ shardIdPattern: 'records/([A-Z]{2})/(record-\\d+)\\.json' }),
     /exactly one capture group/,
   );
   // non-capturing group + lookaround don't count as capturing
   assert.doesNotThrow(() =>
-    normalizeConfig({ shardIdPattern: '(?:clinics)/[A-Z]{2}/(clinic-\\d+)(?=\\.json)' }),
+    normalizeConfig({ shardIdPattern: '(?:records)/[A-Z]{2}/(record-\\d+)(?=\\.json)' }),
   );
   // a named capturing group DOES count
   assert.throws(
     () =>
       normalizeConfig({
-        shardIdPattern: 'clinics/(?<cc>[A-Z]{2})/(clinic-\\d+)\\.json',
+        shardIdPattern: 'records/(?<cc>[A-Z]{2})/(record-\\d+)\\.json',
       }),
     /exactly one capture group/,
   );
@@ -1141,12 +1171,12 @@ test('normalizeConfig: lanes.* rejects an empty/non-string role folder even when
 
 test('normalizeConfig: derived scope lists normalize + fail loud on malformed entries (plan 1867)', () => {
   const c = normalizeConfig({
-    derivedShardDirs: ['backend\\data\\price-pipeline\\render-fingerprints/'],
-    derivedGlobalFiles: ['backend/data/price-pipeline/observations/sweep-observations.jsonl'],
+    derivedShardDirs: ['backend\\data\\data-pipeline\\render-fingerprints/'],
+    derivedGlobalFiles: ['backend/data/data-pipeline/observations/sweep-observations.jsonl'],
   });
-  assert.deepEqual(c.derivedShardDirs, ['backend/data/price-pipeline/render-fingerprints']);
+  assert.deepEqual(c.derivedShardDirs, ['backend/data/data-pipeline/render-fingerprints']);
   assert.deepEqual(c.derivedGlobalFiles, [
-    'backend/data/price-pipeline/observations/sweep-observations.jsonl',
+    'backend/data/data-pipeline/observations/sweep-observations.jsonl',
   ]);
   // a silently-dropped entry would put derived diffs back outside the mutex — throw instead
   assert.throws(() => normalizeConfig({ derivedShardDirs: [''] }), /empty\/non-string entry/);
@@ -1175,12 +1205,12 @@ test('normalizeConfig: seedShardDir set-but-empty throws loud (never silently dr
 
 test('normalizeConfig: vetapp profile derives seedLane=true + docs/handoff paths', () => {
   const c = normalizeConfig({
-    seedLaneFile: 'backend/src/data/seed-clinics.json',
+    seedLaneFile: 'backend/src/data/seed-records.json',
     handoffLayout: 'sessions',
     handoffDir: 'docs/handoff',
   });
   assert.equal(c.seedLane, true);
-  assert.equal(c.seedLaneFile, 'backend/src/data/seed-clinics.json');
+  assert.equal(c.seedLaneFile, 'backend/src/data/seed-records.json');
   assert.equal(c.handoffLayout, 'sessions');
   assert.equal(c.handoffDir, 'docs/handoff');
   assert.deepEqual(c.paths, {
@@ -1299,6 +1329,13 @@ test('loadCoordConfig: missing file ⇒ DEFAULTS', () => {
     // defaults so the public kit hardcodes no project vocabulary.
     gitPatEnvVar: 'GIT_PUSH_TOKEN',
     codexAuthEnvVar: 'CODEX_LOGIN_B64',
+    // plan 4172 — the project-vocabulary knobs, all null ("not configured") in the core.
+    legacyScopeKeys: null,
+    wikiRecordDir: null,
+    worktreeExcludeBasenames: null,
+    sweepCheckpointPattern: null,
+    wikiAliasDeny: null,
+    bulkItemNouns: null,
   });
   rmSync(root, { recursive: true, force: true });
 });

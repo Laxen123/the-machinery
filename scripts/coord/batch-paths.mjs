@@ -19,8 +19,15 @@
 // resolveManifestRel reads new-first, legacy-second so both resolve cleanly, and
 // a later sweep deletes the empty legacy dir once every old-path manifest lands.
 
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+// plan 4246 review fix: the ONE filename -> plan-id parser coord already shares (leading digits,
+// minus the dateless `<YYYY>-MM-DD-` legacy shape), instead of a local regex that dropped
+// date-slugged archive names like `029-2026-05-21-….md`.
+import { claimedIdOfBasename } from './build-index-lib.mjs';
+// plan 4246 review fix (b35525): the ONE `git cat-file --batch` maxBuffer coord agrees on.
+import { GIT_MAXBUFFER } from './coord-git.mjs';
 
 export const BATCHES_DIR_REL = 'docs/superpowers/batches';
 export const LEGACY_BATCH_MANIFEST_DIR_REL = 'docs/handoff/batches';
@@ -245,15 +252,30 @@ export function renderBatchMd({
 // A `gate:` non-null batch is DELIBERATELY excluded from the returned map — its members
 // stay individually claimable so a gate can never freeze them (plan 2459 Task 2, item 5).
 //
-// Stale-roster safety (plan 2459 Task 2, item 6): this function does NOT verify that a
-// listed member still resolves anywhere claimable — it only reports batch.md's frontmatter
-// verbatim. A roster whose members have ALL long since archived (batch-coord-smalls,
-// batch-coord-decouple-spine style drift) still returns those stale ids here. Callers
-// never refuse anything because of it, BY CONSTRUCTION: both consumers only ever look up
-// an id they are ABOUT to claim or list (a ready/ scan, or a specific claim target) — an
-// archived plan is never presented for claiming again, so its stale membership entry is
-// simply never consulted. Never call this to iterate "what does the roster still expect"
-// — that judgment belongs to the board-pass reconcile (plan 2459 Task 3), not this guard.
+// Archived members are FINISHED CARS, not missing ones (plan 4246 — this replaces the old
+// plan-2459 item-6 "stale-roster safety" note). Every reader below takes an optional
+// `archivedIds` (a Set of plan ids, or a thunk returning one — see readArchivedPlanIds) and
+// splits each runnable batch's `members:` into LIVE ids and ids whose plan file already sits
+// in the plans archive lane (shipped OR closed — either way it is never claimed again). Then:
+//   • no member archived     → unchanged: the batch holds every listed member.
+//   • ≥2 live members left    → the batch stays runnable with EXACTLY the live members; the
+//                               archived ids are dropped from the train and from the hold map.
+//   • ≤1 live member left     → the batch is DISSOLVED: it holds nothing, so its survivor is
+//                               solo-claimable in queue-drain AND at claim-plan's solo gate.
+// A member that is NOT archived but merely out of ready/ (waiting-*, in-progress,
+// pending-approval) is still a live member: the all-or-nothing train rule keeps withholding
+// the whole batch for it. Only the archive lane counts as "finished".
+//
+// Why the rule lives here: the old note argued a stale archived id was harmless because an
+// archived plan is never presented for claiming again. True for that id, but it missed the
+// other direction — the archived member made the WHOLE train untakeable (queue-drain's
+// `not-in-ready-pool` blocker) while the batch still held its surviving members from solo
+// claims: a deadlock only a hand edit of batch.md could clear (batch-2026-09-26-profile-ui /
+// batch-2026-09-26-scripts-checks). One definition (batchLiveness) now drives the bulk oracle
+// and the single-plan claim gate alike, so the two can never disagree about a hold. Called
+// WITHOUT `archivedIds`, every reader reports batch.md's frontmatter as written, exactly as
+// before (fixture callers). Iterating "what does the roster still expect" for cleanup remains
+// the board-pass reconcile's job (plan 2459 Task 3), not this guard's.
 // Canonical plan-id key for the held-map (plan 2459 review, finding `queue-drain.mjs:508`).
 // Plan ids appear in TWO spellings that must compare equal: a roster's `members:` list and a
 // plan FILENAME keep legacy sub-100 ids zero-padded (`007-P07-…md`), while `queue-drain.mjs`'s
@@ -285,7 +307,22 @@ export function canonicalPlanId(id) {
 //
 // `onSkip(name, why)` lets a caller REPORT a dropped folder (batches-view warns) while the
 // default stays silent (the guard path must never print during a queue-drain tick).
-export function* walkBatchFolders(batchesDir, { onSkip } = {}) {
+//
+// `at` (plan 4246 review fix b35525) switches the SOURCE from local disk to a git COMMIT:
+// `{ repoRoot, ref, batchesRel = BATCHES_DIR_REL, _exec, onFault }` (or a thunk returning one,
+// resolved when the walk starts — queue-drain only learns its origin sha after building the
+// roster). The folder list comes from one `git ls-tree` at `ref` and every batch.md from one
+// `git cat-file --batch`, so a caller judging against origin (queue-drain's origin read of
+// ready/, claim-plan's resolvePlanAtOrigin sha) reads the roster from the SAME snapshot as
+// everything else instead of mixing it with a possibly-stale local checkout. A null `ref` walks
+// nothing. A git fault calls `onFault(error)` and walks nothing when the caller supplied one,
+// and is rethrown otherwise (claim-plan's gate refuses rather than guessing).
+export function* walkBatchFolders(batchesDir, { onSkip, at } = {}) {
+  const src = typeof at === 'function' ? at() : at;
+  if (src) {
+    yield* walkBatchFoldersAtRef(src, onSkip);
+    return;
+  }
   let entries;
   try {
     entries = readdirSync(batchesDir, { withFileTypes: true });
@@ -310,6 +347,138 @@ export function* walkBatchFolders(batchesDir, { onSkip } = {}) {
   }
 }
 
+// The git-commit half of walkBatchFolders: same sorted order, same reserved-dir skip, same
+// `onSkip` for a folder with no (readable) batch.md, same yielded shape.
+function* walkBatchFoldersAtRef(
+  { repoRoot, ref, batchesRel = BATCHES_DIR_REL, _exec = execFileSync, onFault },
+  onSkip,
+) {
+  if (!ref) return;
+  const prefix = `${batchesRel.replace(/\/+$/, '')}/`;
+  let blobs;
+  try {
+    blobs = lsTreeBlobs(repoRoot, ref, prefix, { _exec });
+  } catch (e) {
+    if (!onFault) throw e;
+    onFault(e);
+    return;
+  }
+  const folders = new Map(); // folder name -> batch.md blob sha (null when absent)
+  for (const { sha, path } of blobs) {
+    if (!path.startsWith(prefix)) continue;
+    const segs = path.slice(prefix.length).split('/');
+    if (segs.length < 2 || RESERVED_BATCH_DIRS.has(segs[0])) continue; // top-level files, archive/
+    if (!folders.has(segs[0])) folders.set(segs[0], null);
+    if (segs.length === 2 && segs[1] === 'batch.md') folders.set(segs[0], sha);
+  }
+  const names = [...folders.keys()].sort();
+  const withMd = names.filter((n) => folders.get(n));
+  let contents;
+  try {
+    contents = readBlobsBatched(
+      repoRoot,
+      withMd.map((n) => folders.get(n)),
+      { _exec },
+    );
+  } catch (e) {
+    if (!onFault) throw e;
+    onFault(e);
+    return;
+  }
+  const byName = new Map(withMd.map((n, i) => [n, contents[i]]));
+  for (const name of names) {
+    const content = byName.get(name);
+    if (typeof content !== 'string') {
+      onSkip?.(name, 'no readable batch.md');
+      continue;
+    }
+    const batch = parseBatchMd(content);
+    yield { name, batch, slug: batch.slug || name };
+  }
+}
+
+// `git ls-tree -r <ref> -- <relDir>` → `[{ sha, path }]` for every blob under `relDir` at that
+// COMMIT (plan 4246 review fix: shared by queue-drain's ready/ listing, the archive listing and
+// the batch roster, so all three read one snapshot the same way). A path absent at the ref exits
+// 0 with empty output (data); a git fault throws through `_exec`. Each line is
+// `<mode> <type> <sha>\t<path>`, split on the FIRST tab.
+export function lsTreeBlobs(repoRoot, ref, relDir, { _exec = execFileSync } = {}) {
+  if (!repoRoot) throw new Error('lsTreeBlobs: no repoRoot available');
+  if (!ref) throw new Error('lsTreeBlobs: no ref (commit sha) available');
+  const out = _exec('git', ['-C', repoRoot, 'ls-tree', '-r', ref, '--', relDir], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 15000,
+    maxBuffer: GIT_MAXBUFFER,
+  });
+  const entries = [];
+  for (const line of String(out).split('\n')) {
+    if (!line) continue;
+    const tab = line.indexOf('\t');
+    if (tab === -1) continue;
+    const parts = line.slice(0, tab).trim().split(/\s+/);
+    if (parts[1] !== 'blob' || !parts[2]) continue;
+    entries.push({ sha: parts[2], path: line.slice(tab + 1) });
+  }
+  return entries;
+}
+
+// plan 3816 fix round (review Fix 1), MOVED here from queue-drain.mjs by plan 4246's review fix so
+// the batch roster read (walkBatchFoldersAtRef above) shares it — queue-drain imports and
+// re-exports it unchanged. ONE `git cat-file --batch` call for a whole SET of blob shas.
+// `encoding: null` — NOT the string `'buffer'`, which throws `Unknown encoding: buffer` when
+// `input` is also a string, because Node encodes `input` with this same value — is what makes
+// `out` a raw Buffer, so this can slice by the BYTE size cat-file's header reports rather than a
+// pre-decoded utf8 string (a multi-byte character straddling a size boundary would corrupt every
+// later offset).
+//
+// Returns contents aligned index-for-index with `shas`; a missing or malformed blob resolves to
+// `null` at its own index rather than throwing, so one vanished/truncated blob cannot take down
+// the whole read — once the stream stops being parseable, every remaining index degrades to
+// `null` too, since a malformed header means the position of the NEXT object is no longer known.
+export function readBlobsBatched(repoRoot, shas, { _exec = execFileSync } = {}) {
+  if (!repoRoot) throw new Error('readBlobsBatched: no repoRoot available');
+  if (shas.length === 0) return [];
+  const input = shas.join('\n') + '\n';
+  const out = _exec('git', ['-C', repoRoot, 'cat-file', '--batch'], {
+    input,
+    encoding: null,
+    maxBuffer: GIT_MAXBUFFER,
+    timeout: 15000,
+  });
+  const contents = [];
+  let offset = 0;
+  let unrecoverable = false;
+  for (let i = 0; i < shas.length; i++) {
+    if (unrecoverable) {
+      contents.push(null);
+      continue;
+    }
+    const nl = out.indexOf(0x0a, offset);
+    if (nl === -1) {
+      unrecoverable = true;
+      contents.push(null);
+      continue;
+    }
+    const header = out.slice(offset, nl).toString('utf8').trim();
+    offset = nl + 1;
+    const parts = header.split(/\s+/);
+    const size = parts.length >= 3 ? parseInt(parts[2], 10) : NaN;
+    if (parts[1] === 'missing') {
+      contents.push(null); // a vanished blob — no body follows, offset stays correct
+      continue;
+    }
+    if (!Number.isFinite(size) || offset + size > out.length) {
+      unrecoverable = true;
+      contents.push(null);
+      continue;
+    }
+    contents.push(out.slice(offset, offset + size).toString('utf8'));
+    offset += size + 1; // the trailing newline cat-file --batch appends after each object
+  }
+  return contents;
+}
+
 // A batch GUARDS its members only while it is runnable: still open for the taking
 // (`status: proposed`) and not withheld behind an unmet trip (`gate: null`). Single
 // predicate so the map build and the single-id lookup can never disagree about it.
@@ -317,11 +486,145 @@ export function isRunnableBatch(batch) {
   return batch.status === 'proposed' && batch.gate === null;
 }
 
-export function readRunnableBatchMembers(batchesDir) {
-  const held = new Map(); // canonicalPlanId -> holding batch slug
-  for (const { batch, slug } of walkBatchFolders(batchesDir)) {
+// The canonical plan id a plan FILENAME claims, or null (not a `.md`, or no id). Uses the shared
+// claimedIdOfBasename, so `4187-UI-….md`, legacy `007-P07-….md` and a date-slugged archive name
+// `029-2026-05-21-….md` all parse, while a dateless `2026-05-17-notes.md` does not. Exported so
+// queue-drain's two Blocked-by archive readers parse archive names exactly this way too.
+export function planIdOfFilename(name) {
+  if (!String(name).endsWith('.md')) return null;
+  const raw = claimedIdOfBasename(name);
+  return raw ? canonicalPlanId(raw) : null;
+}
+
+// The CHEAP archive listing the batch-liveness check needs (plan 4246): plan ids by FILENAME
+// only — never a file content read. The archive lane is 1000s of files; queue-drain's
+// content-reading readArchivedIds answers a different question (shipped vs closed) that
+// liveness does not ask, and only runs when a Blocked-by line needs it. The lane is
+// lint-enforced flat, but a one-level category subfolder is tolerated the way the shared plan
+// walker tolerates it. Returns a Set of canonicalPlanId keys.
+//
+// ONE helper, two SOURCES (plan 4246 review fix) — the caller picks the source that matches
+// where it read everything else:
+//   { repoRoot, ref, archiveRel }  — names at a git COMMIT (lsTreeBlobs, names only), for a
+//                                    caller that judges against origin (queue-drain's origin
+//                                    read of ready/, claim-plan's resolvePlanAtOrigin sha), so a
+//                                    member archived on origin but not yet pulled locally counts.
+//                                    `archiveRel` is repo-relative (plan 3960's ARCHIVE_FOLDER).
+//   { archiveDir }                 — names on local disk, only where the caller itself reads the
+//                                    local tree (queue-drain's `--ready` / `source: 'tree'` mode).
+// Fails SAFE either way: a missing dir, an absent path at the ref, or a git fault yields an EMPTY
+// set (a fault is also logged to stderr), so nothing counts as archived and every batch keeps
+// holding exactly as it did before this rule existed.
+export function readArchivedPlanIds({
+  archiveDir,
+  repoRoot,
+  ref,
+  archiveRel,
+  _exec = execFileSync,
+  log = console.error,
+} = {}) {
+  const ids = new Set();
+  const add = (name) => {
+    const id = planIdOfFilename(name);
+    if (id) ids.add(id);
+  };
+  if (repoRoot) {
+    if (!ref || !archiveRel) return ids;
+    const prefix = `${archiveRel.replace(/\/+$/, '')}/`;
+    let blobs;
+    try {
+      blobs = lsTreeBlobs(repoRoot, ref, prefix, { _exec });
+    } catch (e) {
+      log(
+        `batch-paths: readArchivedPlanIds — git ls-tree ${String(ref).slice(0, 12)} ${prefix} ` +
+          `failed (${e?.message ?? e}); treating no batch member as archived.`,
+      );
+      return ids;
+    }
+    for (const { path } of blobs) {
+      if (!path.startsWith(prefix)) continue;
+      const segs = path.slice(prefix.length).split('/');
+      if (segs.length <= 2) add(segs[segs.length - 1]);
+    }
+    return ids;
+  }
+  if (!archiveDir) return ids;
+  const scan = (dir, depth) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (depth === 0) scan(join(dir, e.name), 1);
+        continue;
+      }
+      add(e.name);
+    }
+  };
+  scan(archiveDir, 0);
+  return ids;
+}
+
+// A batch keeps holding only while at least this many of its members are still live.
+export const MIN_LIVE_BATCH_MEMBERS = 2;
+
+// THE live-membership rule (plan 4246) — see the section header above. Pure. `archived` is a
+// Set of canonical ids, or null/undefined for "no archive information" (nothing dropped).
+// Returns { live, archived, dissolved }, `live`/`archived` as member tokens in roster order.
+// `dissolved` is true only when at least one member is archived AND fewer than
+// MIN_LIVE_BATCH_MEMBERS remain live — a roster with nothing archived is never dissolved here
+// (an empty or one-member roster is a roster defect for the caller to report, not liveness).
+export function batchLiveness(batch, archived) {
+  const live = [];
+  const gone = [];
+  for (const id of batch.members) {
+    (archived && archived.has(canonicalPlanId(id)) ? gone : live).push(id);
+  }
+  const dissolved = gone.length > 0 && live.length < MIN_LIVE_BATCH_MEMBERS;
+  return { live, archived: gone, dissolved };
+}
+
+// The logged reason for a dissolved batch (queue-drain's skippedBatches).
+export function dissolvedBatchReason({ live, archived }) {
+  const n = live.length;
+  return (
+    `dissolved: only ${n} live member${n === 1 ? '' : 's'} left ` +
+    `(${archived.map(String).join(', ')} archived)` +
+    (n === 1 ? ` — ${live[0]} is claimable solo` : '')
+  );
+}
+
+// `archivedIds` option → a memoized resolver: a thunk is invoked at most once per reader call,
+// and only once a runnable batch actually needs judging (no runnable batch → no listing).
+function archivedResolver(archivedIds) {
+  if (archivedIds == null) return () => null;
+  if (typeof archivedIds !== 'function') return () => archivedIds;
+  let memo;
+  return () => (memo ??= archivedIds() ?? null);
+}
+
+// The ONE runnable-batch walk every reader below consumes: each runnable batch
+// (isRunnableBatch) with its liveness verdict. A generator, so the single-id lookup can stop
+// at its first hit.
+function* walkRunnableBatchLiveness(batchesDir, { archivedIds, at } = {}) {
+  const archived = archivedResolver(archivedIds);
+  for (const { batch, slug } of walkBatchFolders(batchesDir, { at })) {
     if (!isRunnableBatch(batch)) continue; // not runnable — never guards
-    for (const id of batch.members) {
+    yield { batch, slug, ...batchLiveness(batch, archived()) };
+  }
+}
+
+export function readRunnableBatchMembers(batchesDir, { archivedIds, at } = {}) {
+  const held = new Map(); // canonicalPlanId -> holding batch slug
+  for (const { slug, live, dissolved } of walkRunnableBatchLiveness(batchesDir, {
+    archivedIds,
+    at,
+  })) {
+    if (dissolved) continue; // a dissolved batch holds nothing (plan 4246)
+    for (const id of live) {
       const key = canonicalPlanId(id);
       if (!held.has(key)) held.set(key, slug); // first-match wins on a (data-error) double listing
     }
@@ -342,13 +645,36 @@ export function readRunnableBatchMembers(batchesDir) {
 // returned VERBATIM from batch.md (canonicalize at the comparison site, exactly as the map
 // build does); an empty-`members` roster entry is returned as-is and left for the caller to
 // reject, since "a batch with no members" is a roster defect, not a runnability question.
-export function readRunnableBatches(batchesDir) {
-  const out = [];
-  for (const { batch, slug } of walkBatchFolders(batchesDir)) {
-    if (!isRunnableBatch(batch)) continue;
-    out.push({ slug, lane: batch.lane, members: batch.members, theme: batch.theme });
+//
+// plan 4246: with `archivedIds`, `members` is the LIVE member list (archived ids dropped and
+// listed in `archivedMembers`), and a DISSOLVED batch is left out — it is not runnable.
+// readBatchRosterLiveness below is the same walk, also returning the dissolved batches.
+export function readRunnableBatches(batchesDir, { archivedIds, at } = {}) {
+  return readBatchRosterLiveness(batchesDir, { archivedIds, at }).runnable;
+}
+
+// ONE walk, both halves (plan 4246): `runnable` (what readRunnableBatches returns) and
+// `dissolved` — runnable-status batches an archived member left with fewer than
+// MIN_LIVE_BATCH_MEMBERS live members. Each entry is
+// `{ slug, lane, members (live), archivedMembers, theme }`. queue-drain reports every dissolved
+// batch in skippedBatches, so the log still says why a former train no longer holds anything.
+export function readBatchRosterLiveness(batchesDir, { archivedIds, at } = {}) {
+  const runnable = [];
+  const dissolved = [];
+  for (const { batch, slug, live, archived, dissolved: gone } of walkRunnableBatchLiveness(
+    batchesDir,
+    { archivedIds, at },
+  )) {
+    const entry = {
+      slug,
+      lane: batch.lane,
+      members: live,
+      archivedMembers: archived,
+      theme: batch.theme,
+    };
+    (gone ? dissolved : runnable).push(entry);
   }
-  return out;
+  return { runnable, dissolved };
 }
 
 // Single-id lookup (plan 2518 item 4): the slug of the runnable batch holding `planId`, or
@@ -356,11 +682,17 @@ export function readRunnableBatches(batchesDir) {
 // entire membership map to answer it — every batch folder read and parsed to look up one key.
 // This stops at the first holding batch instead. Same first-match-wins tiebreak as the map
 // build above, over the same sorted walk, so both answer identically for any given tree.
-export function findRunnableBatchForPlan(batchesDir, planId) {
+//
+// plan 4246: honours the SAME live-membership rule (batchLiveness) as the bulk readers — given
+// the same `archivedIds`, a dissolved batch holds nothing and an archived id is never held.
+export function findRunnableBatchForPlan(batchesDir, planId, { archivedIds, at } = {}) {
   const wanted = canonicalPlanId(planId);
-  for (const { batch, slug } of walkBatchFolders(batchesDir)) {
-    if (!isRunnableBatch(batch)) continue;
-    if (batch.members.some((id) => canonicalPlanId(id) === wanted)) return slug;
+  for (const { slug, live, dissolved } of walkRunnableBatchLiveness(batchesDir, {
+    archivedIds,
+    at,
+  })) {
+    if (dissolved) continue;
+    if (live.some((id) => canonicalPlanId(id) === wanted)) return slug;
   }
   return null;
 }
@@ -375,9 +707,9 @@ export function findRunnableBatchForPlan(batchesDir, planId) {
 // remains a valid substitute for it (every existing caller and test that passes one keeps
 // working), and parsePlanMeta itself stays pure: it never performs an fs read, it only
 // touches an object the caller handed it.
-export function lazyRunnableBatchMembers(batchesDir) {
+export function lazyRunnableBatchMembers(batchesDir, { archivedIds, at } = {}) {
   let held = null;
-  const load = () => (held ??= readRunnableBatchMembers(batchesDir));
+  const load = () => (held ??= readRunnableBatchMembers(batchesDir, { archivedIds, at }));
   return {
     has: (key) => load().has(key),
     get: (key) => load().get(key),
@@ -401,12 +733,18 @@ export function lazyRunnableBatchMembers(batchesDir) {
 // roster unconditionally without paying twice. The walk is still LAZY: a tree with no batches dir,
 // or a caller that touches neither shape, performs no read at all — only the plan-2518 "skip the
 // walk when no plan is held" gate is deliberately given up, and that gate is what caused the bug.
-export function lazyBatchRoster(batchesDir) {
+//
+// plan 4246: `archivedIds` (Set or thunk — queue-drain passes a thunk over readArchivedPlanIds)
+// applies the live-membership rule to both shapes, and `at` (see walkBatchFolders) reads the
+// roster itself at a git commit instead of local disk; `dissolved()` exposes the batches it
+// dissolved, off the same memoized walk, for queue-drain's skippedBatches log.
+export function lazyBatchRoster(batchesDir, { archivedIds, at } = {}) {
   let batches = null;
+  let dissolved = null;
   let held = null;
   const load = () => {
     if (batches === null) {
-      batches = readRunnableBatches(batchesDir);
+      ({ runnable: batches, dissolved } = readBatchRosterLiveness(batchesDir, { archivedIds, at }));
       held = new Map();
       for (const b of batches) {
         for (const id of b.members) {
@@ -415,12 +753,13 @@ export function lazyBatchRoster(batchesDir) {
         }
       }
     }
-    return { batches, held };
+    return { batches, dissolved, held };
   };
   return {
     has: (key) => load().held.has(key),
     get: (key) => load().held.get(key),
     list: () => load().batches,
+    dissolved: () => load().dissolved,
   };
 }
 

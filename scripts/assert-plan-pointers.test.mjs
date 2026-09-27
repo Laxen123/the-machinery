@@ -224,7 +224,7 @@ test('planFolders maps ids to their status folder, and a live folder beats archi
     // LEGACY date-prefixed plans. A bare `^(\d+)-` reads `2026` out of these and files a
     // phantom archived plan 2026 — the class planIdOf's `(?=[A-Za-z])` lookahead closes.
     'docs/superpowers/plans/archive/2026-05-17-adaptive-bouncing-castle-uiux-session.md',
-    'docs/superpowers/plans/archive/2026-05-23-clinic-category-4-tier-split.md',
+    'docs/superpowers/plans/archive/2026-05-23-record-category-4-tier-split.md',
     // …and the 86 archived plans whose TITLE starts with a date, which DO carry an id.
     'docs/superpowers/plans/archive/001-2026-05-21-fb-insta-ui-surface.md',
   ]);

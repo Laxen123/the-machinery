@@ -190,7 +190,7 @@
 //     file-creations second, so a re-add claims only lines no author accounts for while a
 //     genuinely new file still credits its creator. See `attributeRemovals`.
 //   CLASS 2 — a table RE-PAD read as deletion. Plan 2882 proved this STRUCTURAL: adding the one
-//     glossary row docs/PIPELINE.md's write-rule REQUIRES of a new-concept plan re-pads every
+//     glossary row the project's pipeline doc's write-rule REQUIRES of a new-concept plan re-pads every
 //     column, so every conforming land tripped the gate against a strict-superset table. FIX:
 //     `netRemovedLines` — a removed line that survives in the SAME file's added set modulo
 //     whitespace was never removed. Distinct from the ruled-out similarity detector above: this
@@ -466,7 +466,7 @@ export function diffLineSets(diffText) {
 // plan 3246 CLASS 2 — a line whose only change is WHITESPACE was never removed.
 //
 // The firing (fixture F3; live on plans 2855, 2882 and 2969) is a markdown table re-pad. Cells
-// in `docs/PIPELINE.md` § The glossary are padded to the widest row, so adding the ONE glossary
+// in the project's pipeline doc's glossary are padded to the widest row, so adding the ONE glossary
 // row that doc's own write-rule REQUIRES of any new-concept plan re-pads every column: ~60
 // rows read as deletions against a branch table that is a strict SUPERSET of master's. Plan
 // 2882 proved the trigger is STRUCTURAL, so EVERY conforming new-concept land trips it — which
@@ -1013,7 +1013,7 @@ export function detectLandedReversion(
 export const CULPRIT_TEST_TIMEOUT_MS = 120_000;
 
 // The primary glob: this repo names a plan's own Python test file `test_<planId>_*.py` under
-// `backend/scripts/__tests__/` — see docs/PIPELINE.md and the many `test_3xxx_*.py` files
+// `backend/scripts/__tests__/` — see the project's pipeline doc and the many `test_3xxx_*.py` files
 // already there. Returns paths sorted for determinism; [] on a missing dir or no match (never
 // throws — this is advisory evidence-gathering, not a load-bearing git call).
 function globCulpritTestFiles(wtPath, planId) {
@@ -1032,7 +1032,7 @@ function globCulpritTestFiles(wtPath, planId) {
 }
 
 // The fallback, used only when the primary glob above is empty: the name-paired sibling of the
-// FINDING's own path (not the plan's) — `scripts/X.mjs` -> `scripts/X.test.mjs`;
+// FINDING's own path (not the plan's) — `scripts/<name>.mjs` -> `scripts/<name>.test.mjs`;
 // `backend/scripts/X.py` -> `backend/scripts/__tests__/test_X.py`. This is a weaker signal (it
 // covers the module the finding touched, not necessarily everything the culprit plan landed),
 // which is exactly why it is the fallback and not the primary.
@@ -1283,7 +1283,7 @@ export function reversionPreflightReason(findings, { masterRef = 'origin/master'
     `If any line above was NOT meant to go, patch-replay the branch's OWN diff onto CURRENT ` +
     `origin/master (git apply --3way / cherry-pick) — never a whole-file restore for a file not ` +
     `exclusively owned by this plan; diff-and-splice shared files instead ` +
-    `(docs/runbooks/branch-hygiene.md § Landed-work-reversion lint). ` +
+    `(docs/coord/worktrees.md § Landed-work-reversion lint). ` +
     `\`node scripts/coord/assert-no-landed-reversion.mjs --explain <path>\` pairs each dropped line ` +
     `with its nearest surviving successor, which is the fastest way to tell a rewrite from a ` +
     `restore by eye.`

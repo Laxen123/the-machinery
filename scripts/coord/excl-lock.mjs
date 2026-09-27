@@ -27,7 +27,7 @@
 // decision): this is a NEW `coordShare` member, not folded into `coord-git.mjs`
 // — `landing-lock.mjs` is byte-identical-synced to tandapp, and a new import
 // it takes on must be adopted by the sibling FIRST (or in the same beat), per
-// `docs/runbooks/coord-sharing.md`'s dependency-ordering rule. `coord.config.json`
+// the coordShare dependency-ordering rule. `coord.config.json`
 // adds this file to tandapp's `adopt` list in the SAME commit that lands it here.
 // battery-lock is vetapp-only, so it stays a plain (non-adopted) canonical file.
 

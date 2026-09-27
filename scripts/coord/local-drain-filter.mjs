@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // scripts/local-drain-filter.mjs — the /local-drain Step-2 cloud-eligibility filter (plan 2396).
 //
-// WHY THIS FILE EXISTS: the /local-drain runbook (`docs/runbooks/local-drain-loop.md`; it lived
+// WHY THIS FILE EXISTS: the /local-drain runbook (`docs/coord/local-drain-loop.md`; it lived
 // at `.claude/commands/local-drain.md` until plan 2694 relocated it) carried this filter as an inline
 // `node - <<'EOF'` snippet whose stamp read was
 //
@@ -119,7 +119,7 @@ export function stampFor(
 // human `warnings[]` list. `pools` is [[laneName, oracleResult], …].
 //
 //   localOnly[]            — pick from this ONLY. stamp false / unset / no-frontmatter / unknown.
-//   droppedCloudEligible[] — stamp `true`: reserved for the scheduled cloud drains.
+//   droppedCloudEligible[] — stamp `true`, or a `landOnly` /cloud-land hand-off (plan 4255): reserved for the scheduled cloud drains.
 //   staleDropped[]         — file vanished mid-read: a mid-move race, re-read next iteration.
 //   unreadable[]           — read failed for a NON-race reason: a defect, surfaced loudly.
 //
@@ -264,7 +264,11 @@ export function partitionPools(pools, { readFile, exists = existsSync } = {}) {
         }
         stamp = r.stamp;
       }
-      if (stamp === 'true') {
+      // plan 4255: a `landOnly` entry is a /cloud-land hand-off — its build is done and its land
+      // was deliberately sent to a cloud drain to keep the land battery off this box, so a local
+      // drain leaves it alone whatever its cloudExec says (a local land is the operator's explicit
+      // override, run by hand, never picked up by a drain).
+      if (stamp === 'true' || e.landOnly === true) {
         // A sol plan stamped cloudExec: true is possible in principle (cloud-safe AND
         // codex-exec-eligible are independent axes) — merge it the same way as the localOnly
         // path below rather than assuming only local-only stamps can double up.

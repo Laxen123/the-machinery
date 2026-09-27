@@ -35,7 +35,7 @@ const WORKTREES_DIR = '.claude/worktrees';
 const PLANS_PREFIX = 'docs/superpowers/plans';
 const BRANCH_PREFIX = 'worktree-';
 const DRAIN_BRANCH_PREFIX = 'claude/drain-';
-// origin/staging backs live Render infra (docs/runbooks/branch-hygiene.md) — never a
+// origin/staging backs live Render infra (docs/coord/worktrees.md) — never a
 // candidate for deletion. It can never actually reach classifyMergedBranches via the real
 // gather path (listWorktreeBranches only enumerates `worktree-*` refs), but the guard stays
 // explicit so the classifier is provably safe on its own, not merely safe-by-construction of
@@ -320,7 +320,7 @@ export function listPlanPathsAtOriginMaster(mainDir, { _git = git } = {}) {
   return _git(mainDir, ['ls-tree', '-r', '--name-only', 'origin/master', '--', PLANS_PREFIX]);
 }
 
-// The plan-path parser moved to coord/build-index-lib.mjs (plan 4125) so a light consumer can
+// The plan-path parser moved to scripts/coord/build-index-lib.mjs (plan 4125) so a light consumer can
 // reuse it without this module's claim-CAS dependency graph. Re-exported here: every existing
 // caller and this file's own tests keep importing it from the name they always used.
 import { buildPlanFolderIndex } from './build-index-lib.mjs';

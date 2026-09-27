@@ -317,7 +317,15 @@ async function main() {
   const { positionals, flags } = parsed;
   const dry = flags.dry === true;
   const [idOrName, target] = positionals;
-  const specReview = flags['spec-review'];
+  // Plan 4195 (ledger :1066): normalize the `exempt-mechanical` literal case-insensitively,
+  // once, here — every downstream `specReview === 'exempt-mechanical'` comparison in this
+  // file then just works. A sha value is left exactly as typed (never lowercased) — sha
+  // case can be meaningful and is stored verbatim.
+  const specReviewRaw = flags['spec-review'];
+  const specReview =
+    typeof specReviewRaw === 'string' && specReviewRaw.toLowerCase() === 'exempt-mechanical'
+      ? 'exempt-mechanical'
+      : specReviewRaw;
   const provenance = flags.provenance;
   // plan 3973 (T2): the combined form's own flags — undefined when not given, same
   // "absent means don't touch this axis" contract every other optional flag here uses.
@@ -396,6 +404,11 @@ async function main() {
   // REAL run, never on `--dry` (stampFrontmatterAxis's dry branch never reaches it) — so a
   // `--dry` invocation leaves this null and emits nothing below. That is correct and intended:
   // a dry run stamps nothing, so warning about a stamp gap it hasn't caused yet would be noise.
+  //
+  // Plan 4195: when `cloudAxis` is set (this same invocation also passed `--cloud-exec`), the
+  // cloud axis ALWAYS writes a validated `cloudExec:` key in its own mutateBody (axes[1], runs
+  // AFTER this one) — so judging the pre-cloud-axis body here would always be a false positive
+  // in that combined form. The guard at the assignment below stays null in that case.
   let cloudExecWarn = null;
   let renamePlan = null;
   // Resolve once per invocation. Preflight can re-run on a non-ff, but raw existence is read on
@@ -487,7 +500,12 @@ async function main() {
       // execModel/specReview writes below) and using ctx.newBasename — the basename this
       // plan will actually carry on disk once the rename (if any) lands, so the printed
       // remediation command names the same id an operator sees in the tree.
-      cloudExecWarn = cloudExecUnstampedWarning(ctx.newBasename, body);
+      //
+      // Plan 4195: unless this same invocation also stamps cloudExec itself (cloudAxis set,
+      // axes[1], runs after this axis) — that axis writes a validated true/false unconditionally
+      // before the commit lands, so the arriving body here would always look key-less even
+      // though the pushed commit is correct. Stays null in that case.
+      if (!cloudAxis) cloudExecWarn = cloudExecUnstampedWarning(ctx.newBasename, body);
       body = setFrontmatterKey(body, 'execModel', target);
       if (renamePlan?.adoptAction === 'stripped') body = removeFrontmatterKey(body, 'adoptBranch');
       else if (renamePlan?.adoptBranch)

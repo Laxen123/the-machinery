@@ -60,6 +60,84 @@ proceed because their data footprints cannot possibly collide. A design that onl
 mutex would still livelock on the ordering question above; a design that only had FIFO would waste
 real wall-clock serializing merges that could safely run together.
 
+## Queue slot = readiness
+
+**A queue slot means "reviewed, done, merge now" — not "I have started landing".** The failure this
+rule exists for: an item enqueues after a review, reaches the head, and then runs another review,
+fixes a newly found bug and commits new code while still holding the head — every item behind it
+waits on work that was not ready when it took the slot. Queue position is not readiness.
+
+- **Enqueue only at true finality:** after the final review verdict, with every finding
+  dispositioned and every pre-queue gate green. The land spine orders every gate before its own
+  enqueue, so an item that follows the spine cannot enqueue early by accident; do not enqueue
+  intending to keep working.
+- **Enqueueing without a current review is refused, not warned.** A reviewable diff whose HEAD
+  carries no current sha-pinned review verdict — none at all, or one pinned to an older sha, meaning
+  the item was reworked after review — is refused a slot and stops at the review seam. The
+  mechanical re-pin of a verdict after a pure rebase (same content, new base) runs before this
+  check, so a rebase alone never trips it.
+- **Release on reopen: dequeue, not requeue; re-entry is always at the tail.** If, while queued or at
+  the head, the item is reworked — a new commit changes its content, or it is reviewed again — it
+  releases its slot (`node scripts/landing-queue.mjs dequeue <slug>`), does the rework outside the
+  queue, and re-enters when actually ready. The head is the land mutex, not a waiting room, and an
+  item carries no priority: if it was not ready when its turn came, it has no claim on the place it
+  lost, so re-entry is a plain tail enqueue whether the slot was given up voluntarily or taken away
+  for going stale. The spine automates the release when it detects rework (a verdict re-pin refused
+  because the content changed); a rework re-entry still writes a distinct audit line, but it carries
+  no position. `requeue` is not a release — into an empty queue it is a no-op, which lets an unready
+  item drain straight back to the head — and belongs to the spine's own bounded in-attempt conflict
+  handling, not to open-ended rework. After releasing, wait like any other waiter: attended, with
+  `node scripts/landing-queue-watch.mjs <slug>`; unattended, with
+  `node scripts/done-worktree.mjs <slug> --wait-chunk`.
+- **Waiters demote a stale head mechanically.** Both wait loops try `demote` against a head that is
+  hogging the slot, and the queue takes it only when every condition holds: the demoter is queued
+  behind the head, the head's heartbeat is older than a fixed threshold (the spine refreshes the
+  heartbeat at every step, so an active land stays fresh), the head is not actually merging, and the
+  same item has not already been demoted more than a small number of times in the last day (past
+  that cap, the stronger, human-confirmed removal is the recourse). A demote moves the entry to the
+  tail in one atomic write and can never remove it, so a false demote costs position, never work.
+- **Eviction does not need a live waiter.** Demotion and reaping otherwise fire only from inside a
+  waiter's own loop, so a queue whose head and waiters are all dead sessions has nobody left to run
+  them. Two closures reuse the same verdicts unchanged: every queue mutation (an enqueue always, a
+  heartbeat at most every few minutes) evaluates the head after its own write, so a fresh arrival
+  behind a dead head evicts it immediately; and `node scripts/landing-queue.mjs sweep [--json]` is a
+  caller that is not a queue member at all — it prunes entries whose work already landed, then asks
+  demote and reap _as if_ from a hypothetical tail waiter. The membership check is satisfied, never
+  weakened: the ghost waiter is added to the verdict's view only, and every other condition still
+  runs on the real entries. The sweep never steals (a steal needs a holder-gone assertion an
+  unattended process cannot make), is idempotent and safe from any checkout, exits 0 when there is
+  nothing to do and 2 only when it cannot read enough to judge. Run it on a short schedule on an
+  always-on host.
+- **The branch meets the trunk before it takes a slot.** The spine rebases onto the trunk and
+  re-pins its sha-pinned markers in the last step before the enqueue, so the head visit is
+  merge-only instead of a conflict-resolution session that stales the review and costs the slot.
+  The freshen is opportunistic: already current is a silent no-op, and a conflict aborts its own
+  rebase and enqueues unfreshened rather than losing the land a place it never had.
+- **No sync at all for a coordination-only trunk delta.** When every path the trunk moved since the
+  merge base sits under a configured coordination root (`land.coordinationOnlyPathPrefixes`), the
+  branch carries no commit grafted from a local trunk, its tip is published, and a dry-run merge is
+  clean, both the pre-queue freshen and the at-head rebase are skipped, with one log line saying
+  why — otherwise a land ends up chasing the queue's own bookkeeping commits. Paths decide, never
+  commit subjects. The merge itself stays pinned to the tip the land validated: after every
+  spine-owned re-sha that tip is re-proven (every marker family re-pins with a content-identity
+  proof and the findings gate is still clear) rather than carried, and a remote branch that moved
+  past the validated tip — a force-push after review — is refused at the merge and restarts the
+  land from the top.
+- **A gate proof survives a sibling's land.** The once-per-land remainder a re-entered gate re-runs
+  over is intersected with what the branch itself changed, so paths a sibling moved — already gated
+  by that sibling's own land — never force a re-proof (see `land-spine.md` § The once-per-land proof
+  cache).
+- **A gate that goes red at the head gets one isolated re-run before the slot is surrendered.**
+  Bounded in files and minutes, refused outright when the failure set cannot be proven whole, and
+  red-in-isolation is never self-healed. Without it, a pure load flake costs a dequeue and a full
+  re-wait at the tail for a merge that then takes two minutes.
+- **A long quiet wait does not go stale.** The watcher refreshes the heartbeat at every queue
+  position, not only near the head, so an item that waited a long time at a deep position is not
+  demoted just as it arrives.
+- **For a batch slot, "done" means the whole batch is done** — every riding member green under the
+  one review, any derailed member already dropped from the batch — never a batch with a member still
+  running.
+
 ## Leaving the queue on rework, re-entering at the back
 
 An item that needs more work before it can actually merge — a review finding to address, a conflict
@@ -118,6 +196,50 @@ cannot tell that apart from a legitimately long queue from the inside. The mitig
 same: the queue's own status is the ground truth, resolved fresh against the shared remote
 regardless of whether any particular poller is still alive, so a session that suspects it was never
 woken re-checks status directly rather than trusting silence as "still queued."
+
+## Queue-waiter pre-convergence
+
+The head slot is the serialization bottleneck, yet a naive queue defers all rebase-conflict work to
+it: a conflict that has been on the trunk for hours is only discovered, and only resolved, once the
+item finally reaches the head — burning the one slot nobody else can use. Pre-convergence moves that
+work into the wait.
+
+While an item waits at **position two or better**, the spine probes its branch against the fresh
+trunk tip each poll with a non-mutating dry-run merge (`git merge-tree --write-tree`), cached by the
+pair of trunk tip and branch tip. The probe is a trigger only — its report can differ from a real
+rebase on renames and per-commit replay. What a conflicted probe does depends on who is waiting:
+
+- **An attended waiter** (the foreground `--wait` mode) attempts the real rebase in its tree right
+  away: heartbeat, rebase — recorded or trivial conflicts may replay with no session involvement,
+  after which it force-pushes with lease and re-pins the review markers, carrying finding
+  dispositions across the patch-identical re-sha — then heartbeat again. A **genuine** judgment
+  conflict stops at the queue-wait seam with the slot **kept** and the conflicted rebase **left in
+  progress** in the tree, mirroring the at-head holding contract. At most two such rounds per queue
+  residency: the trunk can keep moving, and a late conflict still takes the at-head path.
+- **Probe-only paths** (a non-waiting invocation near the head; unattended waiters never
+  auto-resolve) attach the conflicted file list to the queue-wait seam as an advisory note.
+  Resolution stays the session's judgment.
+
+**The recipe when the seam fires:** resolve the conflicts in the tree; conclude
+(`git rebase --continue`) and re-run the item's targeted tests; `git push --force-with-lease`; re-pin
+the review record (automatic on a patch-identical re-sha, an explicit carry-forward of dispositions
+after a content change); re-invoke the land — the kept slot means the head rebase then replays
+clean.
+
+**Why the slot is kept.** This is land mechanics, not review rework, so it is a deliberate carve-out
+from "rework happens outside the queue". The stale-head demotion still runs on its own clock: a
+resolution that leaves the entry silent past the threshold once it reaches the head can still be
+moved to the tail, which costs position, never work.
+
+**Composition with keep-hot preparation.** The detached queue watcher, by default, rebases a waiting
+branch on any trunk advance at any position and re-validates its gates — and aborts on a genuine
+conflict, because no session is present to conclude one. Pre-convergence is the conflict-focused,
+near-head step, and leaves a genuine conflict in progress for an attended session. The two agree on
+state (a pre-converged branch makes the next preparation a no-op and vice versa), but **never pair a
+live watcher with an attended `--wait` session on the same item**: both mutate the same tree, and two
+concurrent rebases collide on its index lock and rebase state. The waiter skips its round when it
+finds a rebase already in progress, but that check-then-act window is not a mutex — pick one wait
+mechanism per item.
 
 ## Stale head vs. live head, and why stealing is never automatic
 

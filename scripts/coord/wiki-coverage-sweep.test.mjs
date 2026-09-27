@@ -180,29 +180,29 @@ updated: 2026-06-01
 // ── normalizeSource ───────────────────────────────────────────────────────────
 test('normalizeSource: strips (code), trailing slash, whitespace', () => {
   assert.equal(
-    normalizeSource('backend/scripts/price-pipeline/ (code)'),
-    'backend/scripts/price-pipeline',
+    normalizeSource('backend/scripts/data-pipeline/ (code)'),
+    'backend/scripts/data-pipeline',
   );
   assert.equal(normalizeSource('  shared/src/schemas.ts  '), 'shared/src/schemas.ts');
   assert.equal(
-    normalizeSource('backend/src/adapters/provet-cloud.ts'),
-    'backend/src/adapters/provet-cloud.ts',
+    normalizeSource('backend/src/adapters/acme-cloud.ts'),
+    'backend/src/adapters/acme-cloud.ts',
   );
 });
 
 // ── classifySource ────────────────────────────────────────────────────────────
 test('classifySource: json→data, ts/py/mjs→code, md→doc', () => {
-  assert.equal(classifySource('backend/src/data/seed-clinics.json'), 'data');
-  assert.equal(classifySource('backend/src/adapters/provet-cloud.ts'), 'code');
-  assert.equal(classifySource('backend/scripts/_clinic_gates.py'), 'code');
+  assert.equal(classifySource('backend/src/data/seed-records.json'), 'data');
+  assert.equal(classifySource('backend/src/adapters/acme-cloud.ts'), 'code');
+  assert.equal(classifySource('backend/scripts/_record_gates.py'), 'code');
   assert.equal(classifySource('scripts/done-worktree.mjs'), 'code');
   assert.equal(classifySource('docs/runbooks/data-sources.md'), 'doc');
 });
 
 test('classifySource: code-root dir → code; (code) tag forces code; else other', () => {
-  assert.equal(classifySource('backend/scripts/price-pipeline/ (code)'), 'code');
-  assert.equal(classifySource('backend/scripts/price-pipeline/'), 'code');
-  assert.equal(classifySource('frontend/src/lib/clinic-static'), 'code');
+  assert.equal(classifySource('backend/scripts/data-pipeline/ (code)'), 'code');
+  assert.equal(classifySource('backend/scripts/data-pipeline/'), 'code');
+  assert.equal(classifySource('frontend/src/lib/record-static'), 'code');
   assert.equal(classifySource('some/weird/path (code)'), 'code');
   assert.equal(classifySource('some/weird/path.txt'), 'other');
 });
@@ -243,9 +243,9 @@ test('analyze: an external (cross-repo) source is neither drift nor dead-ref', (
 // ── extractWikilinks ──────────────────────────────────────────────────────────
 test('extractWikilinks: plain, aliased, anchored, deduped', () => {
   const text =
-    'See [[provet-cloud]] and [[booking-inspector|the booking inspector]] plus [[layers#guard]] and [[provet-cloud]] again.';
+    'See [[acme-cloud]] and [[booking-inspector|the booking inspector]] plus [[layers#guard]] and [[acme-cloud]] again.';
   const links = extractWikilinks(text).sort();
-  assert.deepEqual(links, ['booking-inspector', 'layers', 'provet-cloud']);
+  assert.deepEqual(links, ['acme-cloud', 'booking-inspector', 'layers']);
 });
 
 // ── analyze: drift ────────────────────────────────────────────────────────────
@@ -317,7 +317,7 @@ test('analyze: seed drift under threshold is ignored; over threshold is flagged'
       name: 'a',
       base: 'a',
       updated: '2026-06-20',
-      sources: ['backend/src/data/seed-clinics.json'],
+      sources: ['backend/src/data/seed-records.json'],
       links: [],
     },
   ];
@@ -326,7 +326,7 @@ test('analyze: seed drift under threshold is ignored; over threshold is flagged'
       name: 'b',
       base: 'b',
       updated: '2026-05-01',
-      sources: ['backend/src/data/seed-clinics.json'],
+      sources: ['backend/src/data/seed-records.json'],
       links: [],
     },
   ];
@@ -528,20 +528,20 @@ test('loadPages: reads wiki/*.md recursively into page objects', () => {
     mkdirSync(join(root, 'wiki', 'entities'), { recursive: true });
     writeFileSync(
       join(root, 'wiki', 'index.md'),
-      '---\nname: index\ntype: index\n---\n[[provet-cloud]]\n',
+      '---\nname: index\ntype: index\n---\n[[acme-cloud]]\n',
     );
     writeFileSync(
-      join(root, 'wiki', 'entities', 'provet-cloud.md'),
-      '---\nname: provet-cloud\nupdated: 2026-06-21\nsources:\n  - backend/src/adapters/provet-cloud.ts\n---\nbody\n',
+      join(root, 'wiki', 'entities', 'acme-cloud.md'),
+      '---\nname: acme-cloud\nupdated: 2026-06-21\nsources:\n  - backend/src/adapters/acme-cloud.ts\n---\nbody\n',
     );
     const pages = loadPages(root);
     assert.equal(pages.length, 2);
-    const pc = pages.find((p) => p.name === 'provet-cloud');
+    const pc = pages.find((p) => p.name === 'acme-cloud');
     assert.equal(pc.updated, '2026-06-21');
-    assert.deepEqual(pc.sources, ['backend/src/adapters/provet-cloud.ts']);
-    assert.equal(pc.file, 'wiki/entities/provet-cloud.md');
+    assert.deepEqual(pc.sources, ['backend/src/adapters/acme-cloud.ts']);
+    assert.equal(pc.file, 'wiki/entities/acme-cloud.md');
     const idx = pages.find((p) => p.name === 'index');
-    assert.deepEqual(idx.links, ['provet-cloud']);
+    assert.deepEqual(idx.links, ['acme-cloud']);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -669,7 +669,7 @@ test('findDeadCitedPaths: the history skip is scoped to the citation clause, not
       name: 'd',
       base: 'd',
       text: [
-        'This adapter was the default before Evidensia; see `backend/scripts/legacy.py` for the old logic.',
+        'This adapter was the default before the newer one; see `backend/scripts/legacy.py` for the old logic.',
         'The old `backend/scripts/archive-me.py` was deleted by plan 3732.',
       ].join('\n'),
     },

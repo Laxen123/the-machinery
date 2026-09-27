@@ -32,7 +32,7 @@ import { endRefOf } from './git-range.mjs';
 // plan 3618 finding f0b34c: THE ONE `git worktree list --porcelain` parser — never a second one.
 import { parseWorktreePorcelain } from './worktree-porcelain.mjs';
 
-// plan 2864: the review-round cap, spelled ONCE. `docs/runbooks/review-calibration.md`
+// plan 2864: the review-round cap, spelled ONCE. `docs/coord/review.md`
 // § Stopping rule sanctions three DELTA rounds on top of the initial review, so the record that
 // lands AT the cap is round 1 + 3 = 4 and anything past it is beyond the cap. Both warnings are
 // PHRASED with this constant rather than with a spelled-out "three"/"third" beside it: a
@@ -391,7 +391,7 @@ export function capDenialMessage({
       header +
       `This is past-cap escape #${consecutiveEscapes} in the current streak, and the last two ` +
       `in a row both named "run:" — a second consecutive "run:" is a mode-switch failure, not ` +
-      `another round (docs/runbooks/review-calibration.md § The exit from a review loop is a ` +
+      `another round (docs/coord/review.md § Stopping rule — the exit from a review loop is a ` +
       `change of mode).\n` +
       `Two real exits remain:\n` +
       `1. Disposition the remainder — wontfix it, or route it to a plan — then land.\n` +

@@ -2,7 +2,7 @@
 // scripts/ self-containment guard (plan 2622).
 //
 // Blocks a push in which a non-test `scripts/**/*.mjs` module imports OUTSIDE
-// `scripts/` — the rule `docs/runbooks/scripts-module-layout.md` § Rule 1 states and,
+// `scripts/` — the rule `docs/coord/scripts-layout.md` § Rule 1 states and,
 // until this guard, nothing enforced.
 //
 // WHY THE RULE EXISTS: `scripts/test-helpers/isolated-plan-repo.mjs` builds a fully
@@ -12,8 +12,8 @@
 // `../shared/…`, `../backend/…` — resolves to nothing inside that temp repo, and the
 // copied tool dies with ERR_MODULE_NOT_FOUND. Hook modules live at `scripts/hooks/**`
 // (plan 3765 moved them out of `.claude/hooks/`), so importing a `scripts/` sibling from
-// a hook is fine and well established — `scripts/hooks/chain-wiki-loader.mjs` importing
-// `../wiki-chain-registry.mjs` (several hooks do this). The old asymmetric hazard, a hook
+// a hook is fine and well established — a wiki-chain-loading hook importing a
+// `scripts/` sibling module directly (several hooks do this). The old asymmetric hazard, a hook
 // tree living OUTSIDE `scripts/` that only scripts could not reach into, is gone now that
 // hooks live inside `scripts/hooks/`: an import between a hook and a top-level script
 // never escapes `scripts/` in either direction, so this gate does not distinguish them.
@@ -141,7 +141,7 @@ function isInterpolated(m) {
 // module reaching back OUT of scripts/coord/, not this direction) and creates no import cycle
 // (move-to-coord.mjs imports only node: builtins and its own sibling module-graph.mjs). `isUnder`
 // is the proper prefix test — never `rel.startsWith('..')` alone, which also fires on a real
-// directory whose name merely BEGINS with two dots (`scripts/..cache/x.mjs`, resolves INSIDE
+// directory whose name merely BEGINS with two dots (`scripts/..cache/x.mjs`, resolves INSIDE dangling-ok: illustrative non-existent path for this regex edge case
 // scriptsDir, not an escape) — and it covers the Windows different-drive case, where `relative()`
 // itself falls back to returning an absolute path, the same "the two roots share nothing" signal
 // on any platform.
@@ -171,7 +171,7 @@ export function collectScannedFiles(root = SCRIPTS_DIR) {
   return out;
 }
 
-// Rule 3 (plan 3959, docs/runbooks/scripts-module-layout.md § Rule 3): scripts/coord/ is the
+// Rule 3 (plan 3959, docs/coord/scripts-layout.md § Rule 3): scripts/coord/ is the
 // generic core the eventual public extraction takes as-is, so a non-test module there may import
 // ONLY its own siblings (scripts/coord/**) and node: builtins. A bare package specifier is legal
 // from a coord module ONLY when it is in this allow-list — START EMPTY (the tree carries none
@@ -274,9 +274,9 @@ export function findViolationsInSource(source, filePath, scriptsDir = SCRIPTS_DI
   // argv[1] is a BACKSLASH path with a drive letter (`C:\…`) while import.meta.url is
   // `file:///C:/…`, so the two NEVER match: main() is not called, the tool prints nothing
   // and exits 0. That reads exactly like a clean pass, which is why it survived — four
-  // modules carried it, and two of them are live pre-push GATES (the clinic-id collision
+  // modules carried it, and two of them are live pre-push GATES (the record-id collision
   // blocker and the PIPELINE.md lint) that had therefore never once fired on a Windows
-  // session, while `clinic-id-mint reserve` — the fix the collision gate tells you to run
+  // session, while `record-id-mint reserve` — the fix the collision gate tells you to run
   // — was an unusable no-op. 84 other scripts already use `pathToFileURL(argv[1]).href`.
   // Scanned on `code` (comments stripped) so this file's own prose, and the fixed modules'
   // explanatory comments, cannot self-trigger. The detector itself is below — it matches the
@@ -441,7 +441,7 @@ export function findDeadScriptsImports(
     // check below, not a pass. `scripts/index.mjs` exists (the docs/INDEX.md mutation tool), but it
     // sits at the scripts/ ROOT, not inside any SUBdirectory — so it can never satisfy a directory
     // specifier's index-resolution, which needs an `index.*` INSIDE the directory being imported
-    // (e.g. `scripts/coord/index.js` for `./coord`). No subdirectory under `scripts/**` carries one,
+    // (e.g. `scripts/coord/index.js` for `./coord`). No subdirectory under `scripts/**` carries one, dangling-ok: illustrative path this comment says does not exist anywhere in the tree
     // and no `package.json` "main" exists anywhere in the tree either, so there is no real
     // resolution algorithm — Node ESM (no extension/index inference at all), Node CJS `require`
     // (tries `index.js`/`.json`/`.node`, never `.mjs`), or a bundler's default extension list —
@@ -556,7 +556,7 @@ export function scanOutsideTree(
         source = _readFile(file, 'utf8');
       } catch (e) {
         // ENOENT is ORDINARY here and means exactly "nothing to scan": plan 3956 cuts plan
-        // worktrees SPARSE, so a tracked file under one of the six heavy price-pipeline stores
+        // worktrees SPARSE, so a tracked file under one of the six heavy data-pipeline stores
         // genuinely is not on disk. Every OTHER read failure — a permissions error, a transient
         // IO fault — means this file was never examined, and reporting that as "absent" would
         // let the scan claim a clean outside tree it never actually read. That is the
@@ -610,7 +610,7 @@ const FIX_LINES = [
   "dead specifier at the module's new home — the violation names the scripts/coord/ alternative",
   'when a same-basename file lives there.',
   '',
-  'Full rule, evidence, and the hand-scan one-liner: docs/runbooks/scripts-module-layout.md',
+  'Full rule, evidence, and the hand-scan one-liner: docs/coord/scripts-layout.md',
   '',
 ];
 

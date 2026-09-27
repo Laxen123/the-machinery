@@ -8,7 +8,7 @@
 // of the repo's configuration rather than of the spine's source.
 //
 // It is deliberately PURE — no fs, no child_process, no git, and (Rule 3,
-// docs/runbooks/scripts-module-layout.md) no import of anything at all. Every function here is a
+// docs/coord/scripts-layout.md) no import of anything at all. Every function here is a
 // total function of its inputs. The IO lives in the spine, which builds the entries and calls
 // these runners; that is what makes the registry testable without a git sandbox and what keeps a
 // public extraction of scripts/coord/ able to load this file on its own.
@@ -41,7 +41,7 @@
 // The values are FLOATS, and today's values are exactly the spine's own inline step labels
 // (`2.5`, `2.55`, `2.59`, `2.6`, `2.66`, `2.661`, `2.662`, `2.67`, `2.672`, `2.68`). That is a
 // deliberate reuse of vocabulary a reader of done-worktree.mjs and of
-// docs/runbooks/plans-workflow.md § landing spine already has, and it is why a fractional key is
+// docs/coord/land-spine.md already has, and it is why a fractional key is
 // the right shape: `2.661` sits between `2.66` and `2.67` with nothing renumbered, which is
 // precisely the insertion the spine's own history keeps performing.
 //

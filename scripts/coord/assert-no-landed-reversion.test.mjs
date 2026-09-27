@@ -47,9 +47,9 @@ import {
 // derivedShardDirs/etc. at all) — FIXTURE_CONFIG below is a fixed, portable fixture with neutral
 // paths (never this repo's seed paths, which the seed-seam gate forbids as literals); the drift-protection intent the original live read had is
 // now covered by the coord-config.mjs unit tests that pin these same keys directly). It still
-// keeps the sample paths SEGMENT-WISE (`[dir, 'clinics', cc, file].join('/')`) instead of quoted
+// keeps the sample paths SEGMENT-WISE (`[dir, 'records', cc, file].join('/')`) instead of quoted
 // whole-path literals, which is what `assert-seed-io-seam.mjs` asks of every file in `scripts/`
-// — a hardcoded "…/seed/clinics/GB/clinic-NNN.json" string is a seam violation even in an
+// — a hardcoded "…/seed/records/GB/rec-NNN.json" string is a seam violation even in an
 // assertion.
 const FIXTURE_CONFIG = {
   seedShardDir: 'data/records',
@@ -298,15 +298,15 @@ test('parseNumstatZ — renames pair correctly and binary rows are dropped', () 
 
 test('plan 2585: generated whole-file-rewritten data trees are excluded, sourced from the mutex config', () => {
   // A seed shard is re-`json.dump`ed in full by every apply, so a legitimate re-apply always
-  // removes lines another plan added — the plan-2585 prototype flagged clinic-2126.json (-46,
+  // removes lines another plan added — the plan-2585 prototype flagged rec-2126.json (-46,
   // 29 attributed to plan 2205) for exactly that reason. Those trees are protected by the
   // plan-1300/1867 scoped landing mutex, not by this lint.
   assert.ok(FIXTURE_CONFIG.seedShardDir, 'the fixture declares a sharded seed root');
   const covered = [
-    [FIXTURE_CONFIG.seedShardDir, 'clinics', 'GB', 'clinic-2126.json'].join('/'),
-    [FIXTURE_CONFIG.seedShardDir, 'clinics', 'GB', 'order.json'].join('/'),
+    [FIXTURE_CONFIG.seedShardDir, 'records', 'GB', 'rec-2126.json'].join('/'),
+    [FIXTURE_CONFIG.seedShardDir, 'records', 'GB', 'order.json'].join('/'),
     ...(FIXTURE_CONFIG.seedLaneFile ? [FIXTURE_CONFIG.seedLaneFile] : []),
-    ...FIXTURE_CONFIG.derivedShardDirs.map((d) => [d, 'clinic-1352.json'].join('/')),
+    ...FIXTURE_CONFIG.derivedShardDirs.map((d) => [d, 'rec-1352.json'].join('/')),
     ...FIXTURE_CONFIG.derivedGlobalFiles,
   ];
   assert.ok(covered.length >= 5, 'the live config still declares every scope this test asserts');
@@ -901,14 +901,14 @@ test("a generated data path is excluded end-to-end via the fixture repo's OWN co
       JSON.stringify({ handoffDir: 'docs/handoff', seedShardDir: 'seed' }),
     );
     mkdirSync(join(dir, 'seed'), { recursive: true });
-    writeFileSync(join(dir, 'seed', 'clinic-1.json'), BODY);
+    writeFileSync(join(dir, 'seed', 'rec-1.json'), BODY);
     commit(dir, 'base');
     checkout(dir, '-b', 'masterbr');
-    writeFileSync(join(dir, 'seed', 'clinic-1.json'), BODY + landedBlock(6666));
+    writeFileSync(join(dir, 'seed', 'rec-1.json'), BODY + landedBlock(6666));
     const masterTip = commit(dir, '6666: pipeline re-applies the shard');
 
     checkout(dir, '-b', 'worktree-9006-DQ-demo', masterTip);
-    writeFileSync(join(dir, 'seed', 'clinic-1.json'), BODY);
+    writeFileSync(join(dir, 'seed', 'rec-1.json'), BODY);
     commit(dir, '9006: this plan re-applies the shard whole-file, dropping 6666 lines');
 
     assert.deepEqual(
@@ -2369,7 +2369,7 @@ test('plan 3394 class 2b — a <Fragment> wrap that re-indents a block is NOT a 
       '',
     ].join('\n');
     writeFileSync(join(dir, 'frontend/src/components/PrisindexTable.tsx'), after);
-    commit(dir, '9394: interleave the per-city cheapest-clinic row');
+    commit(dir, '9394: interleave the per-city cheapest-record row');
 
     assert.deepEqual(
       detectLandedReversion(dir, {

@@ -83,6 +83,44 @@ file; they belong in that runtime's own small, explicitly-scoped configuration, 
 from the shared source of truth so a reader can tell at a glance which parts of an agent's context
 are common across every runtime and which are peculiar to the one it happens to be running in.
 
+The same single-source principle extends past the instruction file to everything a second runtime
+has to see:
+
+- **Procedures (skills, slash commands).** Keep one canonical body per procedure. The other runtime
+  gets a small _generated_ entry point for each procedure on an explicit export list: the entry point
+  says which runtime-translation guide to read first (how this runtime spells the other one's tool
+  calls, background jobs and review labels) and then points at the canonical body, which it reads
+  live. Editing the body therefore needs no regeneration; only a change to a procedure's name,
+  description or the export list does. The generator has a check mode that rejects missing, changed
+  and stale entries, it prunes only files it owns, and it refuses to overwrite an unmanaged file — a
+  generated file is disposable and declares its ownership in a header, so a personal fork is a
+  different name with that header removed.
+- **Context-injection hooks.** Do not maintain a second copy of the hook configuration. A thin
+  lifecycle adapter translates the second runtime's event payloads (session start, prompt submit,
+  delegation, file write, stop) into calls to the SAME loader scripts the first runtime runs, reading
+  the current registrations at runtime. Only a deliberately narrow, test-pinned family of hooks is
+  treated as compatible; any other kind of hook needs its own explicit adapter rather than being
+  assumed to work. Where the adapter's configuration is generated, it is never hand-edited.
+- **Coordination identity.** Claims, ownership checks and land bookkeeping all key on a session
+  identity, and each runtime exposes its own. Resolve it through one seam: an explicit override
+  first, then the runtime's native id. If two populated ids disagree, refuse with an ambiguity error
+  rather than guess the owner — a guessed owner is how one session releases or lands another's work.
+  A delegated worker uses its parent's identity only for the bounded commands operating on that
+  claim; a genuine hand-off between runtimes is push, release, and a fresh claim by the receiver.
+
+Be honest about what does NOT carry over. Version-control hooks, the push gates and the
+deterministic scripts apply to every runtime, because they run below any agent. Pre-tool-call
+interception is runtime-specific: a guard that denies a write or a shell command before it runs
+exists only in the runtime that registered it, so the other runtime follows the same rules through
+the shared scripts and gates, not through identical interception. Loading the shared instruction
+file does not enable one runtime's start and stop conveniences in another, does not grant the other
+runtime's connectors or account access, and does not mirror live conversation state — plans,
+branches, the board and committed hand-offs are shared; chats are not. Review provenance follows
+the same honesty: a review run on one runtime's lane is recorded under that lane's own name, never
+labelled as another's. To bring up a new runtime, verify the core procedures are discoverable,
+inspect and trust its hooks, check its native session variables, then run one small real item end
+to end through claim, working tree, checks, review and landing.
+
 ## The generic operating rules
 
 A handful of rules recur at the global tier across essentially every project, independent of what

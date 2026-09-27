@@ -84,7 +84,7 @@ export const LEGACY_CLAIM_GLOB = `${LEGACY_CLAIM_PREFIX}*`;
 export const CLAIM_GLOBS = Object.freeze([CLAIM_GLOB, LEGACY_CLAIM_GLOB]);
 
 /**
- * Throwaway per-run coordination-probe namespace (plan 3812, `scripts/coord-probe.mjs`).
+ * Throwaway per-run coordination-probe namespace (plan 3812; the probe CLI is project-side).
  * A probe ref proves a push into the live branch-shaped namespace lands, through `origin`,
  * before a drain trusts the same path for a real claim CAS or coord counter write. Kept
  * SEPARATE from CLAIM_PREFIX rather than reusing it: a probe ref carries no claim state and

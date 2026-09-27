@@ -31,8 +31,8 @@
 //     fails OPEN (its landing-queue lesson). Neither policy belongs here.
 //
 // CROSS-REPO: a NEW coordShare member adopted by tandapp in the same beat
-// (coord.config.json `adopt` list, same commit — the dependency-ordering rule in
-// docs/runbooks/coord-sharing.md), because BOTH importers (landing-lock.mjs,
+// (coord.config.json `adopt` list, same commit — the coordShare dependency-ordering rule),
+// because BOTH importers (landing-lock.mjs,
 // test-queue.mjs) are byte-identical-synced to tandapp already.
 
 import { openSync, writeFileSync, fsyncSync, closeSync, renameSync, rmSync } from 'node:fs';

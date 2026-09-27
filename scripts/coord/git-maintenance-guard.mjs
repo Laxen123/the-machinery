@@ -15,7 +15,7 @@
 // HEAD and its index are both gc roots, `refs/claims/*` survive pack-refs, reflogs are roots, a
 // live worktree's admin dir is never pruned (and `worktree add` holds a `locked` marker the
 // pruner skips), and gc-vs-gc is hard-locked by `gc.pid`. The evidence table lives in ONE
-// place — docs/runbooks/branch-hygiene.md § Machine-global git maintenance — not here.
+// place — docs/coord/worktrees.md § Machine-global git maintenance — not here.
 //
 //   ONE thing is genuinely unsafe, and it is repo-specific: an IMMEDIATE prune
 //   (`--prune=now`, bare `git prune`, `-c gc.pruneExpire=now`) deletes a loose object that

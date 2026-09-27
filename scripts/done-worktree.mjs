@@ -9,7 +9,7 @@
 // Lanes (done-worktree-lib.detectLane):
 //   free  (no seed)  → NO landing-lock, NO 🟢 LANDING row; merge via
 //                      pull --ff-only + merge --no-ff + push, retry on non-ff.
-//   seed  (touches seed-clinics.json) → full mutex: landing-lock acquire →
+//   seed  (touches the sharded seed data) → full mutex: landing-lock acquire →
 //                      board LANDING → rebase → merge → push.
 //
 // HARD SAFETY INVARIANT (the "finally"): any exit while the seed mutex is held
@@ -339,7 +339,7 @@ import {
   runPrettierDriftCheck,
   readNoStartTally,
   writeNoStartTally,
-  noStartTallySha,
+  noStartTallyKey,
   noStartSidecarPath,
   formatGateOutcomeLine,
   chunkGateStartDecision,
@@ -394,7 +394,7 @@ import {
 // file's own header for the full list of what moved and what stayed behind; its private helpers
 // (`canonicalSlugFromBranch`/`landGateRoster`/`seedLaneInputs`) reach each other same-module
 // there, so none of the three is imported back — done-worktree.test.mjs /
-// scripts/worktree-resolve.test.mjs import each directly from spine.mjs instead. plan 4066 task
+// the worktree-resolve test import each directly from spine.mjs instead. plan 4066 task
 // 2b: `main()` itself — the five-phase driver, plus the deploy-check/close-out/teardown phases —
 // moved to spine.mjs too, so `phasePreflight` and `phaseLaneMerge` are GONE from this file's own
 // imports: main() now calls both same-module, inside spine.mjs, exactly as it already reached
@@ -878,7 +878,7 @@ function writeResultSidecar(state, { code, exitCode }) {
           // it. The two that plan 2443 measured for: `rebase: branch synced …` (the .husky
           // pre-push gate battery) and `merge: landed as …` (the ephemeral merge worktree's
           // full-tree checkout + merge + push). Read them with
-          // `node scripts/measure-land-duration.mjs` for the history side, this for the split.
+          // a project-side land-duration measurement tool for the history side, this for the split.
           elapsedMs: _stepLogT0 == null ? null : Date.now() - _stepLogT0,
           phases: _stepPhases,
           host: state.host,
@@ -1422,14 +1422,14 @@ function stampStepLogClock() {
 }
 
 // Test-only hook (plan 3827 fix pass 2, G3 verification), mirrors resetProcessChunkDeadlineForTest's
-// own contract just below in this file. scripts/done-worktree.test.mjs imports this module directly
+// own contract just below in this file. This file's own name-paired test imports this module directly
 // rather than through a --dry-run subprocess, so the module-level `DRY` const stepLog's own gate
 // depends on is computed from the TEST RUNNER's argv, never the child CLI's `--dry-run` flag — and
 // `_stepLogT0` is set ONLY under `!DRY` inside the real land flow (see main()), so a direct call to
 // narrateScopedGate from a unit test would otherwise hit stepLog's `_stepLogT0 == null` guard and
 // silently produce no stderr line at all, regardless of which branch narrateScopedGate took. `undefined`
 // (the default) clears the stamp; an explicit epoch arms it. Never called outside
-// scripts/done-worktree.test.mjs.
+// this file's own name-paired test.
 export function stepLogT0ForTest(epoch = undefined) {
   _stepLogT0 = epoch;
 }
@@ -1461,7 +1461,7 @@ function emitSeam(code, reason, state, { keepQueue = false, holding = false } = 
 // task 2a: canonicalSlugFromBranch AND resolveWorktree (the "── git read helpers" section they
 // used to open) both moved whole to scripts/coord/land/spine.mjs (imported back above) — see that
 // file's own header for the truncated-slug/detached-worktree history this comment used to carry.
-// scripts/worktree-resolve.test.mjs's "canonical slug derivation" cases now import
+// The worktree-resolve test's "canonical slug derivation" cases now import
 // canonicalSlugFromBranch from spine.mjs instead of this file.
 
 // plan 3961 T3.6: changedFiles moved to scripts/coord/land/rebase-sync.mjs (imported
@@ -1482,7 +1482,7 @@ export function wikiDiffOnWorktreeBranch(...args) {
 }
 
 // plan 3682: a worktree branch must never carry a committed sweep-checkpoint file. The
-// checkpoint (`backend/data/price-pipeline/sweep-checkpoints/<date>.json`) is COMMITTED (not
+// checkpoint (`backend/data/data-pipeline/sweep-checkpoints/<date>.json`) is COMMITTED (not
 // gitignored) precisely so `--checkpoint-push` can survive a dead cloud sandbox — but the
 // sweep's own completed-pass DELETION is what removes it again once the render pass actually
 // finishes (weekly-price-sweep.py, ~ its main()'s `_checkpoint_path(sweep_date).unlink()`
@@ -1620,18 +1620,18 @@ export function resolveSeedShardDirAtMergeBase(wtPath) {
 // plan 1300: the sharded-layout analogue of the retired monolith-ref seed reader (deleted,
 // plan 3078 — its one call site was the monolith arm below, now a loud MONOLITH_RESURRECTED
 // refusal instead of a gate-view read) for the pre-merge seed gates
-// (status-flip / price-trust / chains + paged-clinic wiki checkpoint). Those gates
-// compare base↔head PER CLINIC ID (statusFlipSeam / changedPriceClinics /
-// pagedClinicChanged all map by id), so a view holding ONLY the clinics whose shard
+// (status-flip / price-trust / chains + paged-record wiki checkpoint). Those gates
+// compare base↔head PER RECORD ID (statusFlipSeam / changedPriceClinics /
+// pagedClinicChanged all map by id), so a view holding ONLY the records whose shard
 // files are in the diff is semantically identical to the full corpus — an unchanged
-// clinic contributes nothing on either side — and costs a handful of `git show`s
+// record contributes nothing on either side — and costs a handful of `git show`s
 // instead of assembling ~2k shards at a ref. chains[] is read only when chains.json
 // itself changed; unchanged ⇒ both sides see [] ⇒ chainsChanged stays false.
 function readShardGateViews(wtPath, baseRef, changed, seedShardDir, shardIdPattern) {
   // One layout encoding for all gates: L.shardFileRx (plan-1300 review finding 9).
   // plan 3960 review fix: `shardIdPattern` (cfg.shardIdPattern) now reaches this reader too — a
   // configured non-default pattern used to recognize a changed custom shard only in seedScopeOf's
-  // mutex scoping (L.seedScopeOf below), while this reader stayed on the default clinic regex and
+  // mutex scoping (L.seedScopeOf below), while this reader stayed on the default record regex and
   // silently produced empty gate views for it.
   const shardRx = shardIdPattern
     ? L.shardFileRx(seedShardDir, L.deriveShardPatterns(shardIdPattern).shardRelSrc)
@@ -1651,17 +1651,17 @@ function readShardGateViews(wtPath, baseRef, changed, seedShardDir, shardIdPatte
     }
   };
   const view = (ref) => {
-    const clinics = [];
+    const records = [];
     for (const p of shardPaths) {
       const c = readAt(ref, p);
-      if (c) clinics.push(c);
+      if (c) records.push(c);
     }
-    return { clinics, chains: (chainsInDiff && readAt(ref, chainsPath)) || [] };
+    return { records, chains: (chainsInDiff && readAt(ref, chainsPath)) || [] };
   };
   return { base: baseRef ? view(baseRef) : null, head: view('WORKTREE') };
 }
 
-// plan 3295 (review fix f3106d / 13f188): the clinics whose prices[] changed since a PROVEN price
+// plan 3295 (review fix f3106d / 13f188): the records whose prices[] changed since a PROVEN price
 // trust gate run — i.e. the rows this land has not yet had checked. `deltaPaths` is the seed delta
 // since `sinceSha`; the views are built with that sha as the base instead of the merge-base, so the
 // gate re-runs over the remainder rows only and never re-proves what it already passed.
@@ -1673,7 +1673,7 @@ function readShardGateViews(wtPath, baseRef, changed, seedShardDir, shardIdPatte
 // a per-file `git show` failure into "absent on that side, i.e. added at head", which is right for a
 // merge-base view but wrong here: if the proven commit itself is gone from this checkout (the
 // rebase/squash-at-queue-head shape this design exists to survive) every base read fails, the base
-// view comes back empty, and EVERY changed clinic reads as newly added — a silently wrong remainder
+// view comes back empty, and EVERY changed record reads as newly added — a silently wrong remainder
 // that a green would then stamp as proof. `cat-file -e` makes that case take the documented
 // full-gate fallback instead. The `!base` check below cannot catch it (base is null only for a
 // falsy baseRef, which this function never passes) and is kept only as a signature-contract guard.
@@ -1693,7 +1693,7 @@ function priceTrustRemainderClinics(wtPath, sinceSha, deltaPaths, seedShardDir, 
       shardIdPattern,
     );
     if (!base) return null;
-    return landDeps().spine.changedPriceClinics(base.clinics, head.clinics);
+    return landDeps().spine.changedPriceClinics(base.records, head.records);
   } catch {
     return null;
   }
@@ -2440,11 +2440,12 @@ function coreSeamImpls() {
         seamResult(
           L.conclusionReviewSeam(
             c.changed,
-            c.seedGateBase?.clinics ?? null,
-            c.seedGateHead?.clinics ?? null,
+            c.seedGateBase?.records ?? null,
+            c.seedGateHead?.records ?? null,
             c.seamMarker,
             c.shardIdPattern,
             c.worldClaimFields,
+            c.seedLaneFile,
           ),
         ),
     },
@@ -2476,7 +2477,7 @@ const LAND_REGISTRY_CACHE = new Map();
  * T1b's handoff said to import `scripts/land-plugins` "from the SPINE and from tests only",
  * reasoning that its computed-specifier `import()` would then widen only the spine's own
  * pass-cache closure. THAT PREMISE IS FALSE, and this step measured it: `done-worktree.mjs` sits
- * INSIDE the closure of unrelated selections — `scripts/pass-cache-kernel.test.mjs`'s closure is
+ * INSIDE the closure of unrelated selections — a battery pass-cache test's closure is
  * 173 files and the spine is one of them — so a static import here widened the battery pass-cache
  * for a large fraction of the tree and turned `the battery pass-cache's own name-paired test` red
  * ("expected a narrowed key, got widen: dynamic-import:<the loader>"). The spine is the widest
@@ -2637,8 +2638,8 @@ export function appendDeployGateOutcome(wtPath, fields) {
 }
 
 // (plan 556's runArtifactFreshnessPreflight — the generated-artifact freshness
-//  land-time gate that ran `node scripts/assert-generated-artifacts-fresh.mjs` in the
-//  worktree — was REMOVED by plan 1024. frontend/public/clinics-index.json is now
+//  land-time gate that ran a generated-artifact freshness checker in the
+//  worktree — was REMOVED by plan 1024. the generated public search index is now
 //  build-generated + gitignored, so there is no committed artifact to regenerate-and-
 //  diff before the ephemeral merge. The non-vet leak guard it sat beside still runs at
 //  the worktree-branch push (scripts/hooks/pre-push.sh regenerates the index, then checks).)
@@ -2730,10 +2731,10 @@ export const BATTERY_LOCK_ACQUIRE_TIMEOUT_MS = Math.min(
 export function clearNoStartRoundFor(wtPath, gate) {
   // gpt-review r2 3d795e: cheapest check FIRST. This runs on every cache hit and every real verdict
   // — including the overwhelmingly common land where chunking is off and no tally was ever written —
-  // and `noStartTallySha` spawns a `git rev-parse`. Paying a subprocess to discover there is nothing
+  // and `noStartTallyKey` spawns a `git rev-parse`. Paying a subprocess to discover there is nothing
   // to clear would spend the very budget this plan exists to protect. An absent sidecar is a `stat`.
   if (!DRY && !existsSync(noStartSidecarPath(wtPath))) return;
-  const sha = noStartTallySha(wtPath);
+  const sha = noStartTallyKey(wtPath);
   if (!sha) return;
   const tally = readNoStartTally(wtPath);
   if (!L.noStartRoundsFor(tally, sha, gate)) return; // nothing on record ⇒ no write at all
@@ -3307,7 +3308,7 @@ function maybeReexecSpineFromMain(MAIN, argv = process.argv.slice(2)) {
 // ambient would report 0 bytes / 0 directories into that step's DISK_HEADROOM_LOW message — an
 // operator reading that seam would be told nothing was reclaimed while the injected run says
 // otherwise. A half-injected lane is the defect, not a milder version of it. The close-out caller
-// in coord/land/teardown.mjs passes nothing and is unchanged.
+// in scripts/coord/land/teardown.mjs passes nothing and is unchanged.
 function pruneCloudDiskHeadroom(MAIN, keep, env = process.env) {
   if (DRY) {
     process.stdout.write(

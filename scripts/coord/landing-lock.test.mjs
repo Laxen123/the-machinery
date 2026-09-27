@@ -6,7 +6,7 @@
 // Ownership is by SLUG, staleness by AGE — NOT pid (each CLI invocation is a
 // fresh short-lived process, so the holder pid is always dead by the next
 // command; pid-liveness can't discriminate ownership/staleness for a CLI lock).
-// Contention is by SCOPE (plan 1300): global overlaps everything; clinic shard
+// Contention is by SCOPE (plan 1300): global overlaps everything; record shard
 // sets contend only on a non-empty intersection.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -32,6 +32,8 @@ import {
   normalizeScope,
   scopesOverlap,
   scopeLabel,
+  withLegacyMirrors,
+  setLegacyScopeKeys,
   registryVerdict,
   acquireAt,
   releaseAt,
@@ -118,30 +120,99 @@ test('normalizeScope: null/undefined → global (the conservative pre-1300 meani
   assert.deepEqual(normalizeScope(undefined), { global: true });
   assert.deepEqual(normalizeScope({ global: true }), { global: true });
 });
-test('normalizeScope: clinic sets dedupe + sort; empty set escalates to global', () => {
-  assert.deepEqual(normalizeScope({ clinics: ['clinic-2', 'clinic-1', 'clinic-2'] }), {
-    clinics: ['clinic-1', 'clinic-2'],
-  });
-  assert.deepEqual(normalizeScope({ clinics: [] }), { global: true });
+test('normalizeScope: record sets dedupe + sort; empty set escalates to global', () => {
+  const dupeScope = { shards: ['rec-2', 'rec-1', 'rec-2'] };
+  const sortedScope = { shards: ['rec-1', 'rec-2'] };
+  assert.deepEqual(normalizeScope(dupeScope), sortedScope);
+  assert.deepEqual(normalizeScope({ shards: [] }), { global: true });
 });
 test('normalizeScope: malformed shapes throw (a caller bug must not silently unlock)', () => {
   assert.throws(() => normalizeScope('global'));
-  assert.throws(() => normalizeScope({ clinics: [42] }));
+  assert.throws(() => normalizeScope({ shards: [42] }));
 });
 test('scopesOverlap: global contends with everything; sets contend on intersection', () => {
-  assert.equal(scopesOverlap({ global: true }, { clinics: ['clinic-1'] }), true);
-  assert.equal(scopesOverlap({ clinics: ['clinic-1'] }, { global: true }), true);
-  assert.equal(scopesOverlap({ clinics: ['clinic-1'] }, { clinics: ['clinic-2'] }), false);
-  assert.equal(
-    scopesOverlap({ clinics: ['clinic-1', 'clinic-3'] }, { clinics: ['clinic-3'] }),
-    true,
-  );
+  assert.equal(scopesOverlap({ global: true }, { shards: ['rec-1'] }), true);
+  assert.equal(scopesOverlap({ shards: ['rec-1'] }, { global: true }), true);
+  assert.equal(scopesOverlap({ shards: ['rec-1'] }, { shards: ['rec-2'] }), false);
+  assert.equal(scopesOverlap({ shards: ['rec-1', 'rec-3'] }, { shards: ['rec-3'] }), true);
   // A holder record with no scope (pre-1300 rollout) reads as global.
-  assert.equal(scopesOverlap(undefined, { clinics: ['clinic-9'] }), true);
+  assert.equal(scopesOverlap(undefined, { shards: ['rec-9'] }), true);
 });
-test('scopeLabel: global / comma-joined clinics', () => {
+test('scopeLabel: global / comma-joined records', () => {
   assert.equal(scopeLabel({ global: true }), 'global');
-  assert.equal(scopeLabel({ clinics: ['clinic-1', 'clinic-2'] }), 'clinic-1,clinic-2');
+  assert.equal(scopeLabel({ shards: ['rec-1', 'rec-2'] }), 'rec-1,rec-2');
+});
+
+// --- plan 4172: the read-both window for a renamed scope key -------------------------
+// A landing-lock copy on an OLDER branch writes (and reads) the legacy key; this copy writes
+// `shards`. The legacy name is config (coord.config.json `legacyScopeKeys`), never a literal in
+// landing-lock.mjs — these cases inject it explicitly.
+const LEGACY_KEY = 'clinics'; // project-word-ok: the pre-rename wire key this window reads
+const legacyScope = (ids) => ({ [LEGACY_KEY]: ids });
+
+test('read-both: a legacy-keyed holder CONTENDS with an overlapping shards-scoped acquire, and a disjoint one does not', () => {
+  const holders = [holderAt('old-branch-land', ISO, legacyScope(['record-1']))];
+  const legacyKeys = [LEGACY_KEY];
+  const same = registryVerdict({
+    ...base,
+    scope: { shards: ['record-1'] },
+    holders,
+    nowMs: now(10),
+    legacyKeys,
+  });
+  assert.equal(same.action, 'BUSY');
+  assert.equal(same.holder.slug, 'old-branch-land');
+  const disjoint = registryVerdict({
+    ...base,
+    scope: { shards: ['record-2'] },
+    holders,
+    nowMs: now(10),
+    legacyKeys,
+  });
+  assert.equal(disjoint.action, 'ACQUIRE');
+});
+
+test('read-both: normalizeScope reads a configured legacy key as shards; unconfigured it fails CLOSED', () => {
+  assert.deepEqual(normalizeScope(legacyScope(['b', 'a', 'b']), [LEGACY_KEY]), {
+    shards: ['a', 'b'],
+  });
+  assert.deepEqual(normalizeScope(legacyScope([]), [LEGACY_KEY]), { global: true });
+  // No legacy key configured: the unknown key is malformed, so acquire errors instead of
+  // treating the holder as non-contending.
+  assert.throws(() => normalizeScope(legacyScope(['a']), []));
+});
+
+test('read-both: withLegacyMirrors writes every legacy key beside shards; a global scope is untouched', () => {
+  assert.deepEqual(withLegacyMirrors({ shards: ['a'] }, [LEGACY_KEY]), {
+    shards: ['a'],
+    [LEGACY_KEY]: ['a'],
+  });
+  assert.deepEqual(withLegacyMirrors({ shards: ['a'] }, []), { shards: ['a'] });
+  assert.deepEqual(withLegacyMirrors({ global: true }, [LEGACY_KEY]), { global: true });
+});
+
+test('read-both: acquireAt persists the legacy mirror so an older reader still sees the record set', () => {
+  const p = tmpLock();
+  setLegacyScopeKeys([LEGACY_KEY]);
+  try {
+    const r = acquireAt(p, {
+      slug: 'new-land',
+      pid: 1,
+      host: 'PC1',
+      nowIso: ISO,
+      scope: { shards: ['record-1'] },
+    });
+    assert.equal(r.action, 'ACQUIRE');
+    const [h] = readHolders(p);
+    assert.deepEqual(h.scope.shards, ['record-1']);
+    assert.deepEqual(h.scope[LEGACY_KEY], ['record-1']);
+  } finally {
+    setLegacyScopeKeys(null);
+  }
+  // With no legacy key configured the entry carries shards only.
+  const q = tmpLock();
+  acquireAt(q, { slug: 'x', pid: 1, host: 'PC1', nowIso: ISO, scope: { shards: ['r'] } });
+  assert.deepEqual(readHolders(q)[0].scope, { shards: ['r'] });
 });
 
 // --- registryVerdict (pure decision) -------------------------------------------
@@ -173,18 +244,18 @@ test('registryVerdict: overlapping holder with unparseable iso → STALE (cannot
   const holders = [holderAt('other', 'bad')];
   assert.equal(registryVerdict({ ...base, holders }).action, 'STALE');
 });
-test('registryVerdict: DISJOINT clinic scopes do NOT contend (plan 1300 narrowing)', () => {
-  const holders = [holderAt('other', ISO, { clinics: ['clinic-2'] })];
-  const v = registryVerdict({ ...base, scope: { clinics: ['clinic-1'] }, holders, nowMs: now(10) });
+test('registryVerdict: DISJOINT record scopes do NOT contend (plan 1300 narrowing)', () => {
+  const holders = [holderAt('other', ISO, { shards: ['rec-2'] })];
+  const v = registryVerdict({ ...base, scope: { shards: ['rec-1'] }, holders, nowMs: now(10) });
   assert.equal(v.action, 'ACQUIRE');
 });
-test('registryVerdict: SAME-clinic scopes still serialize', () => {
-  const holders = [holderAt('other', ISO, { clinics: ['clinic-1', 'clinic-9'] })];
-  const v = registryVerdict({ ...base, scope: { clinics: ['clinic-1'] }, holders, nowMs: now(10) });
+test('registryVerdict: SAME-record scopes still serialize', () => {
+  const holders = [holderAt('other', ISO, { shards: ['rec-1', 'rec-9'] })];
+  const v = registryVerdict({ ...base, scope: { shards: ['rec-1'] }, holders, nowMs: now(10) });
   assert.equal(v.action, 'BUSY');
 });
-test('registryVerdict: a GLOBAL acquire contends with a clinic-scoped holder (and vice versa)', () => {
-  const holders = [holderAt('other', ISO, { clinics: ['clinic-1'] })];
+test('registryVerdict: a GLOBAL acquire contends with a record-scoped holder (and vice versa)', () => {
+  const holders = [holderAt('other', ISO, { shards: ['rec-1'] })];
   assert.equal(registryVerdict({ ...base, scope: GLOBAL, holders, nowMs: now(10) }).action, 'BUSY');
 });
 test('registryVerdict: BUSY reports the FRESHEST overlapping holder; STALE only when ALL blockers stale', () => {
@@ -196,12 +267,12 @@ test('registryVerdict: BUSY reports the FRESHEST overlapping holder; STALE only 
 test('registryVerdict: REENTRANT with a WIDENED scope is still overlap-checked against others', () => {
   // Our own entry exists, but the new scope now overlaps a fresh sibling → BUSY, not REENTRANT.
   const holders = [
-    holderAt('me', ISO, { clinics: ['clinic-1'] }),
-    holderAt('other', isoAt(45), { clinics: ['clinic-2'] }),
+    holderAt('me', ISO, { shards: ['rec-1'] }),
+    holderAt('other', isoAt(45), { shards: ['rec-2'] }),
   ];
   const v = registryVerdict({
     ...base,
-    scope: { clinics: ['clinic-1', 'clinic-2'] },
+    scope: { shards: ['rec-1', 'rec-2'] },
     holders,
     nowMs: now(50),
   });
@@ -254,21 +325,21 @@ test('acquireAt: held by another slug (young, overlapping) → BUSY, registry un
     ['other'],
   );
 });
-test('acquireAt: TWO disjoint clinic-scoped holders coexist (plan 1300)', () => {
+test('acquireAt: TWO disjoint record-scoped holders coexist (plan 1300)', () => {
   const p = tmpLock();
   const a = acquireAt(p, {
     slug: 'plan-a',
     pid: 1,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-1'] },
+    scope: { shards: ['rec-1'] },
   });
   const b = acquireAt(p, {
     slug: 'plan-b',
     pid: 2,
     host: 'PC1',
     nowIso: isoAt(1),
-    scope: { clinics: ['clinic-2'] },
+    scope: { shards: ['rec-2'] },
   });
   assert.equal(a.action, 'ACQUIRE');
   assert.equal(b.action, 'ACQUIRE');
@@ -284,7 +355,7 @@ test('acquireAt: TWO disjoint clinic-scoped holders coexist (plan 1300)', () => 
     pid: 3,
     host: 'PC1',
     nowIso: isoAt(2),
-    scope: { clinics: ['clinic-2', 'clinic-3'] },
+    scope: { shards: ['rec-2', 'rec-3'] },
   });
   assert.equal(c.action, 'BUSY');
   assert.equal(c.holder.slug, 'plan-b');
@@ -318,22 +389,22 @@ test('acquireAt: stale + forceStale → RECLAIMED, holder replaced', () => {
 });
 test('acquireAt: force-stale evicts only the stale OVERLAPPING blocker, never a disjoint entry', () => {
   const p = tmpLock();
-  // A stale clinic-1 holder and a stale clinic-7 holder; our clinic-1 acquire with
-  // forceStale evicts the clinic-1 blocker but must leave the DISJOINT clinic-7
+  // A stale rec-1 holder and a stale rec-7 holder; our rec-1 acquire with
+  // forceStale evicts the rec-1 blocker but must leave the DISJOINT rec-7
   // entry in place (its land is not ours to reclaim).
   acquireAt(p, {
     slug: 'stale-c1',
     pid: 1,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-1'] },
+    scope: { shards: ['rec-1'] },
   });
   acquireAt(p, {
     slug: 'stale-c7',
     pid: 2,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-7'] },
+    scope: { shards: ['rec-7'] },
   });
   const r = acquireAt(p, {
     slug: 'me',
@@ -341,7 +412,7 @@ test('acquireAt: force-stale evicts only the stale OVERLAPPING blocker, never a 
     host: 'PC1',
     nowIso: isoAt(50),
     forceStale: true,
-    scope: { clinics: ['clinic-1'] },
+    scope: { shards: ['rec-1'] },
   });
   assert.equal(r.action, 'RECLAIMED');
   assert.deepEqual(
@@ -450,14 +521,14 @@ test('releaseAt: releasing ONE of two disjoint holders keeps the other', () => {
     pid: 1,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-1'] },
+    scope: { shards: ['rec-1'] },
   });
   acquireAt(p, {
     slug: 'plan-b',
     pid: 2,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-2'] },
+    scope: { shards: ['rec-2'] },
   });
   const r = releaseAt(p, { slug: 'plan-a' });
   assert.equal(r.action, 'RELEASED');
@@ -506,14 +577,14 @@ test('releaseAt: --force removes the NAMED holder only (targeted stranded-lock r
     pid: 200,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-9'] },
+    scope: { shards: ['rec-9'] },
   });
   acquireAt(p, {
     slug: 'live',
     pid: 300,
     host: 'PC1',
     nowIso: ISO,
-    scope: { clinics: ['clinic-1'] },
+    scope: { shards: ['rec-1'] },
   });
   const r = releaseAt(p, { slug: 'stranded', force: true });
   assert.equal(r.action, 'RELEASED');
@@ -714,21 +785,21 @@ test('writeRegistry: an injected mid-write failure leaves the previous registry 
 test('writeRegistry: no orphaned temp files accumulate across repeated acquire/release cycles', () => {
   const p = tmpLock();
   for (let i = 0; i < 5; i++) {
-    // Two disjoint clinic scopes → acquire/acquire/release/release exercises the single-holder
+    // Two disjoint record scopes → acquire/acquire/release/release exercises the single-holder
     // write, the multi-holder rewrite, the shrink rewrite, AND the empty-registry unlink.
     acquireAt(p, {
       slug: 'a',
       pid: 1,
       host: 'PC1',
       nowIso: isoAt(i),
-      scope: { clinics: ['clinic-1'] },
+      scope: { shards: ['rec-1'] },
     });
     acquireAt(p, {
       slug: 'b',
       pid: 2,
       host: 'PC1',
       nowIso: isoAt(i),
-      scope: { clinics: ['clinic-2'] },
+      scope: { shards: ['rec-2'] },
     });
     releaseAt(p, { slug: 'a' });
     releaseAt(p, { slug: 'b' });

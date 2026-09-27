@@ -5,8 +5,8 @@
 // WHY THIS EXISTS. Most of the modules `coord-core` step 4 moves from `scripts/` to
 // `scripts/coord/` compute the repo root as `join(dirname(fileURLToPath(import.meta.url)), '..')`
 // — correct at exactly one depth. The move adds a level, so every one of those walks would land
-// on `scripts/` instead of the repo root and start reading `scripts/docs/INDEX.md`,
-// `scripts/coord.config.json`, `scripts/docs/superpowers/plans/` … none of which exist. Nothing
+// on `scripts/` instead of the repo root and start reading `scripts/docs/INDEX.md`, (dangling-ok: illustrates the off-by-one bug this anchor avoids)
+// `scripts/coord.config.json`, `scripts/docs/superpowers/plans/` … none of which exist. Nothing (dangling-ok: illustrates the off-by-one bug this anchor avoids)
 // throws: the readers fail open or glob nothing, so the failure is a SILENT narrowing, which is
 // the shape plan 3962's Phase 1 already hit twice through the config seam (§ E16).
 //

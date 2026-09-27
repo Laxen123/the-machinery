@@ -15,7 +15,7 @@
 // docs/superpowers/plans/in-progress/3248-FABLE-Infra-cloud-drain-backgrounded-land-death.md.
 //
 // § WHY THIS GUARD IS NOT plan-3116's subagent-backgrounding-guard.mjs. That guard
-// keys on `agent_id` (see its own header) and is SILENT at top level — vetapp/CLAUDE.md
+// keys on `agent_id` (see its own header) and is SILENT at top level — your project's `CLAUDE.md`
 // POSITIVELY REQUIRES a top-level cloud drain to background a push when the gate cannot
 // fit one 600 s call (the plan-2950 rule). Plan 3248 narrows that permission: a cloud
 // drain may background *some* work, but never the LAND itself, and never a re-block on
@@ -30,8 +30,8 @@
 //   top-level = `agent_id` ABSENT from the payload (parseAgentId — the exact inverse of
 //               plan 3116's isSubagentPayload; reused rather than re-derived).
 //   cloud     = `CLAUDE_CODE_REMOTE === 'true'` in the hook process's environment. This
-//               is the SAME marker vetapp/CLAUDE.md and scripts/hobby-env.mjs already
-//               treat as authoritative for "is this a cloud/remote checkout" (hobby-env
+//               is the SAME marker your project's `CLAUDE.md` and its env loader already
+//               treat as authoritative for "is this a cloud/remote checkout" (the loader's
 //               line ~103: `process.env.CLAUDE_CODE_REMOTE === 'true'` is the one
 //               documented exemption from its hobby-root-missing throw; CLAUDE.md's own
 //               § Batch / long-running text: "the binary refuses `bypassPermissions`
@@ -139,12 +139,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   alreadyInjected,
-  emitInjection,
+  injectionEnvelope,
   markInjected,
   markerDirFor,
   parseAgentId,
   parseContextId,
-  readStdin,
+  runHookCli,
   safeMarkerKey,
 } from './lib/loader-common.mjs';
 
@@ -207,7 +207,7 @@ const LAND_COMMAND_PATTERNS = [
 
 // § PATTERN 1b's command test — see the header note. H1 (plan 3248 re-check, confirmed
 // finding): the original `/\bgit\s+push\b/` required "push" to follow "git" IMMEDIATELY,
-// which misses `git -C <dir> push` — the exact form vetapp/CLAUDE.md MANDATES on Windows,
+// which misses `git -C <dir> push` — the exact form your project's `CLAUDE.md` MANDATES on Windows,
 // because a Bash command may never open with `cd`, so every git call in this repo passes
 // `-C <abs path>`. As written the old pattern would have missed essentially every real
 // backgrounded push this codebase actually issues.
@@ -218,7 +218,7 @@ const LAND_COMMAND_PATTERNS = [
 // the quoted value's internal space ended `\S+` before the closing quote, the following
 // `Files/repo"` token had no leading `-` to keep the option-loop going, and the whole
 // match failed with "push" never reached — even though `git -C <dir> push` is the exact
-// form vetapp/CLAUDE.md MANDATES on Windows (a Bash command may never open with `cd`).
+// form your project's `CLAUDE.md` MANDATES on Windows (a Bash command may never open with `cd`).
 // The value alternative now also accepts a double- or single-quoted run (greedy up to
 // the first matching close-quote), independent of whether it contains whitespace.
 //
@@ -283,13 +283,13 @@ export const PATTERN_KEYS = Object.keys(PATTERNS);
 // the plan body — that opens a window where the plan is claimable with nothing recording
 // that a built, pushed branch already exists, so the next drain to pick it up could redo
 // the work from scratch or cut a second worktree over the same plan. The canonical order
-// (docs/runbooks/cloud-drain-landing.md, "Once the push is confirmed on origin:") writes
+// (the canonical hand-back order, "Once the push is confirmed on origin:") writes
 // the note via `edit-plan.mjs` WHILE STILL CLAIMED, then releases, then moves to ready/.
 const HAND_BACK_RECIPE = [
   '   A cloud drain never backgrounds the land, and never re-blocks on a task whose',
   '   blocking wait already timed out (plan 3248 — three cloud sessions died on this',
   '   exact shape 2026-08-16, two claims stranded 9+ hours). Hand the land back instead',
-  '   (docs/runbooks/cloud-drain-landing.md — canonical order, note BEFORE release):',
+  '   (canonical order, note BEFORE release):',
   '     1. Commit and push the branch in the FOREGROUND (git push, >=600000ms timeout).',
   '     2. Record the review (node scripts/record-review.mjs <PASS|NITS|BUGS-FOUND> ...).',
   '     3. node scripts/landing-queue.mjs dequeue <slug> — never end a run holding the',
@@ -312,8 +312,8 @@ export function isTopLevelPayload(payload) {
   return !parseAgentId(payload);
 }
 
-// cloud = CLAUDE_CODE_REMOTE === 'true', the marker vetapp/CLAUDE.md and
-// scripts/hobby-env.mjs already treat as authoritative (see header). `env` is a
+// cloud = CLAUDE_CODE_REMOTE === 'true', the marker your project's `CLAUDE.md` and
+// env loader already treat as authoritative (see header). `env` is a
 // parameter so tests never touch the real process environment.
 export function isCloudSession(env = process.env) {
   return String(env?.CLAUDE_CODE_REMOTE ?? '').trim() === 'true';
@@ -589,41 +589,34 @@ function fireWarning(key, payload, { uncertain = false } = {}) {
   const repeat = alreadyInjected(markerDir, key);
   if (!repeat) markInjected(markerDir, key);
 
-  emitInjection(
+  return injectionEnvelope(
     formatWarning(key, payload, { repeat, uncertain }),
     `⚠️  cloud-land-backgrounding guard: ${key}`,
     'PreToolUse',
   );
 }
 
-function main() {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
-
-  if (!isApplicable(payload)) return; // not top-level+cloud → silent by design
+// The hook's whole outcome as DATA (plan 4238): the warn envelope it would print, or
+// null for silence. The firing log and the repeat / task-seen markers are side effects it
+// still performs itself, exactly as before the fold. The in-process PreToolUse dispatcher
+// (pretool-dispatch.mjs) calls this; the CLI below is a thin wrapper that prints it.
+export function evaluateHook(payload) {
+  if (!isApplicable(payload)) return null; // not top-level+cloud → silent by design
 
   const landKey = evaluateLandPattern(payload) || evaluatePushPattern(payload);
-  if (landKey) {
-    fireWarning(landKey, payload);
-    return;
-  }
+  if (landKey) return fireWarning(landKey, payload);
 
   const taskMarkerRoot = process.env.CLOUD_LAND_BACKGROUNDING_GUARD_TASK_MARKERS || TASK_SEEN_ROOT;
   const reblock = classifyReblock(payload, { markerRoot: taskMarkerRoot });
   if (reblock) {
-    fireWarning('reblocked-task', payload, { uncertain: reblock === 'uncertain' });
+    return fireWarning('reblocked-task', payload, { uncertain: reblock === 'uncertain' });
   }
+  return null;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await runHookCli(evaluateHook);
   } catch {
     // fail open — a tool hook must never break the turn
   }

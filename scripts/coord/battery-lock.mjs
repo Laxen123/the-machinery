@@ -126,7 +126,7 @@ import { ageMinutes, parseLockArgs } from './landing-lock.mjs';
 // what a second identity model here would need to duplicate. Import direction is safe: battery-lock
 // already imports from landing-lock, and battery-lock is not in any sibling's adopt set, so no
 // sibling gains a dependency it does not already have.
-import { pidAlive } from './worktree-lock.mjs';
+import { pidAlive, processStartToken, holderIdentity } from './worktree-lock.mjs';
 
 export { ageMinutes, parseLockArgs };
 
@@ -173,6 +173,23 @@ export const BATTERY_ARG_SPEC = Object.freeze({
 // not hand-maintained here alone: battery-lock.test.mjs DERIVES the worst case from the real
 // hook text and fails if this ceiling stops clearing it.
 export const DEFAULT_STALE_MIN = 120;
+// ── A PROVABLY-LIVE HOLDER OUTLASTS THE AGE GATE, UP TO A HARD CEILING (plan 4236 T3, H3) ─────
+// DEFAULT_STALE_MIN above assumed a battery never legitimately outlives 120 min. A LOADED land
+// battery now does (plan 4228 measured 103 min on 2026-09-25 and 167+ min on 2026-09-26), and on
+// 2026-09-26 a second land's acquire reaped a LIVE holder by age at 127 min and ran a second
+// full-box battery beside it. A declared holder pid did not help and could not have: a pid that
+// probes ALIVE only makes holderProvedDead false, and control then falls straight through to the
+// age gate — the pid was designed as a FASTER reap for dead holders, never a protection for live
+// ones. So an entry now also records its holder's OS start-time token (`holderStartToken`, the
+// plan-2738 identity probe from worktree-lock.mjs) and the age gate is skipped while ALL of these
+// hold: same host, the declared holder probes ALIVE, its start-time token still matches (a recycled
+// pid necessarily started later, so a stranger that inherited the number is never mistaken for the
+// holder), and the entry is no older than HARD_STALE_MIN. The hard ceiling is what keeps a wrong
+// "alive" answer from wedging the lock for good; an entry without a trustworthy identity (no
+// declared holder, no recorded token, an unreadable probe) keeps the plain 120-min age gate. The
+// identity probe runs ONLY for an entry that is already age-stale, so the ordinary poll path pays
+// nothing new.
+export const HARD_STALE_MIN = 360;
 // ── THE QUEUE WAIT: PROGRESS-AWARE, NOT A FLAT PER-WAITER TIMER (plan 2734) ─────────────────
 // HISTORY, because the number that used to live here IS the bug. Plan 1679 set a flat
 // DEFAULT_TIMEOUT_SEC = ceil(p95 403s × 1.5) = 605s, after which a waiter proceeded unserialized.
@@ -375,10 +392,23 @@ export function readEntry(lockPath) {
 // Try once to create the lock. Returns the token on success, undefined when already held.
 // `holderPid` (plan 2549) is the OPT-IN declared long-lived holder — JSON.stringify drops it when
 // undefined, so undeclaring callers write exactly the pre-2549 entry shape.
-export function tryCreate(lockPath, { token, label, nowIso, pid, host, holderPid }) {
+// `holderStartToken` (plan 4236 T3) is the declared holder's OS start-time token, recorded only
+// alongside a declared holderPid — undefined is dropped by JSON.stringify exactly like holderPid.
+export function tryCreate(
+  lockPath,
+  { token, label, nowIso, pid, host, holderPid, holderStartToken },
+) {
   const created = tryCreateExclusive(
     lockPath,
-    JSON.stringify({ token, label, iso: nowIso, pid, host, holderPid }),
+    JSON.stringify({
+      token,
+      label,
+      iso: nowIso,
+      pid,
+      host,
+      holderPid,
+      holderStartToken: holderPid != null ? holderStartToken : undefined,
+    }),
   );
   return created ? token : undefined;
 }
@@ -414,6 +444,35 @@ export function holderProvedDead(entry, { host = hostname(), _pidAlive = pidAliv
 // without spawning a process just to kill it.
 export function holderPidTrustworthy(holderPid, { _pidAlive = pidAlive } = {}) {
   return _pidAlive(holderPid) !== false;
+}
+
+// Is this entry's declared holder PROVABLY the same live process that wrote it, and young enough
+// that the hard ceiling has not yet been reached? (plan 4236 T3 — see HARD_STALE_MIN.) Only a
+// same-host entry with a declared holderPid that probes ALIVE and whose recorded start-time token
+// still matches answers true; every other shape (foreign host, undeclared, dead, unprovable,
+// recycled, no recorded token, unreadable age, older than the ceiling) answers false, which leaves
+// the entry to the ordinary age gate exactly as before. `_pidAlive` / `_startToken` are the test
+// seams (no real process is spawned or killed to exercise either verdict).
+export function holderProvedLive(
+  entry,
+  nowMs,
+  {
+    host = hostname(),
+    hardStaleMin = HARD_STALE_MIN,
+    _pidAlive = pidAlive,
+    _startToken = processStartToken,
+  } = {},
+) {
+  if (entry == null || entry.host !== host) return false;
+  const age = ageMinutes(entry.iso, nowMs);
+  if (age == null || age > hardStaleMin) return false;
+  if (_pidAlive(entry.holderPid) !== true) return false;
+  return (
+    holderIdentity(
+      { pid: entry.holderPid, startToken: entry.holderStartToken },
+      { _startToken },
+    ) === 'SAME'
+  );
 }
 
 // --- progress-aware wait: the pure decision core (plan 2734) -----------------
@@ -498,11 +557,14 @@ export function acquireOnce(
     pid,
     host,
     holderPid,
+    holderStartToken,
     staleMin = DEFAULT_STALE_MIN,
+    hardStaleMin = HARD_STALE_MIN,
     _tryCreate = tryCreate,
     _readEntry = readEntry,
     _reapStale = reapStale,
     _pidAlive = pidAlive,
+    _startToken = processStartToken,
   },
 ) {
   const created = _tryCreate(lockPath, {
@@ -512,6 +574,7 @@ export function acquireOnce(
     pid,
     host,
     holderPid,
+    holderStartToken,
   });
   if (created) return { action: 'ACQUIRED', token: created };
 
@@ -524,9 +587,13 @@ export function acquireOnce(
   // entry.pid (the acquirer's pid — dead in normal operation; see the header), is null-safe for a
   // corrupt entry (which then falls to isStale's own null-is-reapable rule, the pre-2549
   // behaviour), and never probes a foreign host's pid.
+  // plan 4236 T3: an age-stale entry whose declared holder is provably the same live process
+  // (identity-checked, under HARD_STALE_MIN) is NOT reaped — see HARD_STALE_MIN. Checked only once
+  // the age gate would fire, so a fresh entry never pays for the identity probe.
   const reason = holderProvedDead(entry, { host, _pidAlive })
     ? 'dead-pid'
-    : isStale(entry, nowMs, staleMin)
+    : isStale(entry, nowMs, staleMin) &&
+        !holderProvedLive(entry, nowMs, { host, hardStaleMin, _pidAlive, _startToken })
       ? 'age'
       : null;
   if (reason) {
@@ -702,6 +769,11 @@ export function main() {
       holderPid = undefined;
     }
   }
+  // plan 4236 T3: the declared holder's start-time identity, read ONCE per acquire (a Windows read
+  // is a PowerShell spawn) and recorded beside holderPid. null (unprovable) records nothing, and
+  // the entry then keeps the plain age gate.
+  const holderStartToken =
+    holderPid != null ? (processStartToken(holderPid) ?? undefined) : undefined;
   const staleMin = numericFlag(flags['stale-min'], DEFAULT_STALE_MIN, 'stale-min');
   // `--timeout-sec` KEEPS its name and its one hook call site (plan 1679's size-gated short wait for
   // a ≤5-file selection) but its meaning changed with plan 2734: it is the anti-hang TOTAL-wait
@@ -747,6 +819,7 @@ export function main() {
       pid: process.pid,
       host,
       holderPid,
+      holderStartToken,
       staleMin,
     });
   const announceReap = (r) =>

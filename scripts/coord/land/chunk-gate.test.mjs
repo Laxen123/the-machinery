@@ -486,7 +486,7 @@ test('plan 3374: nonConvergentReportDetail NAMES the head file, states the CALLE
     gate: 'pytest',
     key: 'cafefeed00000000000000000000000',
     rounds: 2,
-    headFile: 'backend/scripts/price-pipeline/__tests__/test_1636_gate_recall_matrix.py',
+    headFile: 'backend/scripts/data-pipeline/__tests__/test_1636_gate_recall_matrix.py',
     remaining: 772,
     remedy: 'mark the file `@pytest.mark.slow` (chunk-capped runs deselect those)',
   });
@@ -536,10 +536,10 @@ test('plan 3318: chunkReportDetail NAMES the file the cap fired inside, and is u
   const degraded = chunkReportDetail({
     gate: 'pytest',
     key: 'cafefeed00000000000000000000000',
-    stalledFile: 'backend/scripts/price-pipeline/__tests__/test_1636_gate_recall_matrix.py',
+    stalledFile: 'backend/scripts/data-pipeline/__tests__/test_1636_gate_recall_matrix.py',
   });
   assert.match(degraded, /^pytest gate: CHUNKED \(not a test failure\): /);
-  assert.match(degraded, /cap fired while running backend\/scripts\/price-pipeline\/__tests__\//);
+  assert.match(degraded, /cap fired while running backend\/scripts\/data-pipeline\/__tests__\//);
   assert.match(degraded, /no test in it finished, so it proved nothing/);
   assert.match(degraded, /sorts LAST in the remainder/);
   assert.match(degraded, /mark it `slow`/);

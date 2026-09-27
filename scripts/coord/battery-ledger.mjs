@@ -104,7 +104,7 @@
 //       WAS banked. Neither can manufacture a false non-convergent verdict on its own: a round that
 //       banks a smaller green set than the next one shows PROGRESS and resets the counter, and two
 //       consecutive rounds banking the identical set really did prove nothing new — which is the
-//       verdict. Both are pinned by tests in scripts/battery-ledger.test.mjs so a later reader
+//       verdict. Both are pinned by tests in scripts/coord/battery-ledger.test.mjs so a later reader
 //       cannot "tighten" them into that regression silently.
 //       scripts/hooks/pre-push.sh's two live seats require exact `MERGE_PERSISTED=1` before
 //       trusting this round's proof reached the persistent green set the non-convergence bound
@@ -234,7 +234,7 @@ export { DEFAULT_TTL_MIN };
 // 14b7eb): the `merge`/`pytest-merge` CLI's machine-readable PERSISTENCE sentinel name — the LAST
 // line those two subcommands print is exactly `${MERGE_PERSISTED_SENTINEL}=1` or `=0`, nothing
 // else on that line. Exported so scripts/hooks/pre-push.sh's own header comment and
-// scripts/pre-push-hook.test.mjs can spell the identical literal rather than a second hand-typed
+// its name-paired test can spell the identical literal rather than a second hand-typed
 // copy that could drift from what this CLI actually emits — the same discipline
 // CHUNK_ROUND_NONCONVERGENT_SENTINEL below already uses. Both subcommands ALWAYS exit 0 (their
 // documented "never blocks" contract — see the module header) even when the write THREW, which is
@@ -263,9 +263,10 @@ export const MERGE_PERSISTED_SENTINEL = 'MERGE_PERSISTED';
 // plan 3962 Phase 2: this module moved to scripts/coord/, the REPORTER did not — it is an asset
 // scripts/hooks/pre-push.sh also passes by the repo-relative path `./scripts/battery-ledger-reporter.mjs`,
 // so it stays on the flat layer and is resolved by ANCHORING on the scripts/ directory name
-// rather than by this module's own depth. A `./` URL here silently pointed at
-// scripts/coord/battery-ledger-reporter.mjs and every ledger-attached `node --test` failed to
-// start with ERR_MODULE_NOT_FOUND — the land battery, not a test.
+// rather than by this module's own depth. A `./` URL here silently resolved relative to THIS
+// module's own new location under scripts/coord/ instead, missing the reporter entirely, and
+// every ledger-attached `node --test` failed to start with ERR_MODULE_NOT_FOUND — the land
+// battery, not a test.
 export const REPORTER_SPECIFIER = pathToFileURL(
   scriptsFileFrom('battery-ledger-reporter.mjs', dirname(fileURLToPath(import.meta.url))),
 ).href;
@@ -365,14 +366,19 @@ export function parseTruncationSafeJsonLines(text) {
 // `toPosixRelative` before comparing against a selection, which arrives as repo-relative paths).
 // See the module header for the truncation-safety contract this implements (shared with
 // parsePytestLedgerEvents below via parseTruncationSafeJsonLines).
+// plan 4236 T5: `durations` (additive) maps each reported file to its `durationMs` when the event
+// carried a finite, non-negative one — pre-4236 events carry none and simply contribute nothing.
 export function parseLedgerEvents(text) {
   const passed = new Set();
   const failed = new Set();
+  const durations = new Map();
   for (const obj of parseTruncationSafeJsonLines(text)) {
     if (!obj || typeof obj.file !== 'string' || typeof obj.passed !== 'boolean') continue;
     (obj.passed ? passed : failed).add(obj.file);
+    if (Number.isFinite(obj.durationMs) && obj.durationMs >= 0)
+      durations.set(obj.file, obj.durationMs);
   }
-  return { passed, failed };
+  return { passed, failed, durations };
 }
 
 // plan 3620 fix round G2 (findings 7db544/59a79d/276d88/b26033/d7e34f/a9a364): the shell hook used
@@ -713,10 +719,14 @@ export function mergeGreenFiles(
   newlyPassed,
   nowMs,
   ttlMin = DEFAULT_TTL_MIN,
-  { head } = {},
+  { head, durations } = {},
 ) {
   if (!newlyPassed || newlyPassed.size === 0) return;
   const existing = readGreenSet(ledgerDir, key, nowMs, ttlMin);
+  // plan 4236 T5: the last wall time per file — this write's durations over the carried ones.
+  const mergedDurations = { ...readDurations(ledgerDir, key, nowMs, ttlMin) };
+  for (const [f, ms] of Object.entries(durations ?? {}))
+    if (typeof f === 'string' && f && Number.isFinite(ms) && ms >= 0) mergedDurations[f] = ms;
   const merged = new Set(existing);
   for (const f of newlyPassed) merged.add(f);
   writeCacheEntry(ledgerDir, key, {
@@ -739,7 +749,30 @@ export function mergeGreenFiles(
     // plan 3620: the push-side counter's own fingerprint, carried the same way — see
     // carriedGreenMark's own header for why dropping it here would make the bound unreachable.
     ...carriedGreenMark(ledgerDir, key, nowMs, ttlMin),
+    ...(Object.keys(mergedDurations).length > 0 ? { durations: mergedDurations } : {}),
   });
+}
+
+// plan 4236 T5 — the per-file LAST wall time (ms) recorded under `key`, or `{}` on any doubt (same
+// fail-safe shape as readStallCounts). Data only: no consumer reads it to decide anything yet — it
+// exists so the heavy-single-file question (plan 4234 Task 3(a), closed pending data) has numbers.
+export function readDurations(ledgerDir, key, nowMs, ttlMin = DEFAULT_TTL_MIN) {
+  const entry = readCacheEntry(ledgerDir, key);
+  if (!isLive(entry, nowMs, ttlMin)) return {};
+  const raw = entry.durations;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [f, ms] of Object.entries(raw)) {
+    if (typeof f === 'string' && f && Number.isFinite(ms) && ms >= 0) out[f] = ms;
+  }
+  return out;
+}
+
+// plan 4236 T5 — the durations twin of carriedStalls: every whole-record writer carries the map so
+// a stall write or a zero-round write never erases it.
+function carriedDurations(ledgerDir, key, nowMs, ttlMin) {
+  const durations = readDurations(ledgerDir, key, nowMs, ttlMin);
+  return Object.keys(durations).length > 0 ? { durations } : {};
 }
 
 // plan 3318 — the shared "keep whatever stalls the live entry already had" spread, so
@@ -816,6 +849,7 @@ export function mergeStalledFiles(ledgerDir, key, stalled, nowMs, ttlMin = DEFAU
     ...(live ? carriedZeroRounds(ledgerDir, key, nowMs, ttlMin) : {}),
     // plan 3620: the same carry, for the same reason, applied to the push-side fingerprint.
     ...(live ? carriedGreenMark(ledgerDir, key, nowMs, ttlMin) : {}),
+    ...(live ? carriedDurations(ledgerDir, key, nowMs, ttlMin) : {}),
   });
 }
 
@@ -918,6 +952,7 @@ function writeZeroRounds(ledgerDir, key, n, nowMs, ttlMin, { greenMark } = {}) {
     green: live && Array.isArray(entry.green) ? entry.green : [],
     ...(live && isCommitOid(entry.head) ? { head: entry.head } : {}),
     ...(live ? carriedStalls(ledgerDir, key, nowMs, ttlMin) : {}),
+    ...(live ? carriedDurations(ledgerDir, key, nowMs, ttlMin) : {}),
     ...(mark !== undefined ? { greenMark: mark } : {}),
     // Absent rather than `0` when cleared — an absent field is what every pre-3374 entry looks
     // like, so the cleared state and the never-counted state are the SAME state on disk.
@@ -952,7 +987,7 @@ export function fingerprintGreenSet(green) {
 // plan 3620 fix round G3 (findings 61b1db/66424a/5d153e/bac162/4027c7): the `chunk-round`/
 // `pytest-chunk-round` CLI's machine-readable SENTINEL name — the LAST line those two subcommands
 // print is exactly `${CHUNK_ROUND_NONCONVERGENT_SENTINEL}=1` or `=0`, nothing else on that line.
-// Exported so scripts/hooks/pre-push.sh's own header comment and scripts/pre-push-hook.test.mjs
+// Exported so scripts/hooks/pre-push.sh's own header comment and its name-paired test
 // can spell the identical literal rather than a second hand-typed copy that could drift from what
 // this CLI actually emits. Replaces the pre-fix hook's glob match against the compact-JSON line
 // itself (`case … in '{"rounds":'*'"nonConvergent":true'*'}')`) — a shape/substring GUESS that its
@@ -1539,9 +1574,12 @@ export function main() {
       return 0;
     }
     const root = process.cwd();
-    const { passed } = parseLedgerEvents(text);
+    const { passed, durations } = parseLedgerEvents(text);
     const relPassed = new Set();
     for (const abs of passed) relPassed.add(toPosixRelative(root, abs));
+    // plan 4236 T5: per-file wall time, keyed repo-relative like the green set.
+    const relDurations = {};
+    for (const [abs, ms] of durations) relDurations[toPosixRelative(root, abs)] = ms;
     // plan 3620 fix round (H1/I1): `persisted` is this call's own observable proof that no write
     // FAILED — never "there was something to write". The destination was read successfully (the
     // catch above already handled the only way that can fail), so `persisted` starts at 1: if
@@ -1554,6 +1592,7 @@ export function main() {
       try {
         mergeGreenFiles(resolveLedgerDir(root), key, relPassed, nowMs, DEFAULT_TTL_MIN, {
           head: verifiedHead(flags.head),
+          durations: relDurations,
         });
       } catch (e) {
         // fs trouble writing the ledger (readonly mount, disk full) — close-out, never blocks.
@@ -1675,7 +1714,7 @@ export function main() {
     // failure into the sentinel would flip rounds whose green proof genuinely reached disk back to
     // `=0`, re-suppressing `ranProven` at the hook's seats for exactly the zero-progress rounds
     // GATE_NON_CONVERGENT exists to catch — i.e. it would reintroduce this plan's own bug through
-    // a different door. Pinned by a test in scripts/battery-ledger.test.mjs (search "I2"), in the
+    // a different door. Pinned by a test in scripts/coord/battery-ledger.test.mjs (search "I2"), in the
     // reachable shape: a stall write that THREW leaves the sentinel at 1. The literal ordering this
     // paragraph describes — a green write that already SUCCEEDED, then a stall write that throws —
     // is a torn-mid-run race no harness can set up, because both writes target the SAME entry path,

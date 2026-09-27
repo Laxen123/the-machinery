@@ -1,7 +1,7 @@
 // scripts/coord/land/teardown.mjs — plan 3961 T3.2: the land spine's teardown phase, moved out
-// of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move).
+// of scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's
+// parity-test suite against committed goldens, plus the full legacy test suite, both unchanged
+// by this move).
 //
 // WHAT THIS MODULE OWNS. The teardown phase of the file header's five-phase landing sequence:
 // killing processes still running under the just-landed worktree, reclaiming its cwd-keyed
@@ -18,7 +18,7 @@
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
 // import only scripts/coord/** and node: builtins (Rule 3,
-// docs/runbooks/scripts-module-layout.md) — so every one of the plain scripts/*.mjs modules
+// docs/coord/scripts-layout.md) — so every one of the plain scripts/*.mjs modules
 // this code used to reach directly is instead read off the bound dependency container,
 // `landDeps()` (scripts/coord/land/deps.mjs), AT CALL TIME, inside each function — never at
 // module top level. `D` (this module's convention: `const D = landDeps();` as the first line of
@@ -752,7 +752,7 @@ export function runFinishCloseOut(MAIN, slug) {
     `done-worktree: --finish-close-out "${slug}" — residue REMAINS after this pass: ` +
       `[${(after.residues || []).join(', ') || after.refusal}]. Re-invoking is safe and ` +
       `idempotent; if it keeps failing, finish by the checklist in ` +
-      `docs/runbooks/plans-workflow.md § Landing recovery under contention.\n`,
+      `docs/coord/land-spine.md § Landing recovery under contention.\n`,
   );
   return 1;
 }

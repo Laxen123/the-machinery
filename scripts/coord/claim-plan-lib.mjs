@@ -18,6 +18,10 @@ import { batchHoldReason } from './batch-paths.mjs';
 // shared session-entry date shape from it cannot cycle or cost this module its git-free,
 // repo-free unit-testability.
 import { SESSION_ENTRY_DATE_SHAPE } from './build-handoff-lib.mjs';
+// plan 4202: undeclaredProvenanceReason is the shared reason sentence for the undeclared-
+// provenance refusal below — the oracle/board/move-plan/next-plan-id/promoteWaitingBlocked/
+// stamp --move preflight surfaces all build the same sentence from it; only this claim gate
+// additionally sets `stubOkHint` for its own operator-override lane.
 import {
   readSeedMarker,
   readFrontmatterScalar,
@@ -29,6 +33,8 @@ import {
   SEED_BANNER_RX,
   H1_RX,
   IN_PROGRESS_FOLDER,
+  undeclaredProvenanceReason,
+  specReviewGateCode,
 } from './build-index-lib.mjs';
 // plan 2426: the stale-Blocked-by drop the claim projection applies. `dropStaleBlockedBy`
 // is itself PURE (the corpus view arrives as `statusOf`/`isShipped` callbacks), so this
@@ -704,15 +710,15 @@ export function checkStubClaimGate(
     // than a bare stub can. Scoped to the literal `undeclared` value only — an ABSENT
     // specReviewBy (every plan stamped before plan 3004 introduced the field) is a
     // grandfathered legacy shape, not a provenance gap this check is about.
-    const specReviewBy = readFrontmatterScalar(content, 'specReviewBy').toLowerCase();
-    if (specReviewBy === 'undeclared') {
+    const specReviewBy = readFrontmatterScalar(content, 'specReviewBy');
+    if (specReviewGateCode(stage, specReview, specReviewBy) === 'provenance') {
+      // plan 4202: both the PREDICATE (specReviewGateCode) and the reason text come from the
+      // shared core (build-index-lib.mjs) so neither can drift from what the oracle/board/
+      // move-plan surfaces decide and say — only the stub-ok hint differs, since this is the
+      // one surface with an operator-override lane.
       return {
         ok: false,
-        reason:
-          `plan has specReview: ${specReview} but specReviewBy: undeclared — a spec-pass of ` +
-          `unknown provenance cannot be drained (plan 3943, closing the same gap plan 1427 ` +
-          `Gate 2 closed for a bare stub). Run a real spec-pass and stamp --provenance ` +
-          `"<model>/<effort>" (/spec-pass), or claim with --stub-ok "<authorization note>".`,
+        reason: undeclaredProvenanceReason('plan', specReview, { stubOkHint: true }),
       };
     }
     return { ok: true }; // any other non-empty specReview (a sha) always passes

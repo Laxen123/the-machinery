@@ -76,7 +76,7 @@ for (const k of [
 // main-checkout-allowlist.mjs's own header — the module is a pure zero-import leaf and no
 // longer carries a hardcoded default). Mirrors pre-yield-guard.test.mjs's own makeRepo()
 // fixture fix for the same seam.
-const TEST_JOB_OUTPUT_PREFIXES = ['backend/data/price-pipeline/'];
+const TEST_JOB_OUTPUT_PREFIXES = ['backend/data/data-pipeline/'];
 
 // ── harness: bare origin + a work clone (acts as $MAIN on master) ──────────────────────
 function makeRepo(seed = {}) {
@@ -1519,8 +1519,8 @@ function ageFile(path, ageMs = 120_000) {
 }
 
 function plantJobOutputOnlyDirt(s) {
-  const tracked = join(s.dir, 'backend/data/price-pipeline/render-store/tracked.json');
-  const untracked = join(s.dir, 'backend/data/price-pipeline/batches/new.json');
+  const tracked = join(s.dir, 'backend/data/data-pipeline/render-store/tracked.json');
+  const untracked = join(s.dir, 'backend/data/data-pipeline/batches/new.json');
   mkdirSync(join(untracked, '..'), { recursive: true });
   writeFileSync(tracked, 'tracked\nmodified\n');
   writeFileSync(untracked, 'new\n');
@@ -1531,7 +1531,7 @@ function plantJobOutputOnlyDirt(s) {
 
 test('healDirt: live job-output-only dirt stays dirty and reports clean', () => {
   const s = makeRepo({
-    'backend/data/price-pipeline/render-store/tracked.json': 'tracked\n',
+    'backend/data/data-pipeline/render-store/tracked.json': 'tracked\n',
   });
   try {
     const { tracked, untracked } = plantJobOutputOnlyDirt(s);
@@ -1542,7 +1542,7 @@ test('healDirt: live job-output-only dirt stays dirty and reports clean', () => 
     assert.equal(readFileSync(untracked, 'utf8'), 'new\n');
     const dirt = s.g('status', '--porcelain');
     assert.match(dirt, /tracked\.json/);
-    assert.match(dirt, /backend\/data\/price-pipeline\/batches\//);
+    assert.match(dirt, /backend\/data\/data-pipeline\/batches\//);
   } finally {
     s.cleanup();
   }
@@ -1550,7 +1550,7 @@ test('healDirt: live job-output-only dirt stays dirty and reports clean', () => 
 
 test('healDirt: dry preview calls live job-output-only dirt clean without parking promise', () => {
   const s = makeRepo({
-    'backend/data/price-pipeline/render-store/tracked.json': 'tracked\n',
+    'backend/data/data-pipeline/render-store/tracked.json': 'tracked\n',
   });
   try {
     plantJobOutputOnlyDirt(s);
@@ -1565,7 +1565,7 @@ test('healDirt: dry preview calls live job-output-only dirt clean without parkin
 
 test('healDirt: job-output-only sentinel never falls through to blocked mode=none', () => {
   const s = makeRepo({
-    'backend/data/price-pipeline/render-store/tracked.json': 'tracked\n',
+    'backend/data/data-pipeline/render-store/tracked.json': 'tracked\n',
   });
   try {
     plantJobOutputOnlyDirt(s);

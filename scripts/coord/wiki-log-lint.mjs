@@ -37,8 +37,8 @@
 //
 // A pre-push lint CANNOT catch this class. Wiki pages reach master through
 // `wiki-commit.mjs` → `withCoordCheckout` → `coordWrite`, and **that push executes no git
-// hooks at all** (docs/runbooks/branch-hygiene.md § "The coord-checkout push runs NO git
-// hooks": the `.husky/_/` shim is never installed in the disposable checkout, and coordWrite
+// hooks at all** (docs/coord/worktrees.md § "The coord-write critical section":
+// the `.husky/_/` shim is never installed in the disposable checkout, and coordWrite
 // additionally sets `HUSKY=0`). All eight copies arrived through exactly that path. So the
 // load-bearing guard is `checkJournalOrThrow`, called from wiki-commit's mutate() beside the
 // page-budget check — post-merge, on the content that will actually be committed, on every

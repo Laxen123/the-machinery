@@ -10,6 +10,11 @@ import {
   computeNextId,
   allocatePlanId,
   nextIdFromRepo,
+  nextIdWithFloor,
+  readPlanIdFloor,
+  raisePlanIdFloor,
+  parsePlanIdFloor,
+  PLAN_ID_FLOOR_REF,
   ensureReadyStatusLine,
   ensureSummaryFrontmatter,
   ensureStageFrontmatter,
@@ -111,14 +116,14 @@ test('computeNextId ignores 3-digit runs that are not plan-id prefixes', () => {
   );
 });
 
-test('computeNextId counts only real plan filenames, not clinic refs / mid-name numbers', () => {
-  // Regression for the dogfooding bug: INDEX archive prose carries clinic refs
-  // (`clinic-783`, no .md) and a mid-filename number (…-429-quota-…md); neither
+test('computeNextId counts only real plan filenames, not record refs / mid-name numbers', () => {
+  // Regression for the dogfooding bug: INDEX archive prose carries record refs
+  // (`record-783`, no .md) and a mid-filename number (…-429-quota-…md); neither
   // is a plan id. Only the leading NNN of an actual `.md` plan file counts.
   assert.equal(
     computeNextId([
       '- `077-Other-claude-haiku-429-quota-strategy.md` — shipped', // → 077, NOT 429
-      'archive narrative mentions clinic-783-foo and clinic-744-bar', // no .md → ignored
+      'archive narrative mentions record-783-foo and record-744-bar', // no .md → ignored
       'docs/superpowers/plans/archive/233-UI-mobile-safari.md', // → 233
     ]),
     '234',
@@ -1408,10 +1413,10 @@ test('ensureSummaryFrontmatter: merges summary into an existing frontmatter bloc
 });
 
 test('ensureSummaryFrontmatter: YAML single-quote escaping survives a blurb that contains apostrophes', () => {
-  const blurb = "it's a clinic's 'quoted' phrase";
+  const blurb = "it's a record's 'quoted' phrase";
   const out = ensureSummaryFrontmatter('# T\n\nbody\n', blurb);
   // Doubled '' escaping is used inside the single-quoted scalar.
-  assert.match(out, /summary: 'it''s a clinic''s ''quoted'' phrase'/);
+  assert.match(out, /summary: 'it''s a record''s ''quoted'' phrase'/);
   assert.equal(readFrontmatterSummary(out), blurb);
 });
 
@@ -2655,7 +2660,7 @@ test('buildClaimOps: F-015 — rejects an apostrophe in --slug (the F-004 PowerS
     const bodyFile = join(dir, 'body.md');
     writeFileSync(bodyFile, sw("---\nsummary: 'x'\n---\n\n> 🟩 SEED-WRITE: NO\n\n# T\n\nx\n"));
     assert.throws(
-      () => buildClaimOps(dir, { category: 'Other', slug: "clinic's-fix", body: bodyFile }),
+      () => buildClaimOps(dir, { category: 'Other', slug: "record's-fix", body: bodyFile }),
       /--slug/,
     );
   } finally {
@@ -2987,7 +2992,7 @@ function makeSeedLaneCheckout() {
   const r = makeCheckout();
   writeFileSync(
     join(r.seed, 'coord.config.json'),
-    JSON.stringify({ seedLaneFile: 'backend/src/data/seed-clinics.json', handoffLayout: 'single' }),
+    JSON.stringify({ seedLaneFile: 'backend/src/data/seed-clinics.json', handoffLayout: 'single' }), // project-word-ok: real retired monolith config literal, seedLaneFile
   );
   r.g('add', '-A');
   r.g('commit', '-qm', 'enable seed lane');
@@ -3061,7 +3066,7 @@ function makeMutationBannerFlagCheckout(flag) {
   writeFileSync(
     join(r.seed, 'coord.config.json'),
     JSON.stringify({
-      seedLaneFile: 'backend/src/data/seed-clinics.json',
+      seedLaneFile: 'backend/src/data/seed-clinics.json', // project-word-ok: real retired monolith config literal, seedLaneFile
       handoffLayout: 'single',
       mutationBanner: { flag },
     }),
@@ -3606,6 +3611,70 @@ test('claim --ready refuses a bare mint with no stage/specReview stamp (plan 129
   }
 });
 
+// plan 4202: the same shared gate (specReviewGateError, build-index-lib.mjs) now also
+// refuses a real specReview sha stamped with specReviewBy: undeclared — a spec-pass of
+// unknown provenance must not be minted straight into ready/ any more than a bare stub can.
+test('claim --ready refuses a body carrying specReview + specReviewBy: undeclared (plan 4202)', () => {
+  const r = makeCheckout();
+  try {
+    const bodyFile = join(r.seed, 'undeclared.md');
+    writeFileSync(
+      bodyFile,
+      sw(
+        '---\nstage: specced\nspecReview: 9f8e7d6\nspecReviewBy: undeclared\n---\n\n' +
+          '> 🟩 SEED-WRITE: NO\n> 💰 **Cost forecast:** $0 — no LLM spend.\n\n# Undeclared plan\n\nbody\n',
+      ),
+    );
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            CLI,
+            'claim',
+            '--ready',
+            '--category',
+            'Other',
+            '--slug',
+            'undeclared-ready',
+            '--body',
+            bodyFile,
+            '--blurb',
+            'undeclared ready',
+          ],
+          { cwd: r.seed, encoding: 'utf8' },
+        ),
+      (e) => {
+        const out = `${e.stderr || ''}${e.message || ''}`;
+        return (
+          /refusing a --ready mint/.test(out) &&
+          /specReviewBy: undeclared/.test(out) &&
+          /Mint to the default \(pending-approval\/\) instead/.test(out)
+        );
+      },
+      'a --ready mint with an undeclared-provenance specReview must be refused',
+    );
+    execFileSync('git', ['-C', r.seed, 'fetch', '-q', 'origin', 'master']);
+    const tree = execFileSync(
+      'git',
+      [
+        '-C',
+        r.seed,
+        'ls-tree',
+        '-r',
+        '--name-only',
+        'origin/master',
+        '--',
+        'docs/superpowers/plans',
+      ],
+      { encoding: 'utf8' },
+    );
+    assert.doesNotMatch(tree, /undeclared-ready\.md/, 'nothing landed anywhere on a refused mint');
+  } finally {
+    r.cleanup();
+  }
+});
+
 test('claim --ready with a body carrying specReview: exempt-mechanical succeeds', () => {
   const r = makeCheckout();
   try {
@@ -3795,6 +3864,109 @@ test('claim --ready refuses a bannerless body; the same body mints fine into pen
       '230',
       'a --ready re-claim of an existing bannerless plan is an idempotent no-op, not a throw',
     );
+  } finally {
+    r.cleanup();
+  }
+});
+
+// ── plan 4237 T4: the plan-id floor ───────────────────────────────────────────────────────────
+// 2026-09-26: a rollback commit deleted plans 4231/4232 (files AND INDEX bullets) and the next two
+// mints re-issued both ids. The floor ref remembers the highest id ever reserved.
+
+test('plan 4237 T4: parsePlanIdFloor reads floor=<N>, 0 for anything else', () => {
+  assert.equal(parsePlanIdFloor('floor=4232\nnonce=abc'), 4232);
+  assert.equal(parsePlanIdFloor(''), 0);
+  assert.equal(parsePlanIdFloor(null), 0);
+  assert.equal(parsePlanIdFloor('session=12'), 0);
+  // review 2e8ef6: conflicting floor lines resolve to the HIGHEST (the fail-safe direction)
+  assert.equal(parsePlanIdFloor('floor=100\nfloor=400'), 400);
+  assert.equal(PLAN_ID_FLOOR_REF, 'refs/heads/coord/plan-id-floor');
+});
+
+// Delete every non-archive plan file AND its INDEX bullet on origin — the c8c55d9e704 shape.
+function rollBackMints(remote, ids) {
+  const sib = mkdtempSync(join(tmpdir(), 'nextid-rollback-'));
+  const g = (...a) => execFileSync('git', ['-C', sib, ...a], { encoding: 'utf8' });
+  execFileSync('git', ['clone', '-q', '-b', 'master', remote, sib]);
+  g('config', 'user.email', 'r@r.r');
+  g('config', 'user.name', 'R');
+  const files = g('ls-files', 'docs/superpowers/plans').split('\n').filter(Boolean);
+  for (const f of files) if (ids.some((id) => f.includes(`/${id}-`))) g('rm', '-q', f);
+  const indexPath = join(sib, 'docs', 'INDEX.md');
+  const kept = readFileSync(indexPath, 'utf8')
+    .split('\n')
+    .filter((l) => !ids.some((id) => l.includes(`${id}-`)));
+  writeFileSync(indexPath, kept.join('\n'));
+  g('add', '-A');
+  g('commit', '-qm', 'rollback (the stale-index shape)');
+  g('push', '-q', 'origin', 'HEAD:master');
+  rmSync(sib, { recursive: true, force: true });
+}
+
+test('plan 4237 T4: with the two highest plan files deleted from the tree, the next mint stays ABOVE the floor', async () => {
+  const r = makeCheckout(); // origin max id = 229 → next 230
+  try {
+    const claim = async (slug) => {
+      const bodyFile = join(r.seed, `body-${slug}.md`);
+      writeFileSync(bodyFile, sw(`> 🟩 SEED-WRITE: NO\n\n# ${slug}\n\nbody\n`));
+      return allocatePlanId(
+        buildClaimOps(r.seed, { category: 'Infra', slug, body: bodyFile, blurb: slug }),
+      );
+    };
+    assert.equal((await claim('first')).id, '230');
+    assert.equal((await claim('second')).id, '231');
+    assert.equal(readPlanIdFloor(r.seed).floor, 231, 'each mint raised the floor to its id');
+    rollBackMints(r.remote, ['230', '231']);
+    // the tree alone would now answer 230 again — the floor must win
+    assert.equal(nextIdFromRepo(r.seed), '230', 'control: the tree scan has forgotten both');
+    assert.equal(nextIdWithFloor(r.seed), '232');
+    assert.equal((await claim('third')).id, '232', 'no id is ever re-issued');
+    assert.equal(readPlanIdFloor(r.seed).floor, 232);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('plan 4237 T4: raisePlanIdFloor is monotonic — a lower id never lowers it', () => {
+  const r = makeCheckout();
+  try {
+    assert.equal(readPlanIdFloor(r.seed).floor, 0, 'absent ref reads as 0');
+    assert.equal(raisePlanIdFloor(r.seed, '300'), 300);
+    assert.equal(raisePlanIdFloor(r.seed, '250'), 300, 'a lower id leaves the floor alone');
+    assert.equal(readPlanIdFloor(r.seed).floor, 300);
+    assert.equal(raisePlanIdFloor(r.seed, '301'), 301);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('plan 4237 review 24db67: a present floor ref without floor=<N> fails closed', () => {
+  const r = makeCheckout();
+  try {
+    const tree = r.g('mktree').trim();
+    const c = execFileSync('git', ['-C', r.seed, 'commit-tree', tree, '-m', 'garbage'], {
+      encoding: 'utf8',
+    }).trim();
+    r.g('push', '-q', 'origin', `${c}:${PLAN_ID_FLOOR_REF}`);
+    assert.throws(() => readPlanIdFloor(r.seed), /carries no floor=<N> line/);
+  } finally {
+    r.cleanup();
+  }
+});
+
+test('plan 4237 review f9528b: the raise reuses the scan snapshot — no second floor read when it wins', () => {
+  const r = makeCheckout();
+  try {
+    const snapshot = readPlanIdFloor(r.seed);
+    const calls = [];
+    const gitImpl = (dir, args, opts) => {
+      calls.push(args[0]);
+      return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', ...(opts || {}) });
+    };
+    assert.equal(raisePlanIdFloor(r.seed, '400', { gitImpl, snapshot }), 400);
+    assert.equal(calls.includes('fetch'), false, 'no re-fetch of the floor on the first attempt');
+    assert.equal(calls.filter((c) => c === 'ls-remote').length, 0);
+    assert.equal(readPlanIdFloor(r.seed).floor, 400);
   } finally {
     r.cleanup();
   }

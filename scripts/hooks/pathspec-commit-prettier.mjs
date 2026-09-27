@@ -13,7 +13,7 @@
 // `core.fsmonitor` config) never reproduced the silent truncation this plan investigates in
 // isolation — see repro-3968-matrix.md — but the double index write is real on every
 // pathspec commit regardless, and removing it costs nothing: `prettier --check .` already
-// gates every push (`.husky/pre-push.sh` via the lint gate), so a pre-commit reformat of a
+// gates every push (`.husky/pre-push` via the lint gate), so a pre-commit reformat of a
 // pathspec commit's own staged paths is redundant with that gate, not a substitute for it.
 //
 // WHAT THIS DOES. For a pathspec commit ONLY: skip lint-staged (and its stash / index-write

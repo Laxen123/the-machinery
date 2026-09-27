@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -16,6 +16,9 @@ import {
   OPT_IN_FLAG,
   CLOUD_SIGNAL_ENV,
   UNSHALLOW_TIMEOUT_ENV,
+  DEEPEN_START,
+  DEEPEN_FLOOR,
+  DEEPEN_TOTAL_BUDGET_MS,
 } from './cloud-checkout-preflight.mjs';
 import { loadCoordConfig } from './coord-config.mjs';
 
@@ -144,6 +147,9 @@ function makeShallowRepo(depth = 1) {
   const root = mkdtempSync(join(tmpdir(), 'cloud-preflight-shallow-'));
   const origin = join(root, 'origin.git');
   execFileSync('git', ['init', '-q', '--bare', '-b', 'master', origin]);
+  // plan 4221: the repair fetches with --filter=blob:none; a local upload-pack ignores the
+  // filter (with a warning) unless it is allowed, as GitHub allows it.
+  execFileSync('git', ['-C', origin, 'config', 'uploadpack.allowFilter', 'true']);
   const mk = (name, url) => {
     const dir = join(root, name);
     execFileSync('git', ['clone', '-q', '-c', 'core.autocrlf=false', url, dir]);
@@ -156,6 +162,9 @@ function makeShallowRepo(depth = 1) {
   const seed = mk('seed', origin);
   for (const name of ['c0', 'c1', 'c2', 'c3', 'c4']) {
     writeFileSync(join(seed.dir, `${name}.txt`), `${name}\n`);
+    // One file rewritten every commit, so older commits carry blobs the tip does not — the
+    // blobs a blob:none repair leaves behind (plan 4221).
+    writeFileSync(join(seed.dir, 'rolling.txt'), `rolling ${name}\n`);
     seed.g('add', '-A');
     seed.g('commit', '-qm', name);
     if (name === 'c0') seed.g('branch', 'old-branch');
@@ -183,6 +192,7 @@ function makeShallowRepo(depth = 1) {
   return {
     root,
     origin,
+    seed,
     work: { dir: workDir, g: workG },
     lsOrigin: () => execFileSync('git', ['ls-remote', origin], { encoding: 'utf8' }),
     cleanup: () => rmSync(root, { recursive: true, force: true }),
@@ -190,6 +200,31 @@ function makeShallowRepo(depth = 1) {
 }
 
 const isShallow = (s) => s.work.g('rev-parse', '--is-shallow-repository').trim() === 'true';
+
+// plan 4221: push an ORPHAN branch (three commits, its own root) to the shallow fixture's
+// origin — a tip that is NOT in master's history, the shape of the ~371 non-master heads
+// a real cloud origin carries. Returns the branch tip sha.
+function pushOrphanBranch(s, name) {
+  s.seed.g('checkout', '-q', '--orphan', name);
+  for (const n of ['s0', 's1', 's2']) {
+    writeFileSync(join(s.seed.dir, `${name}-${n}.txt`), `${n}\n`);
+    s.seed.g('add', '-A');
+    s.seed.g('commit', '-qm', `${name} ${n}`);
+  }
+  s.seed.g('push', '-q', 'origin', name);
+  const tip = s.seed.g('rev-parse', 'HEAD').trim();
+  s.seed.g('checkout', '-q', 'master');
+  return tip;
+}
+
+const hasRef = (s, ref) => {
+  try {
+    s.work.g('rev-parse', '-q', '--verify', ref);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 // ── refusal gates (neither the flag nor a clean host alone authorizes anything) ────────
 test('refuses without the opt-in flag, even on a diverged checkout', () => {
@@ -706,8 +741,9 @@ test('idempotent: a second run on a repaired checkout is a clean no-op', () => {
   }
 });
 
-// ── shallow-clone guard (plan 3274) — a separate axis from the stale-master path above
-test('shallow clone is detected and unshallowed; an old-base merge-base then resolves', () => {
+// ── shallow-clone guard (plan 3274; cumulative-deepen repair, plan 4189) — a separate
+// axis from the stale-master path above
+test('shallow clone is detected and unshallowed via the default --deepen seam; an old-base merge-base then resolves', () => {
   const s = makeShallowRepo();
   try {
     assert.equal(isShallow(s), true, 'fixture must actually be shallow before the run');
@@ -715,11 +751,25 @@ test('shallow clone is detected and unshallowed; an old-base merge-base then res
       () => s.work.g('merge-base', 'old-branch', 'origin/master'),
       'merge-base must fail pre-repair — reproduces the plan-3239 symptom exactly',
     );
-    const [code, errLines] = captureErr(() => run(s));
-    assert.equal(code, 0, `expected repair success, got stderr: ${errLines.join('\n')}`);
+    // Real git, DEFAULT seam (no injected `deepenFetch`) — proves the actual default
+    // seam repairs a genuinely shallow clone, not just an injected fake standing in for it.
+    const [code, logLines] = captureLog(() => run(s));
+    assert.equal(code, 0, `expected repair success, got log: ${logLines.join('\n')}`);
     assert.equal(isShallow(s), false, '.git/shallow must be cleared after the repair');
     const mb = s.work.g('merge-base', 'old-branch', 'origin/master').trim();
     assert.match(mb, /^[0-9a-f]{40}$/, 'merge-base must resolve to a real sha post-repair');
+    // The loop must issue at least one `--deepen` round, and — if a closer round ever ran
+    // — it must run AFTER every `--deepen` round, never before (S1's ordering).
+    const joined = logLines.join('\n');
+    assert.match(joined, /--deepen=/, 'the loop must issue at least one --deepen round');
+    const lastDeepenIdx = logLines.map((l) => /--deepen=/.test(l)).lastIndexOf(true);
+    const firstUnshallowIdx = logLines.findIndex((l) => /the closer/.test(l));
+    if (firstUnshallowIdx !== -1) {
+      assert.ok(
+        lastDeepenIdx < firstUnshallowIdx,
+        `every --deepen round must run before the closer; got: ${joined}`,
+      );
+    }
   } finally {
     s.cleanup();
   }
@@ -756,56 +806,375 @@ test('a failed shallow-clone repair exits non-zero with the cause named in its o
       /shallow-clone repair failed/,
       `cause must be named in the output; got: ${joined}`,
     );
-    assert.match(joined, /git fetch --unshallow origin/, 'the exact repair command must be named');
+    assert.match(joined, /git fetch --deepen origin/, 'the exact repair command must be named');
   } finally {
     s.cleanup();
   }
 });
 
-test('a WEDGED shallow-clone repair times out loudly, naming the timeout (not a generic fetch failure)', async () => {
+// ── master-only fetches (plan 4221) ────────────────────────────────────────────────────
+// Real cloud clones carry the wildcard `+refs/heads/*:refs/remotes/origin/*` refspec, and
+// a refspec-less fetch then pulls every origin head into every deepen round. The repair
+// rounds, the closer and the orient fetch must all name master explicitly.
+test('plan 4221: default seam + orient fetch stay master-only under a wildcard refspec (a non-master origin head is never fetched)', () => {
+  const s = makeShallowRepo();
+  try {
+    pushOrphanBranch(s, 'side');
+    s.work.g('config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*');
+    assert.equal(isShallow(s), true, 'fixture must actually be shallow before the run');
+    assert.equal(hasRef(s, 'refs/remotes/origin/side'), false, 'fixture precondition');
+    const [code, logLines] = captureLog(() => run(s));
+    assert.equal(code, 0, `expected repair success, got log: ${logLines.join('\n')}`);
+    assert.equal(isShallow(s), false, '.git/shallow must be cleared after the repair');
+    assert.equal(
+      hasRef(s, 'refs/remotes/origin/side'),
+      false,
+      'the preflight must not fetch a non-master origin head',
+    );
+    assert.equal(
+      hasRef(s, 'refs/remotes/origin/old-branch'),
+      false,
+      'the preflight must not fetch origin/old-branch either',
+    );
+    assert.equal(sha(s, 'refs/remotes/origin/master'), s.seed.g('rev-parse', 'master').trim());
+  } finally {
+    s.cleanup();
+  }
+});
+
+// plan 4221: the default seam passes --filter=blob:none, so the repair ends as a
+// non-shallow PARTIAL clone — git records the promisor config, old blobs stay on origin
+// until something reads them, and a read fetches them lazily.
+test('plan 4221: the default-seam repair leaves a non-shallow blob:none partial clone', () => {
+  const s = makeShallowRepo();
+  try {
+    const [code, logLines] = captureLog(() => run(s));
+    assert.equal(code, 0, `expected repair success, got log: ${logLines.join('\n')}`);
+    assert.equal(isShallow(s), false, 'a partial clone is not shallow');
+    assert.equal(s.work.g('config', 'remote.origin.promisor').trim(), 'true');
+    assert.equal(s.work.g('config', 'remote.origin.partialclonefilter').trim(), 'blob:none');
+    // --missing=print never lazy-fetches, so this counts what the repair did NOT download.
+    const missing = () =>
+      s.work
+        .g('rev-list', '--objects', '--missing=print', 'origin/master')
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith('?')).length;
+    assert.ok(missing() > 0, 'old blobs must be left on origin, proving the filter was used');
+    assert.match(s.work.g('merge-base', 'old-branch', 'origin/master').trim(), /^[0-9a-f]{40}$/);
+    assert.match(s.work.g('log', '--format=%s', '--', 'c1.txt'), /c1/);
+    assert.equal(
+      s.work.g('show', 'origin/master~3:rolling.txt'),
+      'rolling c1\n',
+      'a missing blob must be fetched lazily on read',
+    );
+  } finally {
+    s.cleanup();
+  }
+});
+
+// A master-only fetch cannot clear a boundary that origin itself can no longer deepen —
+// here a branch fetched shallow, then deleted on origin and pruned there (the shape a
+// reaped coord/probes/* ref leaves behind). origin/master's history is still whole, so
+// that leftover line must be accepted and logged, not reported as a wedged repair.
+test('plan 4221: a leftover boundary unreachable from origin/master is accepted as a repair of origin/master', () => {
+  const s = makeShallowRepo();
+  try {
+    const goneTip = pushOrphanBranch(s, 'gone');
+    s.work.g('fetch', '-q', '--depth=1', 'origin', 'gone:refs/heads/gone');
+    execFileSync('git', ['-C', s.origin, 'branch', '-q', '-D', 'gone']);
+    execFileSync('git', ['-C', s.origin, 'gc', '-q', '--prune=now']);
+    const shallowLines = () =>
+      readFileSync(join(s.work.dir, '.git', 'shallow'), 'utf8')
+        .split(/\r?\n/)
+        .filter(Boolean);
+    assert.equal(shallowLines().length, 2, 'fixture precondition: master + gone boundaries');
+    assert.ok(shallowLines().includes(goneTip), 'fixture precondition: gone tip is a boundary');
+    const [code, logLines] = captureLog(() => run(s));
+    const joined = logLines.join('\n');
+    assert.equal(code, 0, `expected repair success, got log: ${joined}`);
+    assert.deepEqual(shallowLines(), [goneTip], "only the other ref's boundary may remain");
+    assert.match(
+      joined,
+      /shallow-clone REPAIRED for origin\/master \(1 boundary line\(s\) remain on other refs, none reachable from origin\/master\)/,
+      `the partial-shallow acceptance must be logged; got: ${joined}`,
+    );
+    const mb = s.work.g('merge-base', 'old-branch', 'origin/master').trim();
+    assert.match(mb, /^[0-9a-f]{40}$/, "origin/master's history must be whole");
+  } finally {
+    s.cleanup();
+  }
+});
+
+// The completion check must tell `--is-ancestor`'s clean "no" (exit 1) apart from a git
+// error: a boundary sha git cannot resolve is an error, never "not reachable".
+test('plan 4221: a git error in the origin/master completeness check aborts instead of reading as "not ancestor"', () => {
+  const s = makeShallowRepo();
+  const shallowPath = join(s.work.dir, '.git', 'shallow');
+  try {
+    // Every call leaves `.git/shallow` naming only a sha that does not exist: round 1 moves
+    // the boundary, round 2 changes nothing, the closer changes nothing.
+    const fakeDeepenFetch = () => writeFileSync(shallowPath, `${'ab'.repeat(20)}\n`);
+    const [code, errLines] = captureErr(() =>
+      run(s, { deepenFetch: fakeDeepenFetch, now: () => 0 }),
+    );
+    const joined = errLines.join('\n');
+    assert.equal(code, 1, `a git error must abort; got: ${joined}`);
+    assert.match(joined, /cannot re-verify shallow-clone state/, `got: ${joined}`);
+  } finally {
+    s.cleanup();
+  }
+});
+
+// ── cumulative-deepen repair (plan 4189) — injected `deepenFetch` seam ─────────────────
+// This is the case that killed the pre-4189 code: a single all-or-nothing
+// `git fetch --unshallow` that times out keeps nothing, so every retry restarted from
+// zero and never converged. A round that COMPLETES must keep its progress and let the
+// next (halved) round finish the repair.
+test('injected fake: a round TIMES OUT then the halved retry completes and repairs the clone', () => {
+  const s = makeShallowRepo();
+  const shallowPath = join(s.work.dir, '.git', 'shallow');
+  try {
+    const calls = [];
+    const fakeDeepenFetch = (depthOrUnshallow) => {
+      calls.push(depthOrUnshallow);
+      if (calls.length === 1) {
+        const e = new Error('simulated round timeout');
+        e.code = 'ETIMEDOUT';
+        throw e;
+      }
+      // The halved retry "completes" — simulate a full unshallow by removing the shallow
+      // marker file, exactly what a real `git fetch --deepen`/`--unshallow` that reaches
+      // the roots does.
+      rmSync(shallowPath, { force: true });
+    };
+    const [code, logLines] = captureLog(() => run(s, { deepenFetch: fakeDeepenFetch }));
+    assert.equal(code, 0, 'a halved retry that completes must repair the clone');
+    assert.deepEqual(
+      calls,
+      [DEEPEN_START, Math.floor(DEEPEN_START / 2)],
+      'exactly one halved retry after the timeout',
+    );
+    assert.equal(isShallow(s), false, '.git/shallow must be cleared after the repair');
+    assert.ok(
+      logLines.some((l) => l.includes('TIMED OUT') && l.includes('halving')),
+      `the retry must be logged as a halve-on-timeout; got: ${logLines.join('\n')}`,
+    );
+  } finally {
+    s.cleanup();
+  }
+});
+
+// S4 (the closer) + the "still shallow after a reported success" abort: a round that
+// reports success without ever moving `.git/shallow`'s boundary must not spin on another
+// identical round — the closer runs once, and if IT also leaves the repo shallow, the
+// whole repair aborts as wedged, never silently retried forever.
+test('injected fake: rounds report success but never move the boundary; the closer also leaves it shallow → wedged abort', () => {
+  const s = makeShallowRepo();
+  try {
+    const fakeDeepenFetch = () => {
+      // Reports success (no throw) but never touches `.git/shallow` — neither a
+      // `--deepen` round nor the closer's `--unshallow` call ever makes progress.
+    };
+    const [code, errLines] = captureErr(() => run(s, { deepenFetch: fakeDeepenFetch }));
+    assert.notEqual(code, 0, 'a repair that never moves the boundary must abort non-zero');
+    assert.equal(isShallow(s), true, 'the repo must remain genuinely shallow');
+    const joined = errLines.join('\n');
+    assert.match(joined, /wedged/i, `the abort must name itself as wedged; got: ${joined}`);
+    assert.doesNotMatch(
+      joined,
+      /raise the bound/i,
+      `the retired "raise the bound" remediation must not reappear; got: ${joined}`,
+    );
+  } finally {
+    s.cleanup();
+  }
+});
+
+// S5: a budget exhaustion after REAL progress is a rerun, not a dead end. The clock is
+// injected (a fake counter, never a real timer) so the test does not wait out the real
+// 540s default budget.
+test('injected fake: rounds make progress until the injected clock passes the total budget → PARTIAL, exit 1', () => {
+  const s = makeShallowRepo();
+  const shallowPath = join(s.work.dir, '.git', 'shallow');
+  try {
+    let call = 0;
+    const fakeDeepenFetch = () => {
+      call++;
+      // Every round "completes" and moves the boundary (distinct content each time), so
+      // rounds keep counting as progress right up until the budget runs out.
+      writeFileSync(shallowPath, `deadbeef${call.toString().padStart(32, '0')}\n`);
+    };
+    // Advances by 200_000ms on every call — three calls exceed the 540_000ms default
+    // total budget after two rounds have completed.
+    let t = 0;
+    const fakeNow = () => {
+      const v = t;
+      t += 200_000;
+      return v;
+    };
+    const [code, errLines] = captureErr(() =>
+      run(s, { deepenFetch: fakeDeepenFetch, now: fakeNow }),
+    );
+    assert.equal(code, 1, 'a budget exhaustion must still be a non-zero exit');
+    const joined = errLines.join('\n');
+    assert.match(joined, /PARTIAL/, `must print the PARTIAL line; got: ${joined}`);
+    assert.match(
+      joined,
+      new RegExp(String(DEEPEN_TOTAL_BUDGET_MS)),
+      `the exhausted budget (ms) must appear in the message; got: ${joined}`,
+    );
+    assert.match(joined, /rerun/i, `must tell the drain to rerun; got: ${joined}`);
+    assert.equal(isShallow(s), true, 'a PARTIAL repair must leave the clone genuinely shallow');
+    assert.equal(call, 2, 'exactly two rounds must have run before the budget ran out');
+  } finally {
+    s.cleanup();
+  }
+});
+
+// plan 4189 review round 1: the S4 closer path must not throw away banked progress. When
+// earlier rounds MOVED the boundary and the closer then cannot finish (no budget left, or
+// the closer itself times out), the output is the rerun-safe `PARTIAL —` line the drain
+// prompt reruns on — never a terminal ABORT that stops a firing a rerun would have saved.
+test('closer path: progress banked, then a no-progress round leaves no budget → PARTIAL, not a wedged abort', () => {
+  const s = makeShallowRepo();
+  const shallowPath = join(s.work.dir, '.git', 'shallow');
+  try {
+    let call = 0;
+    const fakeDeepenFetch = () => {
+      call++;
+      // Round 1 moves the boundary; round 2 completes without moving it.
+      if (call === 1) writeFileSync(shallowPath, `deadbeef${'1'.padStart(32, '0')}\n`);
+    };
+    // 0 (start), 0 (round 1 budget), 300_000 (round 2 budget), 600_000 (closer budget).
+    const ticks = [0, 0, 300_000, 600_000];
+    const fakeNow = () => ticks.shift() ?? 600_000;
+    const [code, errLines] = captureErr(() =>
+      run(s, { deepenFetch: fakeDeepenFetch, now: fakeNow }),
+    );
+    assert.equal(code, 1);
+    const joined = errLines.join('\n');
+    assert.match(
+      joined,
+      /^cloud-checkout-preflight: PARTIAL —/m,
+      `must print PARTIAL; got: ${joined}`,
+    );
+    assert.doesNotMatch(joined, /ABORT/, `must not print a terminal ABORT; got: ${joined}`);
+    assert.equal(call, 2, 'the closer must not run with no budget left');
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('closer path: progress banked, then the closing --unshallow TIMES OUT → PARTIAL', () => {
+  const s = makeShallowRepo();
+  const shallowPath = join(s.work.dir, '.git', 'shallow');
+  try {
+    const calls = [];
+    const fakeDeepenFetch = (depthOrUnshallow) => {
+      calls.push(depthOrUnshallow);
+      if (depthOrUnshallow === 'unshallow') {
+        const e = new Error('simulated closer timeout');
+        e.code = 'ETIMEDOUT';
+        throw e;
+      }
+      if (calls.length === 1) writeFileSync(shallowPath, `deadbeef${'1'.padStart(32, '0')}\n`);
+    };
+    const [code, errLines] = captureErr(() =>
+      run(s, { deepenFetch: fakeDeepenFetch, now: () => 0 }),
+    );
+    assert.equal(code, 1);
+    assert.deepEqual(calls, [DEEPEN_START, DEEPEN_START * 2, 'unshallow']);
+    const joined = errLines.join('\n');
+    assert.match(
+      joined,
+      /^cloud-checkout-preflight: PARTIAL —/m,
+      `must print PARTIAL; got: ${joined}`,
+    );
+    assert.doesNotMatch(joined, /ABORT/, `must not print a terminal ABORT; got: ${joined}`);
+  } finally {
+    s.cleanup();
+  }
+});
+
+test('closer path: NO progress, the closing --unshallow TIMES OUT → a timeout-named abort, not the generic rejected-fetch line', () => {
+  const s = makeShallowRepo();
+  try {
+    const fakeDeepenFetch = (depthOrUnshallow) => {
+      if (depthOrUnshallow === 'unshallow') {
+        const e = new Error('simulated closer timeout');
+        e.code = 'ETIMEDOUT';
+        throw e;
+      }
+    };
+    const [code, errLines] = captureErr(() =>
+      run(s, { deepenFetch: fakeDeepenFetch, now: () => 0 }),
+    );
+    assert.equal(code, 1);
+    const joined = errLines.join('\n');
+    assert.match(
+      joined,
+      /ABORT — shallow-clone repair TIMED OUT/,
+      `timeout must be named; got: ${joined}`,
+    );
+    assert.doesNotMatch(joined, /PARTIAL/, 'no progress was banked, so this is not a rerun case');
+    assert.doesNotMatch(joined, /repair failed \(cause/, 'must not read as a rejected fetch');
+  } finally {
+    s.cleanup();
+  }
+});
+
+// plan 4189: a genuinely wedged network must still cascade through the halve-on-timeout
+// retries (S2) down to the floor depth and abort there with its OWN "TIMED OUT ... floor"
+// cause line — never the generic rejected-fetch message, and never silently retried
+// forever. A FAKE clock that never advances is the deliberate seam here: it keeps the
+// loop's BUDGET bookkeeping reading "plenty left" every round (so each round's REAL
+// execFileSync timeout bound stays at the injected total budget instead of shrinking to
+// ~0 after the first real wait), while every fetch attempt is still a genuine,
+// un-injected `git fetch --deepen`/`--unshallow` against the wedged server below — this
+// is what proves execFileSync's own ETIMEDOUT still propagates correctly through the
+// default seam after plan 4189's rewrite, the same platform-specific behaviour plan 3274
+// verified empirically.
+test('a WEDGED shallow-clone repair cascades to the floor depth and TIMES OUT loudly there (not a generic fetch failure)', async () => {
   const s = makeShallowRepo();
   // A raw TCP server that accepts the connection but never speaks the git protocol back —
-  // this makes `git fetch --unshallow` hang exactly like a wedged cloud-sandbox proxy
-  // would, without an actual multi-minute wait. Verified empirically (plan 3274): Node's
-  // execFileSync `timeout` option reliably kills a hung child and reports
-  // `error.code === 'ETIMEDOUT'` cross-platform (probed on this host: a silent listener +
-  // `git fetch git://host:port/x` with `timeout: 400` threw in ~420ms with exactly that
-  // code — never a plain non-zero exit, which is how the two error shapes are told apart).
+  // this makes `git fetch` hang exactly like a wedged cloud-sandbox proxy would, without
+  // an actual multi-minute wait. Verified empirically (plan 3274): Node's execFileSync
+  // `timeout` option reliably kills a hung child and reports `error.code === 'ETIMEDOUT'`
+  // cross-platform.
   const server = net.createServer(() => {});
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const port = server.address().port;
   try {
     s.work.g('config', 'remote.origin.url', `git://127.0.0.1:${port}/x`);
+    const roundBudgetMs = 600; // real per-round wait; ~7 rounds to cascade to the floor
+    const fakeNow = () => 0; // never advances — see comment above
     const start = Date.now();
     const [code, errLines] = captureErr(() =>
-      run(s, { env: { ...CLOUD_ENV, [UNSHALLOW_TIMEOUT_ENV]: '500' } }),
+      run(s, {
+        env: { ...CLOUD_ENV, [UNSHALLOW_TIMEOUT_ENV]: String(roundBudgetMs) },
+        now: fakeNow,
+      }),
     );
     const elapsed = Date.now() - start;
     assert.equal(code, 1, 'a wedged fetch must abort non-zero, same as any other repair failure');
     assert.ok(
       // ambient-load-ok: hang backstop, not a tuned figure — the exit code above and the
-      // /TIMED OUT/ cause match below already prove the timeout path ran; 15s sits 30x above the
-      // 500ms bound under test, so it can only catch a regression that stops bounding the fetch
-      // at all (the fixture's server never closes, so an unbounded fetch hangs forever).
+      // /TIMED OUT/ cause match below already prove the timeout path ran; 15s sits well
+      // above the ~7 real rounds this cascade needs, so it can only catch a regression
+      // that stops bounding the fetch at all (the fixture's server never closes, so an
+      // unbounded fetch hangs forever).
       elapsed < 15_000,
-      `must abort near the 500ms bound, not hang until the fixture's server closes; took ${elapsed}ms`,
+      `must abort after a few real ${roundBudgetMs}ms rounds, not hang until the fixture's server closes; took ${elapsed}ms`,
     );
     const joined = errLines.join('\n');
     assert.match(joined, /TIMED OUT/i, `cause must name the timeout; got: ${joined}`);
     assert.match(
       joined,
-      /500/,
-      `the configured bound (ms) must appear in the message; got: ${joined}`,
-    );
-    assert.match(
-      joined,
-      new RegExp(UNSHALLOW_TIMEOUT_ENV),
-      `the override env var must be named so an operator can raise it; got: ${joined}`,
+      new RegExp(`floor depth \\(${DEEPEN_FLOOR} commits\\)`),
+      `the abort must be at the floor depth; got: ${joined}`,
     );
     assert.ok(
-      !joined.includes(
-        'ABORT — shallow-clone repair failed (cause: git fetch --unshallow origin).',
-      ),
+      !joined.includes('ABORT — shallow-clone repair failed (cause: git fetch --deepen origin).'),
       `a timeout must NOT be reported via the generic rejected-fetch message; got: ${joined}`,
     );
     assert.equal(

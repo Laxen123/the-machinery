@@ -14,6 +14,7 @@ import { trackedMkdtempSync } from '../test-helpers/tracked-tmpdir.mjs';
 import {
   DEFAULT_COORD_CONFIG,
   laneFolders,
+  ledgerSkeletons,
   mergeAllowInto,
   mergePackageJson,
   mergeSettingsHooks,
@@ -49,6 +50,8 @@ function buildFixtureKit(baseDir) {
   write(kitRoot, '.claude/commands/landing-queue.md', '# /landing-queue\n');
   write(kitRoot, '.claude/workflows/sonnet-review.js', '// fixture workflow\n');
   write(kitRoot, 'docs/coord/concepts.md', '# Coordination concepts\n');
+  write(kitRoot, 'docs/superpowers/AUDIT-RUNBOOK.md', '# Audit runbook\n');
+  write(kitRoot, 'docs/superpowers/audit-harness/schemas/finding.schema.json', '{}\n');
   write(kitRoot, 'WIKI.md', '# WIKI\n\nHow the vault works.\n');
   write(kitRoot, '.gitignore', 'node_modules/\n.scratch/\n.claude/worktrees/\n.drain-status/\n');
   write(kitRoot, '.prettierignore', 'node_modules/\n.husky/\npnpm-lock.yaml\n');
@@ -175,6 +178,11 @@ test('coord-init: (a) fresh target — everything created, hooks + allow merged'
   assert.ok(created.has('docs/handoff/sessions/.gitkeep'));
   assert.ok(created.has('docs/INDEX.md'));
   assert.ok(created.has('coord.config.json'));
+  // plan 4218 T6: the ledger/folder skeletons the shipped skills and tools name by path
+  for (const [rel, content] of ledgerSkeletons()) {
+    assert.ok(created.has(rel), rel);
+    assert.equal(readFileSync(join(target, ...rel.split('/')), 'utf8'), content, rel);
+  }
   // copied kit trees
   assert.ok(created.has('scripts/coord/board-lib.mjs'));
   assert.ok(created.has('scripts/coord/board-lib.test.mjs'));
@@ -188,6 +196,8 @@ test('coord-init: (a) fresh target — everything created, hooks + allow merged'
   assert.ok(created.has('.claude/commands/landing-queue.md'));
   assert.ok(created.has('.claude/workflows/sonnet-review.js'));
   assert.ok(created.has('docs/coord/concepts.md'));
+  assert.ok(created.has('docs/superpowers/AUDIT-RUNBOOK.md'));
+  assert.ok(created.has('docs/superpowers/audit-harness/schemas/finding.schema.json'));
   assert.ok(created.has('WIKI.md'));
   assert.ok(created.has('.gitignore'));
   assert.ok(created.has('.prettierignore'));
@@ -258,6 +268,10 @@ test('coord-init: (b) second run is a total no-op (idempotent)', () => {
   assert.equal(second.summary.mergedHooks, 0);
   assert.equal(second.summary.mergedAllow, 0);
   assert.ok(second.summary.unchanged.length > 0);
+  // plan 4218 T6: the ledger skeletons are part of the no-op — each one reported unchanged.
+  const unchanged = new Set(second.summary.unchanged);
+  for (const [rel] of ledgerSkeletons()) assert.ok(unchanged.has(rel), rel);
+  assert.ok(unchanged.has('docs/superpowers/AUDIT-RUNBOOK.md'));
 
   assert.equal(hashTree(target), hashAfterFirst);
 });
@@ -326,6 +340,22 @@ test('coord-init: package.json merge never overwrites an existing key', () => {
   assert.equal(pkg.scripts.test, 'echo mine'); // untouched
   assert.equal(pkg.scripts.lint, 'prettier --check .'); // added
   assert.equal(added, 2);
+});
+
+test('coord-init: an adopter-owned `prepare` keeps its steps and gains the kit steps it lacks', () => {
+  const kitPkg = { scripts: { prepare: 'husky && node scripts/ensure-wiki-merge-driver.mjs' } };
+  const own = mergePackageJson({ scripts: { prepare: 'patch-package' } }, kitPkg);
+  assert.equal(
+    own.pkg.scripts.prepare,
+    'patch-package && husky && node scripts/ensure-wiki-merge-driver.mjs',
+  );
+  assert.equal(own.added, 1);
+  // A step already present is not repeated, and a complete body is left byte-identical.
+  const partial = mergePackageJson({ scripts: { prepare: 'husky' } }, kitPkg);
+  assert.equal(partial.pkg.scripts.prepare, 'husky && node scripts/ensure-wiki-merge-driver.mjs');
+  const done = mergePackageJson({ scripts: { prepare: kitPkg.scripts.prepare } }, kitPkg);
+  assert.equal(done.pkg.scripts.prepare, kitPkg.scripts.prepare);
+  assert.equal(done.added, 0);
 });
 
 test('coord-init: (d) --no-wiki skips WIKI.md/wiki/*.md and the wiki-loader hook', () => {

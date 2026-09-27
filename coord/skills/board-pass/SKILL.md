@@ -140,7 +140,7 @@ The reverse edge exists too: spec-pass may DEMOTE a stub to fog (its § Escalati
 where those patches get re-tested. FOG.md edits go through `coord-edit.mjs`, master-side.
 **Naming (plan 2329):** `--category` must come from the allowlist and any country-scoped plan carries its
 country token (`se`/`no`/`dk`/`uk` — prose says `uk`, never `gb`); the mint gate hard-fails an unknown
-category. Table + rules: `docs/runbooks/plans-workflow.md` § Plan naming.
+category. Table + rules: `docs/coord/plan-lanes.md` § Plan naming.
 
 ### 3. Batch sweep
 
@@ -196,8 +196,8 @@ plan 2516); don't restate the class rule here.
 `program: <slug>` frontmatter tag marking them as steps in the same multi-plan mission (e.g. a
 discovery chain that had to fold or split across plans) — group these together in the Phase-1 report
 as one thread rather than N cold standalones, even when they don't qualify for an execution batch or
-fold. See the project `docs/runbooks/plans-workflow.md` § Discovery-chain plans for the tag's
-authoring-time origin.
+fold. The tag is free-form, authoring-time text with no registry or lint of its own — this grouping is
+board-pass's own presentation of it, not a separate check.
 
 **Emit the `## Dependencies` block (plan 1373 D4).** Reconcile this block into the ONE global
 `docs/superpowers/batches/dependencies.md` every pass (moved out of `proposed.md` by plan 1467) — it is
@@ -258,7 +258,7 @@ member's icon is always one of these two.
   mutations. Every 🔔 TRIPPED row is a promotion candidate (**promote**, same as a landed
   `waiting-blocked` blocker). A `manual` row stays parked (its trip is human-observed, not
   machine-checkable) and a `⚠ probe-error` row is reported, not promoted. A `∅ no-marker` row is
-  missing its `tripCheck:` stamp (`docs/runbooks/plans-workflow.md` § waiting-trip) — add one in the
+  missing its `tripCheck:` stamp (`docs/coord/plan-lanes.md` § waiting-trip) — add one in the
   same pass rather than leaving it un-evaluated. A `↷ moved (re-read)` row is NOT a finding at all: a
   parallel session re-filed that plan out of the lane mid-run — do NOT stamp it and do NOT chase it
   to its new folder; re-run the script if you need a settled table.
@@ -267,8 +267,8 @@ member's icon is always one of these two.
   the promotion via spec-pass step 4's rubric (`node scripts/stamp-cloud-exec.mjs <id> true|false
 --reason "…"`), reading enough of the plan to judge cloud-safety. Pre-authorized like every stamp.
   Unstamped-on-`ready/` is safe (never cloud-picked) but wastes the cloud lane.
-  **Adjudicate per the operator-ratified rubric at the project `docs/runbooks/cloud-drain-autonomy.md`
-  § cloudExec stamping rubric** — concrete false-list only; judgment-work / seed writes / plain HTTP
+  **Adjudicate per the operator-ratified rubric at the project `docs/coord/cloud-drains.md`
+  § The cloudExec stamping rubric** — concrete false-list only; judgment-work / seed writes / plain HTTP
   fetches are NEVER false reasons; a mostly-headless plan with a local tail gets the tail carved out
   as a close-out follow-up and stamped true (split-don't-sink); re-adjudicate existing `false`
   stamps whose banner reason the rubric no longer supports.
@@ -314,6 +314,21 @@ Session decisions`, satisfying the exit guard without any grilling session.
   operator answer amounts to "long-term hold, stop surfacing this", `move-plan <id> parked` is the
   destination (contrast `waiting-operator/`, the short-term actively-surfaced lane).
 
+### 4b. Debt-ledger report (plan 4199)
+
+After `git fetch origin`, run `node scripts/coord/infra-debt-report.mjs --check --ref origin/master`
+and the same command with `--ledger <path> --no-sweep-date-ok` for any other debt ledger the project keeps beside it
+— read-only, always exit 0, and `--ref` reads the committed ledger rather than whatever copy this
+checkout holds. Each prints one `INFRA-DEBT: OK|SWEEP DUE (…)` line (entry count, size, oldest entry
+and its age, last-sweep date) and, when a sweep is due, the reasons: last sweep older than 21 days,
+off-contract or missing tags, newest-first inversions, undated lines, duplicate-slug clusters,
+terminal-marker lines still standing. Copy both lines into § 5's report. On `SWEEP DUE`, PROPOSE a
+sweep (a Phase-2 item, never executed in Phase 1): the full report (drop `--check`) names the lines,
+and the sweep procedure — report-only verifiers, verify-then-delete on an affirmative shipped verdict
+only, slugs an open plan owns left alone, small master-only commits — is the one plan 4199 ran (its
+plan body records the checklist). Never edit either ledger from this pass: they are hand-edited on
+MASTER only, and a delete needs per-line evidence this report does not carry.
+
 ### 5. The report (operator-comms style — plain-English status first, decisions before recaps)
 
 - Lead: folder counts (now including `pending-approval/`), board-size trend vs the last pass if known,
@@ -324,15 +339,16 @@ Session decisions`, satisfying the exit guard without any grilling session.
   `consolidate/references/fold-procedure.md` step 2 so Phase 2 can mint directly) · fable-class residue
   · promotions made (blocker-landed / date / trip / pending-approval routes) · decision digest
   (`waiting-operator`, ranked) · grill-lane size + oldest age (with the ≥3-or-≥7-days nudge when it
-  trips) · session decisions recorded this pass (plan/id + the fork resolved — DONE, not a proposal) ·
+  trips) · the two debt-ledger lines from § 4b (plus the sweep proposal when either says
+  `SWEEP DUE`) · session decisions recorded this pass (plan/id + the fork resolved — DONE, not a proposal) ·
   session-owned closes (plan 4069, § 4 Waiting-lane audit above — refuted-premise/superseded/
   already-shipped archives, also listed as DONE, never as a proposal awaiting a go) · close candidates
   (the remaining, genuinely ambiguous ones, which still need the operator's nod).
 - One health number: the **meta-plan share** of the active board (coordination-machinery plans ÷ total).
   Rising or stuck above ~20% → say so and recommend the next coord plan REMOVE machinery rather than add
   it (operator doctrine 2026-07-04).
-- A second health number (plan 2943, the evidence-floor standing loop metric — `docs/runbooks/plans-workflow.md`
-  § Evidence floor): the **sitting's evidence mix** — of the stubs this pass stamped `specced`, how many
+- A second health number (plan 2943, the evidence-floor standing loop metric — `docs/coord/plan-lanes.md`
+  § The evidence floor): the **sitting's evidence mix** — of the stubs this pass stamped `specced`, how many
   carry `evidence: latent` vs `observed-*`/`operator`. Report the latent count and the observed:latent
   ratio; a rising latent share is the review-machine-as-plan-factory pattern the floor exists to catch,
   and a `latent` product-family (`Pipe`/`DQ`/`App`/`UI`) stub this pass routes to `ready/` is refused

@@ -23,7 +23,7 @@
 // error must never break the turn.
 
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { denyEnvelope, runHookCli } from './lib/loader-common.mjs';
 
 // Effective-first-token `cd`: start of command or right after a separator
 // (; & | && || newline, or an opening subshell paren), with optional
@@ -61,37 +61,26 @@ function evaluate(cmd) {
   return null;
 }
 
-function main() {
-  let payload;
-  try {
-    payload = JSON.parse(readFileSync(0, 'utf8'));
-  } catch {
-    return; // malformed → fail open
-  }
+// The hook's whole outcome as DATA (plan 4238): the deny envelope it would print, or
+// null for silence. The in-process PreToolUse dispatcher (pretool-dispatch.mjs) calls
+// this; the CLI below is a thin wrapper that prints it.
+function evaluateHook(payload) {
   const cmd = String(payload?.tool_input?.command ?? '');
-  if (!cmd) return;
+  if (!cmd) return null;
 
   const reason = evaluate(cmd);
-  if (!reason) return;
+  if (!reason) return null;
 
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason,
-      },
-    }),
-  );
+  return denyEnvelope(reason);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await runHookCli(evaluateHook);
   } catch {
     // fail open — a tool hook must never break the turn
   }
   process.exit(0);
 }
 
-export { evaluate, CD_RX, LENGTH_CAP };
+export { evaluate, evaluateHook, CD_RX, LENGTH_CAP };

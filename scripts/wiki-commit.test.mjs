@@ -53,6 +53,11 @@ function makeRepoWithWiki() {
   mkdirSync(join(dir, 'wiki', 'entities'), { recursive: true });
   writeFileSync(join(dir, 'wiki', 'entities', 'page.md'), '# page\n');
   writeFileSync(join(dir, 'wiki', 'log.md'), '# log\n');
+  // plan 4172: the per-record page dir is config (`wikiRecordDir`), read by the size lint.
+  writeFileSync(
+    join(dir, 'coord.config.json'),
+    JSON.stringify({ wikiRecordDir: 'wiki/entities/records' }),
+  );
   g('add', '-A');
   g('commit', '-qm', 'init wiki');
   return { dir, g, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
@@ -276,17 +281,17 @@ test('CLI: a nonexistent, untracked page exits 2 naming the typo (no silent no-o
 test('commitWikiPages: an over-cap INJECTED page is refused (D1, plan 1362) — no commit lands', () => {
   const r = makeRepoWithWiki();
   try {
-    mkdirSync(join(r.dir, 'wiki', 'entities', 'clinics'), { recursive: true });
-    const big = '# clinic\n' + 'x'.repeat(33 * 1024); // > 32 KB injected-page cap (operator 2026-08-03)
-    writeFileSync(join(r.dir, 'wiki', 'entities', 'clinics', 'clinic-001.md'), big);
+    mkdirSync(join(r.dir, 'wiki', 'entities', 'records'), { recursive: true });
+    const big = '# record\n' + 'x'.repeat(33 * 1024); // > 32 KB injected-page cap (operator 2026-08-03)
+    writeFileSync(join(r.dir, 'wiki', 'entities', 'records', 'record-001.md'), big);
     r.g('add', '-A');
-    r.g('commit', '-qm', 'seed oversize clinic page');
-    writeFileSync(join(r.dir, 'wiki', 'entities', 'clinics', 'clinic-001.md'), big + 'more');
+    r.g('commit', '-qm', 'seed oversize record page');
+    writeFileSync(join(r.dir, 'wiki', 'entities', 'records', 'record-001.md'), big + 'more');
     const before = r.g('rev-parse', 'HEAD').trim();
     assert.throws(
       () =>
-        commitWikiPages(r.dir, ['wiki/entities/clinics/clinic-001.md'], {
-          message: 'chore(wiki): update clinic',
+        commitWikiPages(r.dir, ['wiki/entities/records/record-001.md'], {
+          message: 'chore(wiki): update record',
           noPush: true,
         }),
       /exceeds the .* KB injected-page cap/,
@@ -300,9 +305,9 @@ test('commitWikiPages: an over-cap INJECTED page is refused (D1, plan 1362) — 
 test('commitWikiPages: fold budgets refuse a 33 KB head but accept a small head with a 100 KB tail', () => {
   const r = makeRepoWithWiki();
   try {
-    const clinics = join(r.dir, 'wiki', 'entities', 'clinics');
-    mkdirSync(clinics, { recursive: true });
-    const rel = 'wiki/entities/clinics/clinic-002.md';
+    const records = join(r.dir, 'wiki', 'entities', 'records');
+    mkdirSync(records, { recursive: true });
+    const rel = 'wiki/entities/records/record-002.md';
     const abs = join(r.dir, ...rel.split('/'));
     writeFileSync(abs, `# head\n${'h'.repeat(33 * 1024)}`);
     r.g('add', '-A');

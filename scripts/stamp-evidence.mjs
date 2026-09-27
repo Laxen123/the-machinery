@@ -2,7 +2,7 @@
 // scripts/stamp-evidence.mjs  (plan 2943)
 //
 // Stamp a plan's `evidence:` frontmatter class — the second enforcement seam of the
-// operator-adopted evidence floor (2026-08-06, docs/runbooks/plans-workflow.md § Evidence
+// operator-adopted evidence floor (2026-08-06, docs/coord/plan-lanes.md § The evidence
 // floor): a NEW plan may be minted as its own vehicle only when its wrongness was OBSERVED
 // (wave output, the live site, a measured corpus/staged-rows run) or operator-commissioned;
 // a LATENT finding (review/audit/code-reading "could go wrong", nothing observed wrong)
@@ -24,7 +24,7 @@
 //   e.g.  node scripts/stamp-evidence.mjs 2943 observed-wave
 //         node scripts/stamp-evidence.mjs 2943 latent --dry
 //
-// Valid values (docs/runbooks/plans-workflow.md § Evidence floor):
+// Valid values (docs/coord/plan-lanes.md § The evidence floor):
 //   observed-wave      — surfaced in daily-wave output
 //   observed-live       — surfaced on the live site
 //   observed-measured   — surfaced by a measured corpus/staged-rows run
@@ -44,7 +44,7 @@ import { parseArgs, assertOneOf } from './coord/coord-git.mjs';
 import { upsertFrontmatterKey } from './coord/build-index-lib.mjs';
 import { stampFrontmatterAxis } from './coord/stamp-lib.mjs';
 
-// The five-value evidence-floor vocabulary (docs/runbooks/plans-workflow.md § Evidence
+// The five-value evidence-floor vocabulary (docs/coord/plan-lanes.md § The evidence
 // floor). Order-preserved for usage/error messages — no ranking semantics, unlike
 // stamp-cloud-exec's CLOUD_ENV_RUNGS ladder.
 export const VALID_EVIDENCE = [

@@ -4,7 +4,7 @@
 // A test that asserts a path SPELLING therefore passes in one place and fails in the other, and the
 // author never sees it — the failure surfaces days later, on an unrelated plan, via the plan-2273
 // import-closure test selection, so the session that pays the cost is not the one that introduced
-// it (the plan-2478 → plan-2462 incident: `scripts/lock-path.test.mjs` was green in the cloud and
+// it (the plan-2478 → plan-2462 incident: a lock-path test was green in the cloud and
 // 2/4 red on every Windows checkout, and it blocked a push that never touched lock-path).
 //
 // Two spellings of ONE path are routinely different strings:

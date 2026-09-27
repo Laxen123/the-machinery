@@ -24,7 +24,7 @@ export const SPAWN_STARVATION_SIGNATURES = Object.freeze([
   // STATUS_NO_MEMORY — the code T1's constrained-child reproduction targets when the box (not
   // just the child's own working set) is out of memory at spawn time.
   Object.freeze({ hex: '0xC0000017', decimal: 3221225495, name: 'STATUS_NO_MEMORY' }),
-  // STATUS_COMMITMENT_LIMIT — plan 3954 T1 reproduction (scripts/run-with-memory-limit.ps1): a
+  // STATUS_COMMITMENT_LIMIT — plan 3954 T1 reproduction (scripts/run-with-memory-limit.ps1): a dangling-ok: evidence citation; the one-off reproduction harness stays project-side
   // 12 MB Job Object memory cap on a Python parent spawning node/python/git children reproduced
   // this NTSTATUS twice and STATUS_DLL_INIT_FAILED once, at the SAME cap boundary — one failure
   // class, two NTSTATUS values the kernel happened to hand back. Signed 32-bit form -1073741523,
@@ -33,7 +33,7 @@ export const SPAWN_STARVATION_SIGNATURES = Object.freeze([
   Object.freeze({ hex: '0xC000012D', decimal: 3221225773, name: 'STATUS_COMMITMENT_LIMIT' }),
 ]);
 
-// plan 3954 T1 reproduction (scripts/run-with-memory-limit.ps1): at a SLIGHTLY TIGHTER cap
+// plan 3954 T1 reproduction (scripts/run-with-memory-limit.ps1): at a SLIGHTLY TIGHTER cap dangling-ok: evidence citation; the one-off reproduction harness stays project-side
 // (8-10 MB) than the NTSTATUS boundary above, Python's `_winapi.CreateProcess` itself refuses
 // inside `subprocess.Popen` — the OS never gets far enough to hand the CALLER an NTSTATUS exit
 // code at all, so the failure surfaces as a plain OSError on the parent's side instead:
@@ -151,7 +151,7 @@ export function looksSpawnStarved(textOrExitCode) {
 //   FAILED backend/scripts/tests/test_seed_boot_validation_gate.py::test_x - AssertionError: ...
 //   ERROR backend/scripts/tests/test_y.py::test_z - OSError: ...
 // Captures the node id (group 1) and, when present, the reason text after " - " (group 2) — the
-// SAME node-id grammar `parsePytestFailures` (scripts/nightly-windows-suite.mjs) uses, plus the
+// SAME node-id grammar `parsePytestFailures` (the project's own nightly test-suite runner) uses, plus the
 // reason text that grammar deliberately discards (it only needs the id → file fold).
 //
 // NOT imported from nightly-windows-suite.mjs (plan 3954 code-review findings 129934/116e1a,

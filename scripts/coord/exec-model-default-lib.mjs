@@ -3,9 +3,9 @@
 //
 // WHY THIS EXISTS. Before this plan the default lane was a string literal exported
 // from scripts/coord/exec-model-stamp.mjs, pinned by a test that asserted the literal, and
-// re-stated as prose in six live surfaces (docs/runbooks/plans-workflow.md x3,
+// re-stated as prose in six live surfaces (docs/coord/plan-lanes.md x3,
 // coord/skills/spec-pass/SKILL.md x2, vetapp CLAUDE.md, thin-orchestrator.md,
-// coord/skills/cloud-routines/SKILL.md). Flipping it therefore meant a `scripts/**`
+// and a project-only cloud-routines skill). Flipping it therefore meant a `scripts/**`
 // diff — which triggers the mandatory code review — plus a six-file prose rewrite
 // that had to keep four dated verbatim rulings straight. Two flips (plans 3461 and
 // 3617) each cost a full plan + review + land cycle for what is, in substance, a

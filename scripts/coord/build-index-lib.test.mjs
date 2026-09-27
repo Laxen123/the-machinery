@@ -34,6 +34,8 @@ import {
   upsertFrontmatterKey,
   specReviewGateError,
   specReviewGateErrorFromValues,
+  specReviewGateCode,
+  undeclaredProvenanceReason,
   readSeedMarker,
   readSeedWriteValue,
   planIdOf,
@@ -329,13 +331,10 @@ test('readFrontmatterSummary reads an unquoted scalar', () => {
 
 test('readFrontmatterSummary reads a prettier single-quoted scalar (doubled apostrophe)', () => {
   // prettier emits single quotes + '' escaping when the value contains "double quotes"
-  const c = [
-    '---',
-    "summary: 'clinic-398''s pricelist had \"5 Besiktning\" rows'",
-    '---',
-    '# T',
-  ].join('\n');
-  assert.equal(readFrontmatterSummary(c), 'clinic-398\'s pricelist had "5 Besiktning" rows');
+  const c = ['---', "summary: 'rec-398''s pricelist had \"5 Besiktning\" rows'", '---', '# T'].join(
+    '\n',
+  );
+  assert.equal(readFrontmatterSummary(c), 'rec-398\'s pricelist had "5 Besiktning" rows');
 });
 
 test('readFrontmatterSummary returns empty when no frontmatter', () => {
@@ -1251,6 +1250,88 @@ test('specReviewGateErrorFromValues: pure core matches specReviewGateError given
   );
 });
 
+// ── plan 4202: specReviewBy: undeclared, hoisted into the shared core ──────
+
+test('specReviewGateErrorFromValues: a real specReview with specReviewBy: undeclared refuses on stage: specced, not just stub', () => {
+  const msg = specReviewGateErrorFromValues('specced', '9f8e7d6', '050-Infra-foo.md', 'ctx:', {
+    specReviewBy: 'undeclared',
+  });
+  assert.notEqual(msg, null);
+  assert.match(msg, /050-Infra-foo\.md/);
+  assert.match(msg, /specReview: 9f8e7d6 but specReviewBy: undeclared/);
+  assert.match(msg, /\/spec-pass/);
+  assert.doesNotMatch(msg, /--stub-ok/, 'the core message never offers the claim-only override');
+});
+
+test('specReviewGateErrorFromValues: specReviewBy: undeclared also fires on stage: stub (not the bare-stub message)', () => {
+  const msg = specReviewGateErrorFromValues('stub', '9f8e7d6', '050-Infra-foo.md', 'ctx:', {
+    specReviewBy: 'undeclared',
+  });
+  assert.match(msg, /specReviewBy: undeclared/);
+  assert.doesNotMatch(msg, /stage: stub without a specReview stamp/);
+});
+
+test('specReviewGateErrorFromValues: specReviewBy compare is case-insensitive', () => {
+  assert.notEqual(
+    specReviewGateErrorFromValues('specced', '9f8e7d6', '050-Infra-foo.md', 'ctx:', {
+      specReviewBy: 'UNDECLARED',
+    }),
+    null,
+  );
+});
+
+test('specReviewGateErrorFromValues: an ABSENT specReviewBy is the grandfathered legacy shape, not undeclared', () => {
+  assert.equal(
+    specReviewGateErrorFromValues('specced', '9f8e7d6', '050-Infra-foo.md', 'ctx:', {}),
+    null,
+  );
+  // and the pre-4202 4-arg call shape (no 5th argument at all) is untouched.
+  assert.equal(
+    specReviewGateErrorFromValues('specced', '9f8e7d6', '050-Infra-foo.md', 'ctx:'),
+    null,
+  );
+});
+
+test('specReviewGateErrorFromValues: exempt-mechanical is never gated on provenance, even a garbage specReviewBy', () => {
+  assert.equal(
+    specReviewGateErrorFromValues('stub', 'exempt-mechanical', '050-Infra-foo.md', 'ctx:', {
+      specReviewBy: 'undeclared',
+    }),
+    null,
+    'exempt-mechanical short-circuits before the undeclared check ever runs',
+  );
+});
+
+test('specReviewGateError: a real specReview + specReviewBy: undeclared in frontmatter is refused (content-wrapper reads specReviewBy too)', () => {
+  const msg = specReviewGateError(
+    '050-Infra-foo.md',
+    '---\nstage: specced\nspecReview: 9f8e7d6\nspecReviewBy: undeclared\n---\n# T',
+    'move-plan: cannot promote to ready/ —',
+  );
+  assert.notEqual(msg, null);
+  assert.match(msg, /specReviewBy: undeclared/);
+});
+
+test('specReviewGateCode: classifies stub vs provenance vs null in the documented order', () => {
+  assert.equal(specReviewGateCode(null, null, null), null);
+  assert.equal(specReviewGateCode('specced', null, null), null);
+  assert.equal(specReviewGateCode('stub', null, null), 'stub');
+  assert.equal(specReviewGateCode('stub', '9f8e7d6', null), null);
+  assert.equal(specReviewGateCode('stub', '9f8e7d6', 'undeclared'), 'provenance');
+  assert.equal(specReviewGateCode('specced', '9f8e7d6', 'undeclared'), 'provenance');
+  assert.equal(specReviewGateCode('stub', 'exempt-mechanical', 'undeclared'), null);
+  assert.equal(specReviewGateCode('specced', '9f8e7d6', 'fable-5.1/xhigh'), null);
+});
+
+test('undeclaredProvenanceReason: stubOkHint toggles the --stub-ok override text only', () => {
+  const bare = undeclaredProvenanceReason('plan', '9f8e7d6');
+  assert.doesNotMatch(bare, /--stub-ok/);
+  const withHint = undeclaredProvenanceReason('plan', '9f8e7d6', { stubOkHint: true });
+  assert.match(withHint, /--stub-ok "<authorization note>"/);
+  // same base sentence either way — only the tail differs.
+  assert.equal(withHint.replace(/, or claim with --stub-ok "<authorization note>"\.$/, '.'), bare);
+});
+
 test('specReviewGateError: stub without specReview → actionable message naming both fixes', () => {
   const msg = specReviewGateError(
     '050-Infra-foo.md',
@@ -1443,12 +1524,12 @@ test('upsertFrontmatterKey: a `----` line does not CLOSE a real block — the tr
 
 const CRLF_BODY = [
   '---',
-  "summary: 'Audit VetAtHome family render-store attributions: clinic-883 carries'",
+  "summary: 'Audit AcmeChain family render-store attributions: rec-883 carries'",
   'stage: stub',
   'execModel: sonnet',
   '---',
   '',
-  '# VetAtHome render-store section-crop attribution audit',
+  '# AcmeChain render-store section-crop attribution audit',
   '',
   sw('> 🟩 **SEED-WRITE: NO** — render-store artefacts only.'),
   '',
@@ -1459,7 +1540,7 @@ test('plan 1650: readFrontmatterKey parses a CRLF body identically to its LF twi
   assert.equal(readFrontmatterKey(CRLF_BODY, 'summary'), readFrontmatterKey(LF_BODY, 'summary'));
   assert.equal(
     readFrontmatterKey(CRLF_BODY, 'summary'),
-    'Audit VetAtHome family render-store attributions: clinic-883 carries',
+    'Audit AcmeChain family render-store attributions: rec-883 carries',
   );
 });
 
@@ -1471,7 +1552,7 @@ test('plan 1650: parsePlanMeta on CRLF must NOT fall back to the H1 (the 1647 dr
   assert.equal(crlfMeta.marker, lfMeta.marker);
   assert.notEqual(
     crlfMeta.summary,
-    'VetAtHome render-store section-crop attribution audit',
+    'AcmeChain render-store section-crop attribution audit',
     'the H1 fallback firing on CRLF is exactly the committed-vs-regen INDEX drift',
   );
 });
@@ -1880,7 +1961,7 @@ test('planNestingViolation: two levels, uppercase, and any category under archiv
   assert.match(planNestingViolation('parked', ['Denmark'], 'parked/Denmark/x.md'), /lowercase/);
   assert.match(planNestingViolation('archive', ['done'], 'archive/done/x.md'), /stays FLAT/);
   // The rule's own vocabulary, pinned so a future edit can't quietly widen it.
-  assert.ok(PLAN_CATEGORY_RX.test('price-pipeline'));
+  assert.ok(PLAN_CATEGORY_RX.test('data-pipeline'));
   assert.ok(!PLAN_CATEGORY_RX.test('Price'));
   assert.deepEqual(FLAT_ONLY_PLAN_FOLDERS, ['archive']);
 });

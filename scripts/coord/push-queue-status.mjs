@@ -7,7 +7,7 @@
 // (battery-lock, test-queue, vitest pool) all held; the amplification came from BLIND RETRIES,
 // because nothing told a session "your push is alive, position N in a machine-wide queue". This
 // probe is that surface: run it BEFORE any push retry (the rule lives in vetapp CLAUDE.md +
-// docs/runbooks/branch-hygiene.md § Push retry discipline).
+// docs/coord/worktrees.md § Push retry discipline).
 //
 // Aggregates the three places a silently-waiting push can be queued behind:
 //   1. battery-lock — the scripts/*.test.mjs battery mutex in the shared .git common dir

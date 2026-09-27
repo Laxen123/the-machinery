@@ -21,7 +21,7 @@
 //
 // SELECTION = union of three rules (operator ruling 2026-07-10: no always-run core list — pairing
 // + import closure suffices, and the full battery stays reachable via PREPUSH_FULL_BATTERY=1),
-// every one of them keyed on the scripts/-relative KEY (`board.mjs` flat, `coord/landing-lock.mjs`
+// every one of them keyed on the scripts/-relative KEY (`board.mjs` flat, `coord/landing-lock.mjs` (dangling-ok: a scripts/-relative KEY string, not a repo path)
 // nested) rather than a flat basename:
 //   (a) changed `scripts/**/*.test.mjs` themselves;
 //   (b) `<dir>/X.test.mjs` for each changed `<dir>/X.mjs` (name pairing) — this is what covers
@@ -55,10 +55,10 @@
 // Measured on the 101-file suite: a leaf module (`next-plan-id.mjs`) selects 2, `landing-lock.mjs`
 // 19, and the `coord-git.mjs` hub 58 — a hub SHOULD be wide, that is the closure working.
 // Re-measured on the 313-file suite after plan 4085 completed the closure: `next-plan-id.mjs` 34,
-// `hooks/chain-wiki-loader.mjs` 6, `coord/land/spine.mjs` 32, `coord/battery-pass-cache.mjs` 64,
-// `coord/gate-pass-cache.mjs` 64, `board.mjs` 124, `coord/landing-lock.mjs` 145,
-// `coord/coord-git.mjs` 211. The big movers are repairs, not width: `board.mjs` was selecting 12
-// while ~115 of 313 tests reach the drain machinery that SPAWNS it (`coord/queue-drain.mjs`, four
+// `hooks/chain-wiki-loader.mjs` 6, `coord/land/spine.mjs` 32, `coord/battery-pass-cache.mjs` 64, (dangling-ok: scripts/-relative KEY strings, not repo paths)
+// `coord/gate-pass-cache.mjs` 64, `board.mjs` 124, `coord/landing-lock.mjs` 145, (dangling-ok: scripts/-relative KEY strings, not repo paths)
+// `coord/coord-git.mjs` 211. The big movers are repairs, not width: `board.mjs` was selecting 12 (dangling-ok: scripts/-relative KEY string, not a repo path)
+// while ~115 of 313 tests reach the drain machinery that SPAWNS it (`coord/queue-drain.mjs`, four (dangling-ok: scripts/-relative KEY string, not a repo path)
 // `_exec` sites), so the old 12 was an under-selection the graph could not see.
 //
 // Rounds 6-7 then admitted the INLINE computed-directory spellings: the canonical
@@ -87,7 +87,7 @@
 // always-run set: plan 4085 § E1 measured the "always run what the graph cannot place" union and
 // found it transitively explosive (one flagged module took it from 54 to 229 of 311).
 // One harmless artifact of the real-tree read rule: a key is emitted for a path a test merely
-// SPELLS in an assertion string (`scripts/x.mjs` in battery-pass-cache.test.mjs), which is a dead
+// SPELLS in an assertion string (`scripts/<name>.mjs` in battery-pass-cache.test.mjs), which is a dead
 // node — nothing reads it and no delta can ever contain it. That is the same posture as the
 // long-standing `scripts/<name>.mjs` literal rule, and for the same reason: matching is on the
 // NAME, so a DELETED module still selects its dependents.
@@ -96,11 +96,12 @@
 // NAME, not on the file existing. Only the BFS *traversal* skips unreadable files.
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, posix, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readStdinResult } from './stdin-read.mjs';
 import { loadCoordConfig } from './coord-config.mjs';
 import { repoRootFrom } from './scripts-anchor.mjs';
+import { stripJs } from './strip-js.mjs';
 
 // Exit code meaning "I could not scope this delta — run the full battery." Distinct from 1 so a
 // future caller can tell a deliberate fall-back from an unexpected crash (both fail safe).
@@ -167,10 +168,10 @@ const SCRIPTS_DIR = 'scripts';
 export const SCRIPTS_DIR_DEFAULT = SCRIPTS_DIR;
 // A changed path this selector can turn into a graph KEY: a `.mjs` file under scripts/, at ANY
 // depth. Capture group 1 is the scripts/-relative key — `board.mjs` flat,
-// `coord/landing-lock.mjs` nested, `coord/land/spine.mjs` deeper — which is exactly the shape
+// `coord/landing-lock.mjs` nested, `coord/land/spine.mjs` deeper — which is exactly the shape (dangling-ok: scripts/-relative KEY strings, not repo paths)
 // listTestFiles() returns, resolveRefKey() resolves specifiers into, and referenceClosure() keys
 // its BFS nodes by. So a nested key drops straight into selectTests with no special-casing: rule
-// (b) pairs `coord/x.mjs` with `coord/x.test.mjs`, and rule (c) matches the closure node of the
+// (b) pairs `coord/x.mjs` with `coord/x.test.mjs`, and rule (c) matches the closure node of the (dangling-ok: scripts/-relative KEY strings, not repo paths)
 // same name.
 //
 // It was one level deep until plan 4076. That was written when scripts/ WAS flat and the nested
@@ -218,13 +219,13 @@ export const scriptModuleKey = (p) => {
 // at any depth is keyable (SCRIPT_PATH_RX above) and enters the graph; everything else nested
 // still bails — `scripts/hooks/pre-push.sh` and the other shell guards (shell the .husky/pre-push
 // dispatcher sources, which nothing imports, so they contribute no key), `scripts/coord/*.json`,
-// `scripts/coord/land/__golden__/*.txt`, `scripts/market-plan-templates/*.md`. The pre-push gate
+// `scripts/coord/land/__golden__/*.txt`, a project-side templates directory's `*.md` files. The pre-push gate
 // logic is the load-bearing case: a MIXED delta (scripts/board.mjs + scripts/hooks/pre-push.sh)
 // must still omit nothing, and it bails here because that path yields no key.
 //
 // A nested path whose segments fall outside SCRIPT_PATH_RX's character class also bails, which is
 // the fail-safe direction: SAFE_PATH_RX admits `[`/`]` (Next.js dynamic routes), so
-// `scripts/coord/[x].mjs` reaches this function, keys as null, and forces the full battery rather
+// `scripts/coord/[x].mjs` reaches this function, keys as null, and forces the full battery rather (dangling-ok: illustrates the literal bracket chars SAFE_PATH_RX admits)
 // than contributing a key the closure would never match.
 //
 // Deliberately NOT an EXTERNAL_TREE_PREFIXES entry: that list is dual-purpose and also defines
@@ -247,13 +248,13 @@ const SCRIPTS_MODULE_SHAPE_RX = /^scripts\/.*\.mjs$/;
 // unkeyable module happened to be nested):
 //   - a NESTED non-module: `scripts/hooks/pre-push.sh`, `scripts/coord/*.json`, a `__golden__`
 //     fixture. Nothing imports it, so it contributes no key and no test can be reached through it.
-//   - an UNKEYABLE MODULE at any depth, flat included: `scripts/[x].mjs` is accepted by
+//   - an UNKEYABLE MODULE at any depth, flat included: `scripts/[x].mjs` is accepted by (dangling-ok: illustrates the literal bracket chars SAFE_PATH_RX admits)
 //     parseChangedList (SAFE_PATH_RX admits `[`/`]` for Next.js routes) but falls outside
 //     SCRIPT_PATH_RX's charset, and a `.mjs` under `__golden__`/`node_modules` is excluded by
 //     isGraphKey. Left to drop out, such a path mixed with an ordinary module scoped to that
 //     module ALONE and silently omitted its own tests — an under-selection, the one error
 //     direction this module may never make.
-// A flat NON-module (`scripts/notes.md`) is neither: nothing imports it, it owns no tests, and it
+// A flat NON-module (`scripts/<name>.md`) is neither: nothing imports it, it owns no tests, and it
 // has never forced the battery. Keeping it out is what stops this guard from degenerating into
 // "any scripts/ touch runs everything".
 //
@@ -279,7 +280,7 @@ export const hasNestedScriptChange = (paths) => paths.some(isUnkeyableScriptPath
 // `scripts/*.test.mjs` for `join(REPO…, '<segment>', …)` and FAILS when a test starts reading a
 // real-tree path no prefix here covers. Add the prefix (or make the test use a fixture) — never
 // silence the guard.
-// plan 3962 P1: the coord-kit-generic bail-out roots. `backend/` (vetapp's own price-pipeline
+// plan 3962 P1: the coord-kit-generic bail-out roots. `backend/` (vetapp's own data-pipeline
 // stores + backend test fixtures no scripts/*.mjs file imports) moved to coord.config.json's
 // `externalTreePrefixes` key — see EXTERNAL_TREE_PREFIXES below, which is this default PLUS the
 // project's additions. Every other entry here is coord-kit convention (the plan/handoff/hook
@@ -320,8 +321,8 @@ export const touchesExternalTree = (paths) =>
 // The two join-idiom shapes that mean "this test reads the REAL repo tree" — the SINGLE
 // definition shared by the EXTERNAL_TREE_PREFIXES guard in select-battery-tests.test.mjs and by
 // battery-pass-cache's per-selection prefix attribution (plan 2279). Capture group 1 is the
-// first real-tree ARGUMENT, which is the first segment only when the test wrote the path
-// segment-wise; a slash-joined literal captures the whole path (see realTreeFirstSegment).
+// first real-tree ARGUMENT. realTreeReadPaths expands further quoted arguments so segment-wise
+// and slash-joined paths have the same full-prefix coverage check.
 // Shared so the guard and the attribution scan can never drift: a new
 // idiom added here widens BOTH in lockstep (a guard-only widening would silently un-key a prefix
 // a real test reads). Safe to share as /g regexes — every consumer uses matchAll, which never
@@ -350,59 +351,85 @@ export const repoRootAlt = (withHere = false) =>
     .map(escapeForRegExp)
     .join('|')})`;
 
+const STATIC_JOIN_PART = '[\'"`]([^\'"`$]+)[\'"`]';
+const STATIC_TRAVERSAL_PART = '[\'"`]\\.\\.[\'"`]';
 export const REAL_TREE_JOIN_IDIOMS = Object.freeze([
-  new RegExp(`\\bjoin\\(\\s*(?:${REPO_ROOT_NAME_ALT})\\s*,\\s*'([^']+)'`, 'g'),
+  new RegExp(`\\bjoin\\(\\s*(?:${REPO_ROOT_NAME_ALT})\\s*,\\s*${STATIC_JOIN_PART}`, 'g'),
   new RegExp(
-    `\\bjoin\\(\\s*(?:${REPO_ROOT_NAME_ALT}|HERE)\\s*,\\s*'\\.\\.'\\s*,\\s*'([^']+)'`,
+    `\\bjoin\\(\\s*(?:${REPO_ROOT_NAME_ALT}|HERE)\\s*,\\s*${STATIC_TRAVERSAL_PART}\\s*,\\s*${STATIC_JOIN_PART}`,
     'g',
   ),
 ]);
 
-// The first PATH SEGMENT of a REAL_TREE_JOIN_IDIOMS capture. A test may spell the same real-tree
-// read either segment-wise — join(REPO, 'backend', 'scripts', '_seed_validation.py') — or
-// slash-joined in one literal — join(REPO, 'backend/scripts/_seed_validation.py'). Both mean the
-// same read, so EXTERNAL_TREE_PREFIXES coverage must judge them identically, by the first segment:
-// every entry in that list is a PREFIX (touchesExternalTree matches with startsWith), so a covered
-// path is exactly one whose first segment names an entry.
-//
-// Plan 3969 (found while landing that plan; the defect is plan 3954's): the guard compared the RAW
-// capture against first-segment names, so the slash-joined form could match no entry at all.
-// `spawn-failure-signatures.test.mjs`'s join(REPO_ROOT, 'backend/scripts/_seed_validation.py') was
-// reported as uncovered even though `backend/` covers it — a FALSE POSITIVE that turned the
-// scripts battery red on origin/master for every `scripts/**` push.
-//
-// A capture containing a `..` segment resolves OUT of its first segment, so its first segment says
-// nothing about what is actually read: 'backend/../frontend/src/page.tsx' would read under
-// `frontend/` while presenting as covered by `backend/`. Narrowing must never be the reason an
-// uncovered read passes, so a traversal capture returns a sentinel that is in no allow-set and is
-// therefore always an offender — the selector's fail-safe direction (over-include) is preserved.
-// Review finding 9afa71 (plan 3969, gpt-review round 1) caught this in the first cut, which
-// reduced the capture unconditionally.
-export const realTreeFirstSegment = (captured) => {
-  const path = String(captured);
-  if (path.split('/').includes('..')) return `../ traversal: ${path}`;
-  return path.split('/')[0];
-};
+// Expand consecutive quoted join arguments so a segment-wise spelling has the same full path
+// as a slash-joined literal. A variable argument ends the known prefix conservatively.
+export function realTreeReadPaths(src, testPath = null) {
+  const paths = [];
+  // The shared JS scanner knows regex literals and nested template interpolation. One pass
+  // leaves static path strings intact for matching; the other blanks them so a join written
+  // inside a fixture string cannot masquerade as executable code.
+  const withStrings = stripJs(src, { blankStrings: false });
+  const codeOnly = stripJs(src, { blankStrings: true });
+  for (const [idiomIndex, idiom] of REAL_TREE_JOIN_IDIOMS.entries()) {
+    for (const m of withStrings.matchAll(idiom)) {
+      if (codeOnly[m.index] === ' ') continue;
+      const parts = [m[1]];
+      let at = m.index + m[0].length;
+      while (at < src.length) {
+        const separator = /^\s*,\s*/.exec(src.slice(at));
+        if (!separator) break;
+        at += separator[0].length;
+        const quote = src[at];
+        if (!'\'"`'.includes(quote)) break;
+        at++;
+        let value = '';
+        while (at < src.length && src[at] !== quote) {
+          if (src[at] === '\\' && at + 1 < src.length) at++;
+          value += src[at++];
+        }
+        if (src[at] !== quote) break;
+        at++;
+        parts.push(value);
+      }
+      let path = parts.join('/').replaceAll('\\', '/');
+      // HERE is the test file's own directory, while the second idiom already consumes
+      // one '..' argument. Resolve that known base so a nested test reading scripts/hooks/
+      // is covered by the scripts gate. Other traversal captures still fail closed.
+      if (idiomIndex === 1 && testPath && /^join\(\s*HERE\b/.test(m[0])) {
+        path = posix.normalize(posix.join(posix.dirname(`scripts/${testPath}`), '..', path));
+      }
+      paths.push({ path, viaDotDot: idiomIndex === 1 });
+    }
+  }
+  return paths;
+}
 
-// The offenders a source file contributes to the EXTERNAL_TREE_PREFIXES guard: every real-tree
-// read whose first segment is outside `allowedFirstSegments`. Pure and exported so the guard's
-// own behaviour is unit-testable in BOTH directions against injected source, rather than only
-// observable through a scan of the live scripts/ tree.
-export function realTreeReadOffenders(src, allowedFirstSegments) {
-  const offenders = [];
-  for (const [i, idiom] of REAL_TREE_JOIN_IDIOMS.entries())
-    for (const m of src.matchAll(idiom))
-      if (!allowedFirstSegments.has(realTreeFirstSegment(m[1])))
-        offenders.push(`${m[1]}${i === 1 ? " (via '..')" : ''}`);
-  return offenders;
+// Coverage is per TEST: a broad mapping for one test cannot hide an unmapped read in another.
+// Traversal captures fail closed even when their textual prefix looks covered.
+export function realTreeReadOffenders(src, externalPrefixes, dataGlobs = [], testPath = null) {
+  return realTreeReadPaths(src, testPath)
+    .filter(
+      ({ path }) =>
+        path.split('/').includes('..') ||
+        !(
+          path === 'scripts' ||
+          path.startsWith('scripts/') ||
+          externalPrefixes.some(
+            (prefix) =>
+              path === prefix || path === prefix.replace(/\/$/, '') || path.startsWith(prefix),
+          ) ||
+          dataGlobs.some((glob) => matchesDataGlob(path, glob))
+        ),
+    )
+    .map(({ path, viaDotDot }) => `${path}${viaDotDot ? " (via '..')" : ''}`);
 }
 // A path that is plausibly a repo-relative file. Anything else means the caller handed us garbage
 // (or a NUL-separated / shell-mangled list) and we must not pretend to have scoped it.
 //
 // Plan 2670 — `[` and `]` are legal here: every Next.js App Router dynamic segment carries them
-// (`frontend/src/app/veterinar/[city]/klinik/[clinic]/page.tsx`), so rejecting them made the
+// (`frontend/src/app/section/[city]/detail/[record]/page.tsx`), so rejecting them made the
 // COMMONEST frontend diff shape unscopeable. The throw fails SAFE — the CLI turns it into
-// EXIT_RUN_FULL — so the symptom was silent over-running, not a miss: a routine clinic-profile
+// EXIT_RUN_FULL — so the symptom was silent over-running, not a miss: a routine record-profile
 // diff that maps to ZERO data-triggered tests instead ran every mapped test, and any pre-existing
 // red among them blocked a push it had nothing to do with. These paths are only ever MATCHED
 // against the dependency maps, never interpolated into a shell command, so widening the class
@@ -426,7 +453,7 @@ export function parseChangedList(stdin) {
 }
 
 // The changed `scripts/**/*.mjs` KEYS (e.g. `coord-git.mjs`, `board.test.mjs`,
-// `coord/landing-lock.mjs`, `coord/select-battery-tests.test.mjs`) — flat and nested, module and
+// `coord/landing-lock.mjs`, `coord/select-battery-tests.test.mjs`) — flat and nested, module and (dangling-ok: scripts/-relative KEY strings, not repo paths)
 // test alike, in the one shape every other half of this module already speaks. A path this
 // selector cannot key contributes nothing here; when it is NESTED, hasNestedScriptChange above has
 // already forced the full battery, so "contributes nothing" is never how an unkeyable nested path
@@ -442,7 +469,7 @@ export function changedScriptBasenames(paths) {
 
 export const isTestFile = (basename) => basename.endsWith('.test.mjs');
 
-// `scripts/foo.mjs` → `foo.test.mjs`. Undefined for a file that already IS a test.
+// `scripts/<name>.mjs` → `<name>.test.mjs`. Undefined for a file that already IS a test.
 export function pairedTestFor(basename) {
   if (isTestFile(basename)) return undefined;
   return basename.replace(/\.mjs$/, '.test.mjs');
@@ -483,18 +510,18 @@ export function selfDirNames(source) {
 
 // A binding whose self-dir expression is immediately TRANSFORMED by a method call or property
 // access — `const SCRIPTS_DIR = import.meta.dirname.replace(/[\\/]coord[\\/]land$/, '')`
-// (coord/land/gates-runner.mjs:1984). SELF_DIR_BINDING_RX matches it: its `import\.meta\.dirname\b`
+// (coord/land/gates-runner.mjs:1984). SELF_DIR_BINDING_RX matches it: its `import\.meta\.dirname\b` (dangling-ok: scripts/-relative KEY string, not a repo path)
 // alternative stops before the `.`, so the transform was silently IGNORED and the name resolved as
 // the module's own bare directory. From `scripts/coord/land` that emitted
-// `coord/land/battery-pass-cache.mjs` — a file that exists nowhere, while the real target is
-// `coord/battery-pass-cache.mjs` reached through the plan-3962 compat shim. A WRONG edge, not a
+// `coord/land/battery-pass-cache.mjs` — a file that exists nowhere, while the real target is (dangling-ok: illustrates a deliberately WRONG/phantom edge, not a real path)
+// `coord/battery-pass-cache.mjs` reached through the plan-3962 compat shim. A WRONG edge, not a (dangling-ok: scripts/-relative KEY string, not a repo path)
 // missing one, which is worse: it looks resolved to both halves of this module (plan 4085, row
 // 2f9ccd; measured, not read).
 // Both spellings of "a method call or property access follows": the dotted `.replace(…)` and the
 // equivalent BRACKET access `import.meta.dirname['replace'](…)`, which a `.`-only tail missed and
 // so classified PLAIN — re-emitting the very phantom edge this split exists to kill, under a
 // different spelling (/gpt-review round 6, 3e0b53; reproduced: `plain=["S"]` with the sibling
-// matcher emitting `coord/land/worker.mjs` and `selectTests` returning []).
+// matcher emitting `coord/land/worker.mjs` and `selectTests` returning []). (dangling-ok: illustrates a deliberately WRONG/phantom edge, not a real path)
 //
 // Erring toward TRANSFORMED is the safe direction: a binding wrongly called transformed loses
 // `./<name>` resolution and routes to the basename fallback, which over-approximates (every home
@@ -739,7 +766,7 @@ export function indexWithKeys(index, keys) {
 
 // A module path built from a directory this module CANNOT resolve, but whose basename is a plain
 // literal: `join(spineDir, 'done-worktree.mjs')` where spineDir is a function PARAMETER
-// (coord/land/parity.test.mjs, row ad3a41), or `` `${SCRIPTS_DIR}/battery-pass-cache.mjs` `` where
+// (coord/land/parity.test.mjs, row ad3a41), or `` `${SCRIPTS_DIR}/battery-pass-cache.mjs` `` where (dangling-ok: scripts/-relative KEY string, not a repo path)
 // SCRIPTS_DIR is a TRANSFORMED self-dir binding (row 2f9ccd). Capture 1 is the identifier, capture
 // 2 the basename; a plain self-dir name is filtered out in JS because it already resolved above.
 //
@@ -752,8 +779,8 @@ export function indexWithKeys(index, keys) {
 // with no home under scripts/ yields no edge at all, so a fixture directory holding no modules
 // contributes nothing.
 //
-// MEASURED (plan 4085 E2/E3, on the 311-test tree): hub widths move +1 (`coord/coord-git.mjs`
-// 208->209) to +5 (`coord/landing-lock.mjs` 135->140). The one large move is the LEAF
+// MEASURED (plan 4085 E2/E3, on the 311-test tree): hub widths move +1 (`coord/coord-git.mjs` (dangling-ok: scripts/-relative KEY string, not a repo path)
+// 208->209) to +5 (`coord/landing-lock.mjs` 135->140). The one large move is the LEAF (dangling-ok: scripts/-relative KEY string, not a repo path)
 // `next-plan-id.mjs`, 6->22, and all 16 added tests trace to a single real construction site —
 // `drain-run.mjs`'s `join(scriptsDir, 'next-plan-id.mjs')`, a genuine spawn of that CLI. So the
 // pre-shape 6 was an UNDER-selection this shape repairs, not width this shape invents.
@@ -761,11 +788,11 @@ export function indexWithKeys(index, keys) {
 // Considered and REJECTED as the backstop for these rows: the "always run what the graph cannot
 // place" union (this plan's own § The fork). Its membership rule is transitive through the
 // PERMISSIVE closure, so teaching the classifier the row-2 shape — which flags exactly ONE module,
-// coord/land/gates-runner.mjs — took the always-run set from 54 to 229 of 311 (17.4% -> 73.6%), and
+// coord/land/gates-runner.mjs — took the always-run set from 54 to 229 of 311 (17.4% -> 73.6%), and (dangling-ok: scripts/-relative KEY string, not a repo path)
 // the row-3 shape to 240 (77.2%). A directed edge is the cheap direction here and an UNRESOLVABLE
 // classification the expensive one, which inverts the usual demotion ladder: see plan 4085 § E1.
 // Capture 2 is the whole ARGUMENT RUN, so a segment-wise `join(spineDir, 'coord', 'x.mjs')` is
-// read identically to the packed `join(spineDir, 'coord/x.mjs')` — the plan-3969 lesson, which the
+// read identically to the packed `join(spineDir, 'coord/x.mjs')` — the plan-3969 lesson, which the (dangling-ok: scripts/-relative KEY string, not a repo path)
 // first cut applied to the repo-root rule only (/gpt-review round 1, findings 0719d8 / abe465).
 const UNKNOWN_DIR_JOIN_RX = new RegExp(
   `\\b(?:join|resolve)\\(\\s*([A-Za-z_$][A-Za-z0-9_$]*)\\s*,\\s*(${ARG_RUN})${ARG_RUN_END}`,
@@ -870,7 +897,7 @@ const FS_WRITE_JOIN_RX = new RegExp(
 
 // A REAL-TREE read of a scripts/ module, spelled off a repo-root binding — segment-wise
 // `join(REPO_ROOT, 'scripts', 'hooks', 'chain-wiki-loader.mjs')` (wiki-chain-registry.test.mjs:44,
-// row 3a0ae6) or slash-joined `join(REPO, 'scripts/hooks/x.mjs')`. Several tests reach a module
+// row 3a0ae6) or slash-joined `join(REPO, 'scripts/hooks/<name>.mjs')`. Several tests reach a module
 // ONLY this way: they read it as SOURCE TEXT and assert on it, so there is no import, no spawn
 // literal and no name-pair. REAL_TREE_JOIN_IDIOMS could not serve — it captures the FIRST argument
 // only, which for the segment-wise spelling is the bare string `scripts`, and its job is the
@@ -883,7 +910,7 @@ const REAL_TREE_SCRIPTS_JOIN_RX = new RegExp(
 
 // The scripts/-relative key for such an argument run, or null when it does not name one. Segments
 // are re-joined and re-split so the segment-wise and slash-joined spellings are judged identically
-// (the plan-3969 lesson from realTreeFirstSegment, applied to extraction rather than coverage): a
+// (the plan-3969 lesson from the former first-segment guard, applied to extraction): a
 // run must start at `scripts` and carry no `..`, since a traversal leaves the tree this graph
 // models.
 // The quoted segments of an argument run, flattened: `'scripts', 'hooks/x.mjs'` and
@@ -930,7 +957,7 @@ export function parseScriptsRootSegments(argRun) {
 // see unresolvedScriptRefReason below for the classification the other consumer applies.
 // plan 3959 review (8bd25c): resolve a relative specifier against the importing module's OWN
 // scripts/-relative directory, yielding the same forward-slash key shape listTestFiles() returns
-// (`coord/x.test.mjs` nested, `board.test.mjs` flat). Returns null when the specifier walks out of
+// (`coord/x.test.mjs` nested, `board.test.mjs` flat). Returns null when the specifier walks out of (dangling-ok: scripts/-relative KEY string, not a repo path)
 // scripts/ entirely — that is not an edge this graph models.
 //
 // Before this, addSpecifier understood ONLY `./sibling.mjs` and dropped everything else, which was
@@ -984,7 +1011,7 @@ export function extractScriptRefs(
   for (const line of lines) {
     if (!entryLiterals && !SPAWN_CALL_RX.test(line)) continue;
     // plan 3959 review round 2 (6e09d3): match a NESTED spawn literal too
-    // (`scripts/coord/outer.mjs`), whose key is the whole `coord/outer.mjs` remainder. This path is
+    // (`scripts/coord/<name>.mjs`), whose key is the whole `coord/<name>.mjs` remainder. This path is
     // repo-root-relative, so unlike addSpecifier it never resolves against fromDir. Flat literals
     // are the same single-segment case and are unchanged.
     for (const m of line.matchAll(/scripts\/((?:[A-Za-z0-9._-]+\/)*[A-Za-z0-9._-]+\.mjs)/g))
@@ -1002,7 +1029,7 @@ export function extractScriptRefs(
   // change ran neither done-worktree.test.mjs nor done-worktree-land.test.mjs. Whole-source
   // matching also catches the multi-line `join(\n  HERE,\n  'x.mjs',\n)` prettier produces.
   // Same plan-3959 resolution as addSpecifier: these two spellings name a SELF-DIR sibling, so from
-  // a nested module they mean `coord/x.mjs`, not a flat `x.mjs` that exists nowhere. (The bare
+  // a nested module they mean `coord/x.mjs`, not a flat `x.mjs` that exists nowhere. (The bare (dangling-ok: scripts/-relative KEY string, not a repo path)
   // `scripts/<name>.mjs` literal above is repo-root-relative, always flat, and stays as matched.)
   const code = lines.join('\n');
   // plan 4085: the RESOLVER sees only untransformed bindings. A transformed one names a directory
@@ -1067,7 +1094,7 @@ export function extractScriptRefs(
 // produce. This function is that consumer's widen trigger.
 //
 // WHAT COUNTS AS UNRESOLVABLE is derived from extractScriptRefs, not guessed at: every spelling it
-// CAN follow (`'./x.mjs'`, `'scripts/x.mjs'`, `new URL('./x.mjs', …)`, `join(HERE, 'x.mjs')`) ends
+// CAN follow (`'./x.mjs'`, `'scripts/<name>.mjs'`, `new URL('./x.mjs', …)`, `join(HERE, 'x.mjs')`) ends
 // in a plain quoted literal. So the unresolvable shapes are exactly the same construct sites with
 // a NON-literal argument, plus a sibling path assembled at runtime. Note what is NOT here: the
 // SPAWN CALL itself. A spawn's command argument is `'node'` or `process.execPath` (34 files) —
@@ -1077,7 +1104,7 @@ export function extractScriptRefs(
 //
 // EVERY rule below is tuned against the real 354-file tree, and the tuning axis is always the same:
 // this codebase's error strings, usage banners and module headers are dense PROSE about sibling
-// scripts ("Run: node scripts/generate-bcv-bundle-services.mjs", "…, scripts/**), run /sonnet-review
+// scripts ("Run: node scripts/<a-project-side-tool>.mjs", "…, scripts/**), run /sonnet-review
 // …"). A rule that fires on prose fires on ~a fifth of the tree and no-ops the narrowing — the exact
 // shape of plan 2560's finding 1. So each rule matches the CONSTRUCTION of a path whose BASENAME is
 // computed, never the mere co-occurrence of `scripts/` or `.mjs` with a dynamic token.
@@ -1102,7 +1129,7 @@ const DYNAMIC_URL_RX = /\bnew\s+URL\(\s*(?!['"]|\s|\.)[^;\n]*?,\s*import\.meta\.
 // name too (`'…/plans/in-progress/' + slug`, drain-run.mjs) and those are not module paths.
 const CONCAT_PATH_RX = /['"](?:\.{0,2}\/|[^'"\n]*scripts\/)['"]\s*\+|\+\s*['"]\.mjs['"]/;
 // An interpolation INSIDE a .mjs path — `` `scripts/${name}.mjs` ``, `` `${dir}/${n}.mjs` ``.
-// Prose that interpolates NEAR a path (`Run: node scripts/x.mjs ${flag}`) does not match: the
+// Prose that interpolates NEAR a path (`Run: node scripts/<name>.mjs ${flag}`) does not match: the
 // `${…}` must be part of the path itself. `/` is in the trailing class so a separator between the
 // interpolation and the basename does not hide the shape (/sonnet-review high, plan 2578).
 const TEMPLATE_PATH_RX = /\$\{[^{}]*\}[A-Za-z0-9._\-/]*\.mjs/;
@@ -1209,7 +1236,7 @@ export function referenceClosure(
       refs = refsCache.get(cur);
     } else {
       const src = readSource(cur);
-      // plan 3959: a node's key carries its directory (`coord/x.test.mjs`), and that directory is
+      // plan 3959: a node's key carries its directory (`coord/x.test.mjs`), and that directory is (dangling-ok: scripts/-relative KEY string, not a repo path)
       // what its own relative specifiers resolve against. Flat nodes pass '' and behave exactly as
       // before. Cache stays sound: fromDir is derived from `cur`, which IS the cache key.
       const curDir = cur.includes('/') ? cur.slice(0, cur.lastIndexOf('/')) : '';
@@ -1309,7 +1336,7 @@ export const DEFAULT_DATA_DEPENDENCY_MAP = {
   // suite selected when a future Claude registration or Codex adapter changes,
   // even if no scripts/*.mjs file is in that push.
   'build-codex-skills.test.mjs': [
-    'scripts/codex-skills.json',
+    'scripts/codex-skills.json', // dangling-ok: trigger row for a project-side generator test; inert when that test is absent
     '.agents/skills/**',
     'coord/skills/**',
     '.claude/commands/**',
@@ -1457,8 +1484,8 @@ export function readExcludeRanFile(path) {
 // --- fs seam ----------------------------------------------------------------
 
 // plan 3959 T1: recursive discovery — walks scripts/** (skipping node_modules/, test-helpers/, and
-// any __golden__/, at any depth) so a test co-located with a nested module (scripts/coord/x.test.mjs)
-// is discoverable at all. Returns forward-slash relative names, `coord/x.test.mjs` for a nested
+// any __golden__/, at any depth) so a test co-located with a nested module (scripts/coord/<name>.test.mjs)
+// is discoverable at all. Returns forward-slash relative names, `coord/x.test.mjs` for a nested (dangling-ok: scripts/-relative KEY string, not a repo path)
 // file and `board.test.mjs` for a flat one — the SAME shape toScriptPaths' `${SCRIPTS_DIR}/${b}`
 // string-concat already expects for either case, and (since plan 4076) the SAME shape
 // changedScriptBasenames above produces for every changed .mjs at any depth, so a nested entry's
@@ -1550,7 +1577,7 @@ export function main() {
     // Name the path that actually triggered it, and describe the real reason rather than assuming
     // the commonest one. The old wording said "a NESTED path that is not a .mjs module", which
     // lies for the two unkeyable-MODULE cases (a `.mjs` under `__golden__`/`node_modules`, and a
-    // flat bracketed `scripts/[x].mjs`) and sent triage looking for a shell file that is not in
+    // flat bracketed `scripts/[x].mjs`) and sent triage looking for a shell file that is not in (dangling-ok: illustrates the literal bracket chars SAFE_PATH_RX admits)
     // the delta (/gpt-review round 2, finding 39a701).
     const offenders = paths.filter(isUnkeyableScriptPath);
     console.error(

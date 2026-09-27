@@ -31,6 +31,7 @@ import {
   toPosixRelative,
   readGreenSet,
   mergeGreenFiles,
+  readDurations,
   remainingSelection,
   // plan 3318 — chunk convergence: the stall signal, its persistence, and the ordering it drives.
   stalledPytestFiles,
@@ -688,6 +689,41 @@ function freshLedgerDir(prefix = 'battery-ledger-fs-') {
 
 const KEY_A = 'a'.repeat(32);
 const KEY_B = 'b'.repeat(32);
+
+// plan 4236 T5: per-file wall time round-trips through the ledger, and every other whole-record
+// writer carries it rather than erasing it.
+test('plan 4236 T5: durations parse from reporter lines, persist via mergeGreenFiles, survive a stall write', () => {
+  const text =
+    '{"file":"/r/scripts/a.test.mjs","passed":true,"durationMs":1234}\n' +
+    '{"file":"/r/scripts/b.test.mjs","passed":false,"durationMs":99}\n' +
+    '{"file":"/r/scripts/old.test.mjs","passed":true}\n'; // a pre-4236 line: no duration
+  const ev = parseLedgerEvents(text);
+  assert.deepEqual(
+    [...ev.durations],
+    [
+      ['/r/scripts/a.test.mjs', 1234],
+      ['/r/scripts/b.test.mjs', 99],
+    ],
+  );
+  const dir = freshLedgerDir();
+  mergeGreenFiles(dir, KEY_A, new Set(['scripts/a.test.mjs']), at(0), undefined, {
+    durations: { 'scripts/a.test.mjs': 1234, 'scripts/b.test.mjs': 99 },
+  });
+  assert.deepEqual(readDurations(dir, KEY_A, at(1)), {
+    'scripts/a.test.mjs': 1234,
+    'scripts/b.test.mjs': 99,
+  });
+  // last duration wins; untouched files keep theirs
+  mergeGreenFiles(dir, KEY_A, new Set(['scripts/c.test.mjs']), at(2), undefined, {
+    durations: { 'scripts/a.test.mjs': 50 },
+  });
+  mergeStalledFiles(dir, KEY_A, new Set(['scripts/d.test.mjs']), at(3));
+  assert.deepEqual(readDurations(dir, KEY_A, at(4)), {
+    'scripts/a.test.mjs': 50,
+    'scripts/b.test.mjs': 99,
+  });
+  assert.deepEqual(readDurations(dir, KEY_B, at(4)), {}, 'an unwritten key reads as empty');
+});
 
 test('readGreenSet: a never-written key reads as empty, never throws', () => {
   const dir = freshLedgerDir();
@@ -1972,11 +2008,14 @@ test('EMPIRICAL: relative invocation — the reporter emits exactly one green li
     writePassFile(dir, 'ok.test.mjs');
     writeFailFile(dir, 'bad.test.mjs');
     const { out } = runReporterOnly(dir, ['ok.test.mjs', 'bad.test.mjs']);
-    const { passed, failed } = parseLedgerEvents(out);
+    const { passed, failed, durations } = parseLedgerEvents(out);
     assert.equal(passed.size, 1);
     assert.equal(failed.size, 1);
     assert.ok([...passed][0].endsWith('ok.test.mjs'));
     assert.ok([...failed][0].endsWith('bad.test.mjs'));
+    // plan 4236 T5: every file line carries its own wall time (a finite, non-negative ms figure)
+    assert.equal(durations.size, 2);
+    for (const ms of durations.values()) assert.ok(Number.isInteger(ms) && ms >= 0, String(ms));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -2473,9 +2512,9 @@ test('unmappedClosurePaths: a pytest closure path the selector does not map forc
   // reads through _seed_io) but nothing under it is on _select_tests.py's stdin. Spelled with a
   // NON-seed path on purpose: assert-seed-io-seam reads a quoted path into the sharded seed tree
   // as a direct open, and this is a delta-list string, not a file this test ever touches.
-  const delta = ['backend/scripts/a.py', 'backend/src/data/clinic-index.json'];
+  const delta = ['backend/scripts/a.py', 'backend/src/data/record-index.json'];
   assert.deepEqual(unmappedClosurePaths(delta, PYTEST_CLOSURE, VETAPP_PYTEST_SELECTOR.prefix), [
-    'backend/src/data/clinic-index.json',
+    'backend/src/data/record-index.json',
   ]);
 });
 

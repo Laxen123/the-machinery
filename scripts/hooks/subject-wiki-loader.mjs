@@ -2,23 +2,24 @@
 // scripts/hooks/subject-wiki-loader.mjs — UserPromptSubmit hook (plan 1254).
 //
 // The generic PLATFORM + INSPECTOR analogue of chain-wiki-loader.mjs. Those subjects
-// (wiki/entities/platforms/*.md — Provet Cloud, vetmanager, bokadirekt, … — and the
-// non-price inspector pages wiki/entities/inspectors/{homepage,booking,clinic-profile}-
-// inspector.md) previously had NO loader: they relied on the prose "pickup mapping" rule
-// in CLAUDE.md, i.e. on the model remembering to read the page — the exact failure mode
-// the loaders exist to remove. This closes that coverage gap.
+// (wiki/entities/platforms/*.md — a booking platform, a scheduling platform, a
+// marketplace platform, … — and the non-price inspector pages wiki/entities/inspectors/
+// {homepage,booking,record-profile}-inspector.md) previously had NO loader: they relied
+// on the prose "pickup mapping" rule in CLAUDE.md, i.e. on the model remembering to read
+// the page — the exact failure mode the loaders exist to remove. This closes that
+// coverage gap.
 //
 // Matcher source is the page's own `aliases:` frontmatter (a curated phrase list), so
 // registering a page = it lights up; no hook edit. Mirrors the file-derived spirit of
-// clinic-wiki-loader. Keyed by PAGE SLUG in the SHARED `subjects` marker root, so it
-// dedupes against path-wiki-loader (a file touch) and price-pipeline-loader — an overlap
-// can never double-inject.
+// a per-record loader. Keyed by PAGE SLUG in the SHARED `subjects` marker root, so it
+// dedupes against path-wiki-loader (a file touch) and a project's own fixed-page
+// loaders — an overlap can never double-inject.
 //
 // Design (mirrors the sibling loaders):
 //   - Fires on EVERY prompt (UserPromptSubmit); a subject is as often named mid-thread.
 //   - Injects each page AT MOST ONCE per session (shared marker keyed session_id + slug).
-//   - price-inspector is EXCLUDED (DEDICATED): it keeps its dedicated
-//     price-pipeline-loader.mjs, whose TRIGGER regex is far richer than a flat alias list.
+//   - A dedicated-subject page can be EXCLUDED here (DEDICATED): it keeps its own richer
+//     loader, whose TRIGGER regex is far richer than a flat alias list.
 //   - Fails OPEN + SILENT: bad/missing stdin, unparseable payload → empty stdout, exit 0.
 //
 // matchSubjects / buildSubjectIndex are exported for unit tests; selectFresh +
@@ -28,7 +29,7 @@
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  readStdin,
+  runHookCli,
   markerDirFor,
   alreadyInjected,
   markInjected,
@@ -38,11 +39,12 @@ import {
   scanEntityPages,
   subjectPageDirs,
   CACHE_ROOTS,
-  emitInjection,
+  injectionEnvelope,
   parseSessionId,
   isRelayedAgentTurn,
   renderPageBlocks,
 } from './lib/loader-common.mjs';
+import { loadCoordConfig } from '../coord/coord-config.mjs';
 
 // Compatibility re-export for stop-loader composition and its tests; implementation lives
 // only in loader-common.
@@ -57,28 +59,38 @@ const CACHE_ROOT = CACHE_ROOTS.subjects;
 const SUBJECT_DIRS = subjectPageDirs(REPO_ROOT);
 
 // Pages owned by a DEDICATED loader — skip them here so the richer loader stays canonical
-// (price-inspector → price-pipeline-loader.mjs). Belt-and-suspenders even so: all three
-// subject loaders share ONE marker root keyed by slug, so an overlap can't double-inject.
+// (a project's own dedicated-subject loader, e.g. one pinned to its own pipeline concept
+// page). Belt-and-suspenders even so: all three subject loaders share ONE marker
+// root keyed by slug, so an overlap can't double-inject.
 const DEDICATED = new Set(['price-inspector']);
 
 // Normalized alias must be ≥ this many chars to be eligible — a light guard against an
-// accidental ultra-short alias. Curated single-word BRANDS (atjoo/acuity/muntra/…) are
-// legitimate, so — unlike the seed-derived clinic loader — we do NOT require ≥2 words.
+// accidental ultra-short alias. Curated single-word BRANDS are legitimate, so — unlike
+// the seed-derived per-record loader — we do NOT require ≥2 words.
 const MIN_ALIAS_LEN = 4;
 
 // Bare generic tokens that must NEVER fire even if a page mis-declares one as an alias
-// (matched against the WHOLE normalized alias, so a real phrase like "provet cloud" is
-// unaffected). "provet" alone is Swedish for "the test/sample" — deny it. Mirrors
-// chain-wiki's GENERIC_DENY.
+// (matched against the WHOLE normalized alias, so a real multi-word phrase containing one is
+// unaffected). Mirrors chain-wiki's GENERIC_DENY.
+//
+// plan 4172: the project's OWN deny words — its record noun, and a product name that is also
+// a common word in the project's language — are coord.config.json's `wikiAliasDeny`, added to
+// the generic set here. An unreadable config adds nothing (fail-open: a prompt hook never throws).
+export function configuredAliasDeny(repoRoot) {
+  try {
+    return loadCoordConfig(repoRoot).wikiAliasDeny ?? [];
+  } catch {
+    return [];
+  }
+}
 const GENERIC_DENY = new Set([
   'booking',
   'profile',
   'homepage',
-  'clinic',
   'price',
   'inspector',
   'platform',
-  'provet',
+  ...configuredAliasDeny(REPO_ROOT),
 ]);
 
 // Build the match index: one entry per page (via the shared scanEntityPages) with its
@@ -148,15 +160,11 @@ export function toStopEntries(shown) {
   }));
 }
 
-function main() {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
+// The hook's whole outcome as DATA (plan 4238): the injection envelope it would print,
+// or undefined for silence. Marker/dedup side effects happen here exactly as before the fold.
+// The in-process UserPromptSubmit dispatcher (prompt-wiki-dispatch.mjs) calls this; the
+// CLI below is a thin wrapper that prints it.
+export function evaluateHook(payload) {
   const prompt = String(payload?.prompt ?? '');
   if (!prompt || isRelayedAgentTurn(prompt)) return;
 
@@ -172,13 +180,13 @@ function main() {
     `(and wiki/log.md) if you learn something durable.\n`;
   const blocks = renderPageBlocks(shown.map((page) => ({ ...page, hasFrontmatter: false })));
 
-  emitInjection(header + blocks, `📄 subject-wiki: loaded ${labels} (once per session)`);
+  return injectionEnvelope(header + blocks, `📄 subject-wiki: loaded ${labels} (once per session)`);
 }
 
 // Run main() only when invoked directly, so importing for tests never reads stdin.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await runHookCli(evaluateHook);
   } catch {
     // fail open — a prompt hook must never break the turn
   }

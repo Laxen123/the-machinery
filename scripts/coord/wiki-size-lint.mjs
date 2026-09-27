@@ -38,10 +38,11 @@
 //
 // The injected set is DERIVED, never a hand list (so it cannot drift as loaders are
 // added — e.g. the plan-1254 generic subject/path loaders):
-//   (a) every wiki/entities/clinics/*.md            (clinic-wiki-loader is file-derived)
+//   (a) every wiki/entities/records/*.md             (a project's own per-record loader is
+//                                                     file-derived, when it has one)
 //   (b) any wiki/entities/** page whose BASENAME appears in a scripts/hooks/**/*.mjs
 //       source                                       (the CHAINS registry `file:` entries,
-//                                                     price-pipeline-loader's fixed PAGE)
+//                                                     a project's own fixed-page loaders)
 //   (c) any wiki/entities/** page whose frontmatter carries a non-empty `aliases:` or
 //       `triggerPaths:` list                          (the plan-1254 loaders match on these;
 //                                                     `aliases: []` is an explicit waiver)
@@ -67,17 +68,18 @@
 // 1. SCOPED BY PATH (`wiki/entities/**` minus the `-appendix.md` family), not by
 //    `cls === 'injected'`. Every loader's page
 //    root is under entities/ (loader-common scans platforms/inspectors/services;
-//    chain-wiki-loader chains; clinic-wiki-loader clinics; price-pipeline-loader pins
-//    price-inspector.md) — nothing under wiki/concepts/** is injectable today. Scoping by
+//    chain-wiki-loader chains; a per-record loader its own record pages; a project's own
+//    fixed-page loaders pin their one page) — nothing under wiki/concepts/** is injectable
+//    today. Scoping by
 //    PATH rather than by the derived injected set is deliberate, and it still is even now
 //    that the two agree on chains: a path rule cannot be broken by a registry move. The gap
 //    it was working around is CLOSED (plan 4035) — `collectHookReferencedBasenames` now also
-//    reads `scripts/wiki-chain-registry.mjs`, so the 24 registry-driven chain pages classify
+//    reads the project's own chain registry module, so the 24 registry-driven chain pages classify
 //    `injected` and draw the 8 KB warn / 32 KB FAIL their heads are really injected under.
 //    That widening was sequenced AFTER plan 4035's fold sweep on purpose: it applies the
-//    FAIL cap, and five chain pages exceeded it beforehand (vetathome 70.0K, evidensia 51.0K,
-//    anicura 49.3K, plutovets 44.0K, distriktsveterinarerna 35.1K), so closing it earlier
-//    would have BLOCKED every wiki write. All 25 are under the cap as of that sweep.
+//    FAIL cap, and five chain pages exceeded it beforehand (the five largest, 35–70 KB each),
+//    so closing it earlier would have BLOCKED every wiki write. All 25 are under the cap as
+//    of that sweep.
 //    The `-appendix.md` exclusion is the other half of the same scoping judgment — see
 //    `isFoldable` for why a fold's destination must not be asked to fold itself.
 //
@@ -111,6 +113,7 @@ import {
   listWikiMarkdownFiles,
 } from './wiki-coverage-sweep.mjs';
 import { splitFrontmatter, splitFold } from './wiki-fold.mjs';
+import { loadCoordConfig } from './coord-config.mjs';
 
 export const KB = 1024;
 export const INJECTED_WARN = 8 * KB;
@@ -216,7 +219,7 @@ function stripYamlComment(v) {
 // the YAML block form (`key:` followed by `  - item` lines). `key: []` (an explicit
 // waiver), a bare `key:`, and a comment-only `key: # …` are NOT non-empty.
 //
-// DELIBERATE SUPERSET of the production alias matcher (clinic-wiki-loader's
+// DELIBERATE SUPERSET of the production alias matcher (a per-record loader's own
 // parseAliases reads only the inline form): the lint classifies a block-form page
 // as injected even though today's loader would not inject it. Conservative on
 // purpose — over-classifying applies the TIGHTER budget, never lets an actually
@@ -267,7 +270,7 @@ export function hasNonEmptyListKey(fm, key) {
 // (registries + fixed page constants), PLUS the loader data tables that deliberately live
 // outside that tree. Case-insensitive set of lowercased basenames.
 //
-// plan 4035: `scripts/wiki-chain-registry.mjs` is the chain loader's CHAINS table, parked
+// plan 4035: the project's own chain registry module is the chain loader's CHAINS table, parked
 // outside `scripts/hooks/` by plan 2140 so that registering a chain never edits an
 // executable hook file. Scanning only `scripts/hooks/**` therefore missed 20 of the 24
 // registry-driven chain pages — they classified `pull` and drew the loose 24 KB warn
@@ -282,7 +285,7 @@ export function hasNonEmptyListKey(fm, key) {
 //
 // It is also read through its `file:` VALUES rather than by a bare `.md`-token scan, unlike
 // the hooks tree. That asymmetry is deliberate (review finding 2d6119): the registry is
-// roughly half prose comment, and those comments cite other `.md` paths — `docs/countries/gb.md`
+// roughly half prose comment, and those comments cite other `.md` paths — a project country doc
 // and `wiki/entities/services/rcvs.md` today — so a token scan would inject a page merely
 // because a comment linked it. A hook source has no such commentary density and its page
 // names appear in several shapes, so the loose scan stays right there.
@@ -364,10 +367,12 @@ export function listWikiPages(repoRoot) {
 
 // Classify one page: 'exempt' | 'injected' | 'pull'. `rel` is repo-relative
 // forward-slash; `hookBasenames` from collectHookReferencedBasenames.
-export function classifyPage(rel, { frontmatter, hookBasenames }) {
+// plan 4172: `wikiRecordDir` is coord.config.json's per-record page directory (null = the project
+// has none) — a page under it is injected by a file-derived loader, never named in a registry.
+export function classifyPage(rel, { frontmatter, hookBasenames, wikiRecordDir = null }) {
   if (EXEMPT.has(rel)) return 'exempt';
   if (!rel.startsWith('wiki/entities/')) return 'pull'; // every loader targets entities/**
-  if (rel.startsWith('wiki/entities/clinics/')) return 'injected'; // file-derived loader
+  if (wikiRecordDir && rel.startsWith(`${wikiRecordDir.replace(/\/+$/, '')}/`)) return 'injected';
   const basename = rel.slice(rel.lastIndexOf('/') + 1).toLowerCase();
   if (hookBasenames.has(basename)) return 'injected'; // named in a loader registry
   if (hasNonEmptyListKey(frontmatter, 'aliases')) return 'injected';
@@ -490,7 +495,7 @@ export function aboveFoldBody(text, { bodyStart = 0 } = {}) {
 // (plan 2618) is a list of ADDITIONAL warn records independent of the size bucket (the
 // long-line advisory) — both callers append them to their warns, so the two surfaces can
 // never disagree on them either.
-export function classifyAndBucketPage(repoRoot, rel, hookBasenames) {
+export function classifyAndBucketPage(repoRoot, rel, hookBasenames, wikiRecordDir = null) {
   const abs = join(repoRoot, ...rel.split('/'));
   let buf;
   try {
@@ -531,6 +536,7 @@ export function classifyAndBucketPage(repoRoot, rel, hookBasenames) {
   const cls = classifyPage(rel, {
     frontmatter: frontmatter.raw,
     hookBasenames,
+    wikiRecordDir,
   });
   const totalPage = { rel, size, cls };
   if (cls === 'exempt') return { page: totalPage, bucket: null, extras: [] };
@@ -646,13 +652,22 @@ export function classifyAndBucketPage(repoRoot, rel, hookBasenames) {
 
 // Lint the whole tree. Returns { pages, warns, failures } where each entry is
 // { rel, size, cls, limit }.
-export function lintWikiSizes(repoRoot) {
+// plan 4172: the configured per-record page dir, read ONCE per lint through the one config seam.
+// An ABSENT config is the documented no-record-dir case (loadCoordConfig returns the defaults); an
+// UNREADABLE one throws out of the lint (review 498d8a) — swallowing it would silently reclassify
+// every record page as 'pull' and drop the stricter injected-page cap this lint is the gate for.
+export function configuredWikiRecordDir(repoRoot) {
+  return loadCoordConfig(repoRoot).wikiRecordDir;
+}
+
+export function lintWikiSizes(repoRoot, { wikiRecordDir } = {}) {
   const hookBasenames = collectHookReferencedBasenames(repoRoot);
+  const recordDir = wikiRecordDir === undefined ? configuredWikiRecordDir(repoRoot) : wikiRecordDir;
   const pages = [];
   const warns = [];
   const failures = [];
   for (const rel of listWikiPages(repoRoot)) {
-    const result = classifyAndBucketPage(repoRoot, rel, hookBasenames);
+    const result = classifyAndBucketPage(repoRoot, rel, hookBasenames, recordDir);
     if (!result) continue; // unreadable → skip (racing a concurrent move); the next push re-checks
     pages.push(result.page);
     if (result.bucket === 'fail') failures.push(result.page);
@@ -676,12 +691,13 @@ export function lintWikiSizes(repoRoot) {
 // pages across multiple attempts (wiki-commit.mjs's coordWrite retry loop) does one
 // `scripts/hooks/**` walk+regex for the whole op instead of one per retry. Omitted → computed
 // fresh, exactly as before this option existed.
-export function checkPages(repoRoot, paths, { hookBasenames } = {}) {
+export function checkPages(repoRoot, paths, { hookBasenames, wikiRecordDir } = {}) {
   const basenames = hookBasenames ?? collectHookReferencedBasenames(repoRoot);
+  const recordDir = wikiRecordDir === undefined ? configuredWikiRecordDir(repoRoot) : wikiRecordDir;
   const fails = [];
   const warns = [];
   for (const rel of paths) {
-    const result = classifyAndBucketPage(repoRoot, rel, basenames);
+    const result = classifyAndBucketPage(repoRoot, rel, basenames, recordDir);
     if (!result) continue; // deleted / absent — nothing to check
     if (result.bucket === 'fail') fails.push(result.page);
     else if (result.bucket === 'warn') warns.push(result.page);

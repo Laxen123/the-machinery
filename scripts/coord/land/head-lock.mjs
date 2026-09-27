@@ -1,7 +1,7 @@
 // scripts/coord/land/head-lock.mjs — plan 3961 T3.4: the land spine's head-lock mechanics, moved
-// out of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move).
+// out of scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's
+// parity-test suite against committed goldens, plus the full legacy test suite, both unchanged
+// by this move).
 //
 // WHAT THIS MODULE OWNS. The plan-2473 worktree-lock interlock that keeps a `--prep` pass and
 // the head-time land from ever rebasing + force-pushing the same worktree branch at once: taking
@@ -19,7 +19,7 @@
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
 // import only scripts/coord/** and node: builtins (Rule 3,
-// docs/runbooks/scripts-module-layout.md) — so every one of the plain scripts/*.mjs modules this
+// docs/coord/scripts-layout.md) — so every one of the plain scripts/*.mjs modules this
 // code used to reach directly is instead read off the bound dependency container, `landDeps()`
 // (scripts/coord/land/deps.mjs), AT CALL TIME, inside each function — never at module top level.
 // `D` (this module's convention: `const D = landDeps();` as the first line of every function that
@@ -694,8 +694,8 @@ export function acquireWorktreeLockAtHead(state) {
   if (!path) return;
   try {
     // plan 3453 — SUPERSEDES the plan-3436 D3 "exclusion KEPT" ruling (see
-    // docs/runbooks/cloud-drain-landing.md § Cloud-chunked heavy gates and
-    // docs/runbooks/push-gate-tiering.md for the retired text). The whole design is TWO CLOCKS
+    // docs/coord/cloud-drains.md § Chunking a job that is too big for one foreground window and
+    // docs/coord/hooks.md § Diff-scoping for the retired text). The whole design is TWO CLOCKS
     // that never touch each other — bug 1 (3436's clamp shortened the PREEMPT threshold itself,
     // so a starved chunk budget killed a live, healthy prep child — the exact opposite of the
     // wait's own rationale, "a finished prep fast-paths the whole gate battery, so waiting beats

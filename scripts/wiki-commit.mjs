@@ -27,7 +27,7 @@
 //      keep if the accepted set (WIKI_RX) ever widens to a path the ignore entry does not
 //      cover; with the entry in place it costs one getFileInfo call per page.
 //      Do NOT "fix" a mangled page by removing the ignore entry —
-//      scripts/assert-wiki-prettier-ignored.test.mjs gates it.
+//      the wiki prettier-ignore test gates it.
 //      PLAN 3411: scripts/wiki-chain-registry.mjs is the one accepted path this no-op claim
 //      does NOT cover (it is not under .prettierignore) — see prettierWrite()'s own comment
 //      for why that is deliberate.
@@ -67,7 +67,7 @@
 // near-opposite context (plan 1105); it is deliberately NOT folded into this helper.
 //
 // Usage (run from anywhere in the repo — main-checkout OR worktree, auto-detected):
-//   node scripts/wiki-commit.mjs wiki/entities/chains/evidensia.md wiki/log.md -m "chore(wiki): …"
+//   node scripts/wiki-commit.mjs wiki/entities/chains/chain-a.md wiki/log.md -m "chore(wiki): …"
 //   [--no-push] [--dry]
 //   (--no-push is a MAIN-only local/offline escape hatch — refused from a worktree
 //   session, which must always land straight to master, never commit on its own branch.)
@@ -734,7 +734,7 @@ export function normalizeWikiPaths(paths) {
 // `prettier --check` reads the same ignore file, so nothing starts failing because this stopped
 // formatting wiki content.
 // If you are here because a wiki page came back reformatted anyway, the ignore entry regressed
-// — check scripts/assert-wiki-prettier-ignored.test.mjs before touching this function.
+// — check the wiki prettier-ignore test before touching this function.
 //
 // PLAN 3411 EXCEPTION: scripts/wiki-chain-registry.mjs (CHAIN_REGISTRY_REL, the one non-wiki
 // path normalizeWikiPaths accepts) is an ordinary scripts/**/*.mjs file — `.prettierignore` has

@@ -1,7 +1,7 @@
 // scripts/coord/land/preflight.mjs — plan 4042: the land spine's keep-hot `--prep` orchestration
-// cluster, moved out of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// scripts/done-worktree.test.mjs, both unchanged by this move).
+// cluster, moved out of scripts/done-worktree.mjs behaviour-identical (parity proven by this
+// migration's parity-test suite against committed goldens, plus the full legacy test suite,
+// both unchanged by this move).
 //
 // WHAT THIS MODULE OWNS. The whole `--prep` entrypoint main() calls (runLandPrep), its two
 // sub-modes (runLandPrepNoRebase for the review-time no-rebase proof, runLandPrepLocked for the
@@ -51,7 +51,7 @@
 // sites); this move adds no new reasoning for them, just a new reader.
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
-// import only scripts/coord/** and node: builtins (Rule 3, docs/runbooks/scripts-module-layout.md)
+// import only scripts/coord/** and node: builtins (Rule 3, docs/coord/scripts-layout.md)
 // — so every plain scripts/*.mjs module this code used to reach directly (battery-ledger.mjs's
 // `NON_CONVERGENT_ROUNDS`, done-worktree-lib.mjs's `L`, and the argv-derived `DRY`/`PREP_NO_REBASE`
 // boot flags) is instead read off the bound dependency container, `landDeps()`
@@ -1200,6 +1200,27 @@ export function recordedWikiDecision(MAIN, slug, wtPath, handoffLayout) {
   );
 }
 
+// recordedFamilyMarker (plan 4219): the family-generic reader behind a project landSeam's
+// `markerFamily.lookup` — the staleness-guarded, patch-id-aware marker of `familyKey` (an
+// L.MARKER_FAMILIES key) as parseMarkerCurrent returns it, or null. The three readers above and
+// below keep their own historical return shapes; a new family reads through this one instead of
+// adding a fourth hand-written copy.
+export function recordedFamilyMarker(MAIN, slug, wtPath, handoffLayout, familyKey) {
+  const D = landDeps();
+  const family = D.L.MARKER_FAMILIES[familyKey];
+  if (!family)
+    throw new Error(`recordedFamilyMarker: unknown marker family ${JSON.stringify(familyKey)}`);
+  return recordedMarker(
+    MAIN,
+    slug,
+    wtPath,
+    handoffLayout,
+    family,
+    (content, headSha, headPatchId) =>
+      D.L.parseMarkerCurrent(family, content, headSha, headPatchId),
+  );
+}
+
 // recordedConclusionVerdict (plan 2033): the session entry may carry a
 // `Conclusion: <UPHELD|REFUTED|UNDERDETERMINED>:<detail> @ <sha>` marker written by
 // scripts/record-conclusion.mjs. Returns { verdict, detail } or null — the shared
@@ -1530,7 +1551,7 @@ export function preflight(wtPath, branch, state) {
   // wikiDiffOnWorktreeBranch's header comment (core-noun-ok: names the real exported guard this
   // paragraph is about) for the incident this closes. plan 3944
   // extended the SAME guard to the two hand-edited debt ledgers (LEDGER_FILES_ON_WORKTREE_BRANCH
-  // — docs/handoff/infra-debt.md, docs/handoff/grammar-debt.md), which share that guard's
+  // — docs/handoff/infra-debt.md and its sibling domain ledger), which share that guard's
   // failure shape (a branch-carried commit colliding at the landing-queue head) but have an
   // OPPOSITE fix (wiki-commit.mjs vs a hand-edit-on-master-and-push; core-noun-ok: names the real
   // remedy script), so the reason text below

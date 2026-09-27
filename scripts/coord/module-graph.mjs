@@ -191,136 +191,15 @@ export function moduleFiles(scriptsDir = SCRIPTS_DIR) {
 // are exact: pattern 1 fires only when a quote immediately follows `import`, so it cannot be
 // swallowed; pattern 2 requires a `from` and may over-span harmlessly, since whatever it captures
 // is a real specifier of the same file and specifiers are de-duplicated per module.
-/**
- * Blank out comments — and optionally string/template contents — so a regex probe cannot match
- * the thing it is looking for inside prose (gpt-review rounds 1 and 2).
- *
- * WHY THIS IS HAND-ROLLED RATHER THAN IMPORTED. `scripts/coord/write-lint-common.mjs` already exports
- * `stripJsCommentsAndStrings()`, and reusing it was the review's own suggestion — but Rule 3
- * (`assert-scripts-self-contained.mjs`) forbids a non-test module under `scripts/coord/` from
- * importing anything outside `scripts/coord/**`, and that rule is the whole point of the
- * `coord-core` program this asset serves. Importing it would make this module unmovable by the
- * very step it exists to enable. Same state machine, ~30 lines, node builtins only.
- *
- * TWO REGEX GENERATIONS WERE TRIED AND FAILED BEFORE THIS, both recorded because each looked
- * right: a comments-and-strings regex stripper ate the real `export function main()` out of
- * `select-battery-tests.mjs` and `wiki-commit.mjs` (it cannot know regex or template literals),
- * and column-0 anchoring then traded that for missing every INDENTED top-level export. A scanner
- * is the only thing that is exact in both directions.
- *
- * Newlines always pass through, so line numbers never shift.
- */
-export function stripJs(src, { blankStrings = true } = {}) {
-  const s = String(src);
-  let out = '';
-  // A STACK, not a scalar: a template literal's `${…}` is code that may itself contain another
-  // template (`` `x ${ `y` } z` ``), and a single-slot state desynced on the inner backtick —
-  // masking real code from there to end of file (gpt-review round 3).
-  const stack = []; // entries: '"' | "'" | '`' | 'line' | 'block' | 'regex' | 'interp'
-  const top = () => stack[stack.length - 1] ?? null;
-  const keep = (ch) => (blankStrings ? (ch === '\n' ? '\n' : ' ') : ch);
-  // Can a `/` here START a regex literal, or is it division? Decided by the previous meaningful
-  // emitted character: after a value (identifier, number, `)`, `]`) it is division; after an
-  // operator, `(`, `,`, `=`, `return` etc. it is a regex. Getting this backwards is fatal in both
-  // directions — a missed regex corrupts the mask at its first unbalanced quote, and a division
-  // read as a regex swallows the rest of the file.
-  const regexCanStart = () => {
-    const m = out.match(/([^\s])\s*$/);
-    if (!m) return true;
-    const c = m[1];
-    if (/[)\]}]/.test(c)) return false;
-    if (/[A-Za-z0-9_$]/.test(c))
-      return /\b(?:return|typeof|instanceof|in|of|new|delete|void|case|do|else|yield|await)\s*$/.test(
-        out,
-      );
-    return true;
-  };
-  for (let i = 0; i < s.length; i += 1) {
-    const ch = s[i];
-    const next = s[i + 1];
-    const state = top();
-    if (state === 'line') {
-      if (ch === '\n') {
-        out += '\n';
-        stack.pop();
-      } else out += ' ';
-      continue;
-    }
-    if (state === 'block') {
-      if (ch === '*' && next === '/') {
-        out += '  ';
-        i += 1;
-        stack.pop();
-      } else out += ch === '\n' ? '\n' : ' ';
-      continue;
-    }
-    if (state === 'regex') {
-      // Blanked like a comment: a regex literal is never code we probe for, and its contents are
-      // exactly what used to corrupt the scan.
-      if (ch === '\\') {
-        out += '  ';
-        i += 1;
-        continue;
-      }
-      out += ch === '\n' ? '\n' : ' ';
-      if (ch === '/') stack.pop();
-      continue;
-    }
-    if (state === '"' || state === "'" || state === '`') {
-      if (ch === '\\') {
-        out += keep(ch) + keep(next ?? '');
-        i += 1;
-        continue;
-      }
-      // `${` inside a template opens real code again.
-      if (state === '`' && ch === '$' && next === '{') {
-        out += blankStrings ? '  ' : '${';
-        i += 1;
-        stack.push('interp');
-        continue;
-      }
-      out += keep(ch);
-      if (ch === state) stack.pop();
-      continue;
-    }
-    // state === null or 'interp' — both are CODE.
-    if (state === 'interp' && ch === '}') {
-      out += blankStrings ? ' ' : '}';
-      stack.pop();
-      continue;
-    }
-    if (ch === '/' && next === '/') {
-      out += '  ';
-      i += 1;
-      stack.push('line');
-      continue;
-    }
-    if (ch === '/' && next === '*') {
-      out += '  ';
-      i += 1;
-      stack.push('block');
-      continue;
-    }
-    if (ch === '/' && regexCanStart()) {
-      out += ' ';
-      stack.push('regex');
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === '`') {
-      stack.push(ch);
-      out += keep(ch);
-      continue;
-    }
-    out += ch;
-  }
-  return out;
-}
+import { stripJs } from './strip-js.mjs';
+export { stripJs } from './strip-js.mjs';
 
 // The statement anchor is `(?:^|\n|;)\s*`, not `(?:^|\n)\s*`: a second import following a
 // semicolon on the SAME line is still a statement, and anchoring only at a line start silently
 // dropped its edge. Prettier never emits that shape here, but a measurement tool must not depend
 // on the tree happening to be prettier-clean. These run over `stripJs(src, {blankStrings:false})`
 // — comments gone, string CONTENTS kept, because the specifier itself is a string.
+
 const SPEC_RX = [
   /(?:^|[\n;])\s*import\s+['"]([^'"]+)['"]/g,
   /(?:^|[\n;])\s*import\s[\s\S]*?\sfrom\s+['"]([^'"]+)['"]/g,

@@ -12,8 +12,8 @@
 // disk. That is the whole check. It is deliberately the narrowest useful version:
 //
 //   ANCHOR — the token must start with one of REF_ANCHORS (`docs/`, `wiki/`, `scripts/`,
-//     `backend/`, `frontend/`, `shared/`, `coord/`). Unanchored prose shorthand
-//     (`clinics/<CC>/clinic-NNN.json`, `parked/`, `ready/`) is invisible to this lint, and
+//     `backend/`, `frontend/`, `shared/`, `coord/`, `.claude/`). Unanchored prose shorthand
+//     (`records/<CC>/record-NNN.json`, `parked/`, `ready/`) is invisible to this lint, and
 //     so are URLs, package specifiers (`@vetapp/shared`) and `./`-relative link targets.
 //   EXTENSION — the token must end in one of REF_EXTENSIONS (`.md .mjs .py .ts .tsx .json
 //     .sh`). Directory references are NOT checked: `docs/runbooks/` is a stable concept, a
@@ -27,7 +27,7 @@
 //
 // The two rules together are why note (b) of the plan ("glob-like examples, template
 // placeholders, code blocks demonstrating OLD paths as history") is mostly answered by
-// construction: a template placeholder like `<slug>/index.md` is unanchored, `clinics/<CC>/`
+// construction: a template placeholder like `<slug>/index.md` is unanchored, `records/<CC>/`
 // is unanchored and extension-less, and an old path shown AS history is either anchored and
 // genuinely dead (a real finding — say so, or waive it in place) or unanchored and ignored.
 //
@@ -48,7 +48,7 @@
 // deliberate "prove the corpus is clean" run.
 //
 // ── Waiving a reference in place ─────────────────────────────────────────────────
-//   `docs/countries/gb.md` does not exist yet <!-- doc-pointer-ok: documenting a real gap -->
+//   `docs/<page>.md` does not exist yet <!-- doc-pointer-ok: documenting a real gap -->
 // exempts every reference on the lines the comment spans. For a whole historical passage:
 //   <!-- doc-pointer-ok-section: the 2026-05 layout, kept as the record of what moved -->
 // exempts everything from that comment down to the next markdown heading. The section form
@@ -68,7 +68,7 @@
 //
 // ── Modes ────────────────────────────────────────────────────────────────────────
 //   node scripts/assert-doc-pointers.mjs                 # full corpus (the weekly run)
-//   node scripts/assert-doc-pointers.mjs docs/a.md …     # just these files
+//   node scripts/assert-doc-pointers.mjs docs/<page>.md …     # just these files
 //   … | node scripts/assert-doc-pointers.mjs --stdin     # newline-separated paths on stdin
 //                                                        # (how pre-push scopes to the diff)
 //   --check            exit 1 when there are findings
@@ -109,8 +109,14 @@ const REPO_ROOT = resolve(join(dirname(fileURLToPath(import.meta.url)), '..'));
  * Data, not code: extending coverage (a new top-level doc, a newly-archived tree) is one row.
  */
 export const CORPUS = {
-  /** A file is in scope if it lives under one of these… */
-  includePrefixes: ['docs/', 'wiki/'],
+  /**
+   * A file is in scope if it lives under one of these…
+   *
+   * `coord/skills/` and `.claude/commands/` (plan 4218) are the skill and slash-command prose an
+   * agent is told to "read and follow" — the highest-stakes place for a dead pointer, and the
+   * surfaces a coord-kit adopter keeps after the kit builder's own dangling-reference gate is gone.
+   */
+  includePrefixes: ['docs/', 'wiki/', 'coord/skills/', '.claude/commands/'],
   /** …or IS one of these. */
   includeExact: ['WIKI.md', 'CLAUDE.md'],
   /** …unless it lives under one of these. */
@@ -136,17 +142,30 @@ export const CORPUS = {
     'docs/INDEX.md',
     // Explicitly a historical record, and excluded from the 2026-08-15 audit on operator
     // instruction for that reason.
-    'docs/PRE-SEED-HISTORY.md',
+    'docs/PRE-SEED-HISTORY.md', // dangling-ok: vetapp-only historical doc; adopting projects have none, entry is inert there
     // Append-only ledgers of what happened, not instructions.
     'wiki/log.md',
-    'wiki/plans-archive.md',
+    'wiki/plans-archive.md', // dangling-ok: an adopter's wiki may keep this ledger; the exclusion is inert when it is absent
   ],
   /** Only markdown carries doc pointers. */
   suffix: '.md',
 };
 
-/** A reference must start with one of these to be checked at all. */
-export const REF_ANCHORS = ['docs', 'wiki', 'scripts', 'backend', 'frontend', 'shared', 'coord'];
+/**
+ * A reference must start with one of these to be checked at all. `.claude` (plan 4218) covers the
+ * commands, workflows and settings the skills and commands point at; a gitignored `.claude/` path
+ * (a worktree, a local settings file) is skipped by the resolver's gitignore pass like any other.
+ */
+export const REF_ANCHORS = [
+  'docs',
+  'wiki',
+  'scripts',
+  'backend',
+  'frontend',
+  'shared',
+  'coord',
+  '.claude',
+];
 
 /** …and end in one of these. Directory references are deliberately not checked. */
 export const REF_EXTENSIONS = ['md', 'mjs', 'py', 'ts', 'tsx', 'json', 'sh'];
@@ -164,14 +183,14 @@ export const SKIP_REF_PREFIXES = ['docs/superpowers/plans/', 'backend/data/'];
 
 /**
  * Template placeholders, replaced by `*` before the existence check. `<CC>` is the explicit
- * form; `clinic-NNN.json` and `lint-report-YYYY-MM-DD.md` are the two bare forms this repo's
+ * form; `record-NNN.json` and `lint-report-YYYY-MM-DD.md` are the two bare forms this repo's
  * docs use as a matter of house style (`CLAUDE.md` names the sharded seed exactly that way),
  * and without them 18 of the first full-corpus run's 77 hits were the SAME false positive.
  */
 const PLACEHOLDER_RES = [
-  /<[^<>/]*>/g, // <CC>, <slug>, <clinic_id>
+  /<[^<>/]*>/g, // <CC>, <slug>, <record_id>
   /\bYYYY-MM-DD\b/g, // dated artifact names
-  /\bN{3,}\b/g, // clinic-NNN.json
+  /\bN{3,}\b/g, // record-NNN.json
 ];
 
 export const GRANDFATHER_FILE = 'scripts/doc-pointer-grandfather.txt';
@@ -261,7 +280,10 @@ function defaultLsFiles(root) {
 export function isCheckableRef(token, { anchors = REF_ANCHORS, extensions = REF_EXTENSIONS } = {}) {
   if (!token.includes('/')) return false;
   if (token.includes('://') || token.startsWith('/') || token.startsWith('@')) return false;
-  if (token.startsWith('.')) return false; // ./ and ../ relative forms — out of contract
+  // ./ and ../ relative forms — out of contract. Only those two prefixes: a dot-directory anchor
+  // (`.claude/…`) is an ordinary repo-relative path, and the anchor test below still rejects any
+  // dot-directory that is not in `anchors`.
+  if (token.startsWith('./') || token.startsWith('../')) return false;
   if (isNotAPath(token)) return false;
   const head = token.slice(0, token.indexOf('/'));
   if (!anchors.includes(head)) return false;
@@ -275,7 +297,7 @@ export function isCheckableRef(token, { anchors = REF_ANCHORS, extensions = REF_
  *   • interpolation — `docs/runbooks/cloud-routines/${f}.md` inside a JS snippet,
  *     `docs/sweep-$SCOPE-$DATE/…` inside a shell one-liner. The text on the page is not the
  *     path any reader will ever open.
- *   • elision — `backend/scripts/price-pipeline/...url_discovery.py`, prose shorthand for
+ *   • elision — `backend/scripts/data-pipeline/...url_discovery.py`, prose shorthand for
  *     "somewhere under here".
  *   • a torn brace group — a `{a.ts, b.ts}` alternation written with a space after the comma
  *     tokenises into `{a.ts` and `b.ts}`, neither of which is a path. Balance is the test, so a
@@ -305,7 +327,7 @@ export function waivedLines(text) {
   const waived = new Set();
   // Markers are matched against a MASKED copy — code spans and fenced blocks blanked out,
   // offsets preserved — so a document that TEACHES the waiver syntax does not silently apply
-  // it. `docs/runbooks/standing-operations.md` does exactly that, and before the mask its
+  // it. `docs/runbooks/standing-operations.md` does exactly that, and before the mask its dangling-ok: real historical anecdote, vetapp-only runbook not shipped
   // example marker waived a real line of the runbook.
   const scan = maskCodeRegions(text);
 
@@ -404,6 +426,27 @@ function buildLineIndex(text) {
 }
 
 /**
+ * The ONE per-token contract both extractors below share: normalise, check anchor + extension,
+ * skip the moved-by-design prefixes, dedupe per (line, path). `opts.skipPrefixes` overrides
+ * SKIP_REF_PREFIXES for a caller whose tree has a different moved-by-design set (the coord-kit
+ * builder skips only the plan LANE folders, so a pointer at a ledger file beside them still
+ * checks).
+ */
+function collectLineRefs(lineNo, tokens, opts, seen, refs) {
+  const skipPrefixes = opts.skipPrefixes ?? SKIP_REF_PREFIXES;
+  for (const raw of tokens) {
+    const token = normalizeToken(raw);
+    const path = token.split('::')[0];
+    if (!isCheckableRef(path, opts)) continue;
+    if (skipPrefixes.some((p) => path.startsWith(p))) continue;
+    const key = `${lineNo}\u0000${path}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push({ line: lineNo, token, path });
+  }
+}
+
+/**
  * Every checkable reference in `text`, with its line number. Waived lines are dropped here
  * rather than at reporting time so a waiver costs nothing downstream (no existence check, no
  * grandfather lookup).
@@ -441,24 +484,39 @@ export function extractRefs(text, opts = {}) {
         for (const word of splitSpanWords(span[1])) tokens.push(word);
       }
       for (const link of line.matchAll(LINK_TARGET_RE)) {
-        // The link target may itself be backticked (`[`docs/x.md`](docs/x.md)`) — harmless,
+        // The link target may itself be backticked (`[`docs/<page>.md`](docs/<page>.md)`) — harmless,
         // the (line, path) dedupe below collapses it.
         tokens.push((link[1] ?? link[2] ?? '').replace(/^`|`$/g, ''));
       }
     }
 
-    for (const raw of tokens) {
-      const token = normalizeToken(raw);
-      const path = token.split('::')[0];
-      if (!isCheckableRef(path, opts)) continue;
-      if (SKIP_REF_PREFIXES.some((p) => path.startsWith(p))) continue;
-      const key = `${lineNo}\u0000${path}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      refs.push({ line: lineNo, token, path });
-    }
+    collectLineRefs(lineNo, tokens, opts, seen, refs);
   });
 
+  return refs;
+}
+
+/**
+ * The CODE-file mode (plan 4218): every checkable reference in a `.mjs` / `.js` / `.sh` source,
+ * with its line number. Markdown placement (backtick / link / command fence) has no meaning in
+ * code, so every whitespace-separated word on every line is a candidate — exactly the rule a
+ * command fence already gets in extractRefs above. That is still narrow, because the per-token
+ * contract is unchanged: a word must be anchored, name a file by extension, and carry no `$`,
+ * `\`, `...` or torn brace (isNotAPath). In practice that leaves comments and string literals —
+ * a regex literal escapes its slashes, an interpolated template carries `$`, an import specifier
+ * is `./`-relative, and identifiers never contain a `/`. Quotes, backticks and parentheses become
+ * SEPARATORS rather than decoration: code writes `readFileSync('docs/<page>.md')` with no whitespace
+ * around the literal, and a comment writes `x.mjs's`, so the path inside a call argument or a
+ * possessive has to be its own word. No waiver is read here — the caller owns its own.
+ */
+const CODE_WORD_DELIMITERS_RE = /[`'"()]/g;
+export function extractCodeRefs(text, opts = {}) {
+  const refs = [];
+  const seen = new Set();
+  text.split('\n').forEach((line, idx) => {
+    const words = splitSpanWords(line.replace(CODE_WORD_DELIMITERS_RE, ' '));
+    collectLineRefs(idx + 1, words, opts, seen, refs);
+  });
   return refs;
 }
 
@@ -466,7 +524,7 @@ export function extractRefs(text, opts = {}) {
  * Strip everything that decorates a path but is not part of it, BEFORE the checkability test —
  * each of these would otherwise sit exactly where the extension has to be read from, so a
  * decorated reference reads as "not a file" and is silently skipped rather than checked:
- *   `<docs/a.md>`   markdown's angle-bracket link destination
+ *   `<docs/coord/README.md>`   markdown's angle-bracket link destination
  *   `#anchor`       a link into a section, `?query` a link parameter
  *   `:42` / `:42:7` this repo's `file_path:line_number` citation convention
  * `::symbol` is NOT stripped here — the caller keeps the full token for its finding text and
@@ -517,7 +575,7 @@ export function lintDocument(doc, { resolvePath, grandfather = new Set(), refs, 
 /**
  * Resolve references against the real tree. Built once per RUN over the whole reference set so
  * `git check-ignore` is one subprocess, not one per document, and each distinct path is
- * stat-ed once no matter how many docs cite it (`docs/PIPELINE.md` is cited ~200 times).
+ * stat-ed once no matter how many docs cite it (a heavily-cited page can be cited hundreds of times).
  */
 export function makeResolver(paths, root = REPO_ROOT) {
   const { ignored, gitAvailable } = gitIgnoredSet([...new Set(paths)], root);
@@ -554,7 +612,7 @@ export function main(argv = process.argv.slice(2), opts = {}) {
       noun: { many: 'dead pointer(s)' },
       // Pass 1 parses every document; pass 2 resolves the whole reference set at once, so
       // `git check-ignore` is ONE subprocess and each distinct path is stat-ed once however
-      // many documents cite it (`docs/PIPELINE.md` is cited ~200 times).
+      // many documents cite it (a heavily-cited page can be cited hundreds of times).
       parse: (doc, text) => ({ doc, refs: extractRefs(text) }),
       prepare: (items, root, o) => {
         const build = o.makeResolver ?? makeResolver;

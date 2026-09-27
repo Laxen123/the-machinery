@@ -1,7 +1,9 @@
-// scripts/hooks/lib/loader-common.mjs — shared helpers for the UserPromptSubmit
-// wiki/clinic loaders (chain-wiki-loader, special-clinic-loader, clinic-wiki-loader).
-// Extracted to one source of truth (plan-1074 review NIT): these were byte-identical
-// across the loaders. Pure / fail-open; no module-level state.
+// scripts/hooks/lib/loader-common.mjs — shared helpers for the UserPromptSubmit wiki
+// loaders: the generic subject loaders (subject-wiki-loader, path-wiki-loader) that ship in
+// the kit, and a project's own per-record loaders. Extracted to one source of truth (plan-1074
+// review NIT): these were byte-identical across the loaders. Pure / fail-open; no
+// module-level state. The helpers only per-record loaders use (record-name matching, the
+// sharded-seed row cache) live in the project-only sibling record-loader-common.mjs (plan 4172).
 
 import {
   readFileSync,
@@ -11,12 +13,11 @@ import {
   writeFileSync,
   rmSync,
   statSync,
-  utimesSync,
   openSync,
   readSync,
   closeSync,
 } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 // ── stdin (plan 2615) ────────────────────────────────────────────────────────
@@ -37,6 +38,8 @@ export {
   appendStdinDiagnostic,
   STDIN_DIAGNOSTIC_LOG,
 } from '../../coord/stdin-read.mjs';
+// A LOCAL binding too: runHookCli (plan 4238) reads the payload through the same reader.
+import { readStdin } from '../../coord/stdin-read.mjs';
 
 // Wiki fold parsing lives in scripts/ so both scripts and hooks can share one
 // implementation without scripts reaching back into scripts/hooks/. Re-exported here so
@@ -90,7 +93,7 @@ export function parseSessionId(payload) {
 //                duration_ms
 //   sub-agent:   the same PLUS agent_id, agent_type
 // So on a session-keyed marker the FIRST context to touch a subject eats the page for the
-// whole session: the same probe read a price-pipeline file on the main thread, then a
+// whole session: the same probe read a pipeline source file on the main thread, then a
 // dispatched worker read another file under the same triggerPath and received NOTHING.
 // The inverse held too — a worker's read blinded the parent. Keying per context fixes both.
 //
@@ -158,17 +161,19 @@ export function markInjected(markerDir, key) {
 // here lets the compaction-reset hook (wiki-markers-compact-reset.mjs) and the coverage
 // lint enumerate EVERY root, so a new loader can't be forgotten by the reset.
 //
-//   chain / special / clinic — per-loader roots, keyed by the loader's own key
-//     (chain.key / clinic id). Distinct page namespaces, no cross-loader overlap.
+//   chain / special / record — per-loader roots, keyed by the loader's own key
+//     (chain.key / record id). Distinct page namespaces, no cross-loader overlap.
 //   subjects — a SHARED root keyed by PAGE SLUG, used by the three subject loaders
-//     (price-pipeline prompt, subject-wiki prompt, path-wiki PostToolUse). Because they
-//     all key on the page slug in ONE root, an overlap (e.g. a price-pipeline term AND a
-//     later Edit under backend/scripts/price-pipeline/ both point at price-inspector)
-//     dedupes to a single injection instead of double-firing.
+//     (a dedicated-subject prompt loader, subject-wiki prompt, path-wiki PostToolUse).
+//     Because they all key on the page slug in ONE root, an overlap (e.g. a pipeline term
+//     in a prompt AND a later Edit under that pipeline's triggerPath both point at the same
+//     inspector page) dedupes to a single injection instead of double-firing.
+// plan 4172: the per-record roots were renamed off the project's record noun (a one-time
+// re-injection per live session is the whole cost of moving a marker dir).
 export const CACHE_ROOTS = {
   chain: join(tmpdir(), 'vetapp-chain-wiki'),
-  special: join(tmpdir(), 'vetapp-special-clinic'),
-  clinic: join(tmpdir(), 'vetapp-clinic-wiki'),
+  special: join(tmpdir(), 'vetapp-special-record'),
+  record: join(tmpdir(), 'vetapp-record-wiki'),
   subjects: join(tmpdir(), 'vetapp-wiki-subjects'),
 };
 export const ALL_CACHE_ROOTS = Object.values(CACHE_ROOTS);
@@ -310,11 +315,6 @@ export function norm(s) {
     .trim();
 }
 
-// Drop a trailing corporate-form token so "skovde djurklinik ab" matches "Skövde Djurklinik".
-export function stripCorpSuffix(n) {
-  return n.replace(/\s+(ab|hb|aps|as|kb)$/, '').trim();
-}
-
 // Whole-phrase hit with a LEFT word boundary; right side open so Swedish definite
 // forms match ("skara djursjukhus" hits inside "skara djursjukhuset"). Both args are
 // already norm()'d (charset [a-z0-9 ]).
@@ -326,37 +326,6 @@ export function phraseHit(haystack, phrase) {
     if (i === 0 || haystack[i - 1] === ' ') return true;
     from = i + 1;
   }
-}
-
-// Whole-phrase hit requiring BOTH word boundaries (left AND right). Use this when the
-// phrase is a complete proper name (a clinic's full alias), where the open-right
-// phraseHit would false-fire: alias "anicura albano" must NOT hit inside a different
-// clinic "anicura albanova" present in the same prompt. Trades away definite-form
-// recall (which barely applies to a full multi-word name) for prefix-safety. Both
-// args are already norm()'d (charset [a-z0-9 ]), so a space or a string end is a real
-// boundary.
-export function phraseHitWhole(haystack, phrase) {
-  let from = 0;
-  for (;;) {
-    const i = haystack.indexOf(phrase, from);
-    if (i < 0) return false;
-    const leftOk = i === 0 || haystack[i - 1] === ' ';
-    const end = i + phrase.length;
-    const rightOk = end === haystack.length || haystack[end] === ' ';
-    if (leftOk && rightOk) return true;
-    from = i + 1;
-  }
-}
-
-// ── Shared distinctiveness rule ──────────────────────────────────────────────
-// A clinic/alias phrase must be ≥ MIN_PHRASE_LEN normalized chars AND ≥ 2 words to be
-// eligible for Pass-2 (exact-name) matching — drops single tokens and ultra-short
-// generics so a name pass never fires on an ordinary 1-word word. All three loaders
-// (chain / special / clinic-wiki) share this gate, so a tuning change lands once.
-// (Bare town names never appear as 1-word clinic names in the seed.)
-export const MIN_PHRASE_LEN = 11;
-export function isDistinctivePhrase(phrase) {
-  return phrase.length >= MIN_PHRASE_LEN && phrase.indexOf(' ') >= 0;
 }
 
 // Parse a `<key>: [ ... ]` frontmatter flow array into a list of strings. Tolerant:
@@ -424,8 +393,8 @@ export function pageSlug(file) {
 // pages that share the `subjects` marker root (CACHE_ROOTS.subjects, keyed by page slug).
 // Both subject-wiki-loader (aliases → prompt) and path-wiki-loader (triggerPaths → file
 // touch) scan EXACTLY these, so a page injected by one dedupes against the other.
-// Chains/clinics are DELIBERATELY excluded: they have their own loaders keyed under
-// separate roots (CACHE_ROOTS.chain / .clinic), so scanning them here would inject the same
+// Chains/records are DELIBERATELY excluded: they have their own loaders keyed under
+// separate roots (CACHE_ROOTS.chain / .record), so scanning them here would inject the same
 // page under two different (root,key) spaces and double-fire (plan 1254 review). `repoRoot`
 // is the caller's repo root (loader-common can't compute it — it lives one dir deeper than
 // the hooks).
@@ -484,157 +453,6 @@ export function scanEntityPages(
   return out;
 }
 
-// ── Shared two-pass matcher ──────────────────────────────────────────────────
-// The id-then-name match shared by special-clinic-loader and clinic-wiki-loader
-// (chain-wiki-loader's Pass 1 is a brand regex, not a clinic id, so it does NOT use
-// this). Pass 1: a literal `clinic-NNN` id (precise, never false-fires). Pass 2: a
-// distinctive name/alias phrase. De-duplicates by id, id pass first (id wins).
-//
-//   index = { byId: Map<lc-id, value>, names: [{ phrase, id }] }   (id is the byId key)
-//   opts  = { whole } — whole:true requires BOTH word boundaries (phraseHitWhole, for a
-//           full clinic alias that must not collide with a longer name); whole:false
-//           keeps the right side open (phraseHit, Swedish definite forms). Default open.
-//
-// Returns [{ value, via }] (via = 'id' | 'name'); the caller maps `value` to its own
-// shape (a seed row, a page entry, …).
-export function twoPassMatch(prompt, { byId, names }, { whole = false } = {}) {
-  const matched = new Map(); // id → { value, via }
-  const text = String(prompt || '');
-
-  // Pass 1 — literal clinic-NNN id.
-  for (const m of text.matchAll(/\bclinic-\d+\b/gi)) {
-    const id = m[0].toLowerCase();
-    const value = byId.get(id);
-    if (value !== undefined && !matched.has(id)) matched.set(id, { value, via: 'id' });
-  }
-
-  // Pass 2 — distinctive name/alias phrase.
-  const np = norm(text);
-  if (np) {
-    const hit = whole ? phraseHitWhole : phraseHit;
-    for (const { phrase, id } of names) {
-      if (matched.has(id)) continue;
-      if (hit(np, phrase)) matched.set(id, { value: byId.get(id), via: 'name' });
-    }
-  }
-  return [...matched.values()];
-}
-
-// ── Shared sharded-seed row reader ───────────────────────────────────────────
-// The reduced-seed cache shared by chain-wiki-loader (loadSeedRows) and
-// special-clinic-loader (loadSpecialRows). These are standalone, dependency-free
-// hooks (they cannot import the TS `@vetapp/shared/seed-io` seam), so they read the
-// sharded layout `backend/src/data/seed/` directly: `shardRoot` is that directory
-// (holding `clinic-order.json` + `clinics/<CC>/clinic-NNN.json`). The old single-file
-// seed monolith is GONE FOR GOOD (plan 1300 flipped it; vetapp CLAUDE.md forbids a
-// re-appearing monolith) — plan 1333 retired the
-// dual-read fallback this function used to carry (git history: loadCachedSeedRows /
-// loadCachedShardRows pre-plan-1333), since there is no monolith arm left to fall
-// back FROM.
-//
-// `reduce(arr)` turns the parsed clinic array into the loader's own reduced rows.
-// Fail-open → [] on any error (a prompt hook must never throw). (clinic-wiki-loader
-// scans the small clinics page dir, not the seed, so it does NOT use this.)
-//
-// Cache key = a corpus signature (shard-file count + total size + max mtime) swept
-// over clinics/**/*.json — write_seed / write_seed_shards rewrite a changed shard IN
-// PLACE, so any content edit moves maxMtimeMs (and virtually always totalSize), and
-// an add/remove moves count. No separate clinic-order.json/chains.json check is
-// needed: every clinic's own row lives in its own shard file.
-//
-// TTL fast path: the signature check itself costs a ~2k-file stat sweep (~100 ms on
-// Windows), too heavy to pay on EVERY UserPromptSubmit. A cache validated within the
-// last SHARD_CACHE_TTL_MS is trusted as-is (its mtime is renewed on each validated
-// sweep), so back-to-back prompts skip the sweep entirely. Worst case the loaders
-// inject rows up to 60 s stale after a seed write — harmless for wiki-page routing.
-const SHARD_CACHE_TTL_MS = 60_000;
-export function loadCachedShardRows(shardRoot, cacheFile, reduce, cacheVersion = 1) {
-  const clinicsDir = join(shardRoot, 'clinics');
-  // Read + shape-validate the cache ONCE; the TTL fast path and the post-sweep
-  // signature check below both reuse this single parse.
-  let cache = null;
-  try {
-    const c = JSON.parse(readFileSync(cacheFile, 'utf8'));
-    if (c && c.v === cacheVersion && Array.isArray(c.rows)) cache = c;
-  } catch {
-    /* no cache yet / torn / wrong shape → sweep below */
-  }
-  if (cache) {
-    try {
-      if (Date.now() - statSync(cacheFile).mtimeMs < SHARD_CACHE_TTL_MS) return cache.rows;
-    } catch {
-      /* cache vanished mid-check → sweep below */
-    }
-  }
-  let shardFiles;
-  try {
-    shardFiles = readdirSync(clinicsDir, { recursive: true })
-      .map(String)
-      .filter((f) => /\.json$/i.test(f))
-      .map((f) => join(clinicsDir, f));
-  } catch {
-    return []; // shard tree not present — fail-open
-  }
-  let count = 0;
-  let totalSize = 0;
-  let maxMtimeMs = 0;
-  try {
-    for (const f of shardFiles) {
-      const s = statSync(f);
-      count += 1;
-      totalSize += s.size;
-      if (s.mtimeMs > maxMtimeMs) maxMtimeMs = s.mtimeMs;
-    }
-  } catch {
-    return []; // a shard vanished mid-scan (concurrent write) — fail-open this prompt
-  }
-  if (
-    cache &&
-    cache.count === count &&
-    cache.totalSize === totalSize &&
-    cache.maxMtimeMs === maxMtimeMs
-  ) {
-    try {
-      const now = new Date();
-      utimesSync(cacheFile, now, now); // renew the TTL — this sweep just re-validated it
-    } catch {
-      /* best-effort */
-    }
-    return cache.rows;
-  }
-  let rows = [];
-  try {
-    const arr = shardFiles.map((f) => JSON.parse(readFileSync(f, 'utf8')));
-    rows = reduce(arr);
-  } catch {
-    return [];
-  }
-  try {
-    mkdirSync(dirname(cacheFile), { recursive: true });
-    writeFileSync(
-      cacheFile,
-      JSON.stringify({ v: cacheVersion, count, totalSize, maxMtimeMs, rows }),
-    );
-  } catch {
-    /* best-effort cache; correctness does not depend on the write succeeding */
-  }
-  return rows;
-}
-
-// ── Shared cap + mark-only-shown ─────────────────────────────────────────────
-// Cap a fresh (not-yet-injected) match list at `max`, then mark ONLY the shown items
-// injected — NEVER the capped-out overflow. Marking a capped-out item would suppress
-// its banner for the rest of the session though it was never shown (special-clinic
-// finding [2]); leaving the overflow unmarked lets it fire on a later prompt that
-// names it. `keyOf(item)` returns the per-session marker key (the clinic id). Returns
-// { shown, overflow }.
-export function capAndMark(fresh, max, markerDir, keyOf) {
-  const shown = fresh.slice(0, max);
-  const overflow = fresh.length - shown.length;
-  for (const item of shown) markInjected(markerDir, keyOf(item));
-  return { shown, overflow };
-}
-
 // ── Shared injection envelope ────────────────────────────────────────────────
 // Write a hook output envelope to stdout — additionalContext is injected into the model
 // context, systemMessage is the one-line note shown to the user, suppressOutput keeps the
@@ -649,12 +467,55 @@ export function emitInjection(
   hookEventName = 'UserPromptSubmit',
 ) {
   process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: { hookEventName, additionalContext },
-      systemMessage,
-      suppressOutput: true,
-    }),
+    JSON.stringify(injectionEnvelope(additionalContext, systemMessage, hookEventName)),
   );
+}
+
+// The envelope emitInjection writes, as DATA (plan 4238): a hook's `evaluateHook()`
+// returns this object so an in-process dispatcher (pretool-dispatch.mjs /
+// prompt-wiki-dispatch.mjs) can merge it with its siblings instead of each hook
+// writing its own stdout. emitInjection above stays the CLI path and serialises
+// exactly this object, so the two paths cannot drift.
+export function injectionEnvelope(
+  additionalContext,
+  systemMessage,
+  hookEventName = 'UserPromptSubmit',
+) {
+  return {
+    hookSpecificOutput: { hookEventName, additionalContext },
+    systemMessage,
+    suppressOutput: true,
+  };
+}
+
+// The PreToolUse deny envelope the guard hooks write, as data (plan 4238). Key
+// order matches every guard's hand-written literal, so JSON.stringify of this
+// object is byte-identical to what the guards printed before the fold.
+export function denyEnvelope(reason) {
+  return {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  };
+}
+
+// The shared CLI shell of a folded hook (plan 4238): read stdin once, fail OPEN
+// on an empty or malformed payload, run the hook's own `evaluateHook(payload)`,
+// and print whatever envelope it returns. Kept here so the eight guards and five
+// loaders cannot drift apart in how they treat a bad payload.
+export async function runHookCli(evaluateHook) {
+  const raw = readStdin();
+  if (!raw.trim()) return;
+  let payload;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    return; // malformed → fail open
+  }
+  const out = await evaluateHook(payload);
+  if (out) process.stdout.write(JSON.stringify(out));
 }
 
 // ── Shared JSONL streaming parser (plan 1754 F5) ─────────────────────────────
@@ -837,8 +698,8 @@ export function lastAssistantText(
 // SAME UserPromptSubmit channel as an operator-typed prompt: the harness wraps the
 // WHOLE turn in a `<teammate-message>`/`<agent-message>` tag (the report's text does not
 // arrive alongside separate operator prose — it IS the turn). Without this guard, a
-// report's incidental mention of a chain/platform/clinic (e.g. a read-only review
-// agent's report naming DSV, PlutoVets, provet-cloud in passing) injects that subject's
+// report's incidental mention of a chain/platform/record (e.g. a read-only review
+// agent's report naming three platforms in passing) injects that subject's
 // full canonical page though the session never asked for it (measured 2026-07-02: ~30 KB
 // from three review-agent reports in one session).
 //

@@ -6,7 +6,7 @@
 // an actual `git` against a bare "origin" clone.
 //
 // ── plan 3961 T0b: opt-in coordination fixtures ──────────────────────────────
-// The parity harness (scripts/coord/land/parity.test.mjs) needs a sandbox that
+// The parity harness (the land-spine parity test) needs a sandbox that
 // looks enough like a coordination repo for the land spine to reason about it:
 // the plan lanes, a coord.config.json, and a shard tree whose paths match
 // `shardIdPattern`. Those are OPT-IN via `sandbox(opts)` and, when requested,
@@ -24,10 +24,13 @@ export const g = (cwd, args) =>
 
 // Deliberately a LITERAL, not an import of coord-config.mjs's DEFAULTS: this helper is
 // imported by five test files that have no reason to pull in coord-config → coord-git, and a
-// shared fixture builder should not grow a dependency chain for one string. Honesty is kept by
-// a test instead — scripts/coord/land/parity.test.mjs asserts this equals the real
-// `DEFAULTS.shardIdPattern`, so a change there fails loudly here rather than drifting.
-export const SANDBOX_SHARD_ID_PATTERN = 'clinics/[A-Z]{2}/(clinic-\\d+)\\.json';
+// shared fixture builder should not grow a dependency chain for one string.
+// plan 4172: a NEUTRAL record layout of the same shape as a real project's (one country level,
+// one capture group for the record id), not any project's own nouns — every sandbox that lays
+// this tree also writes this pattern into its own coord.config.json, so the spine under test
+// reads the sandbox's layout, never the host repo's. The land-spine parity test pins
+// that the laid shard paths and this pattern agree.
+export const SANDBOX_SHARD_ID_PATTERN = 'records/[A-Z]{2}/(record-\\d+)\\.json';
 export const SANDBOX_SEED_SHARD_DIR = 'backend/src/data/seed';
 
 // Mirrors coord-config.mjs's DEFAULT_LANES (the eight active `order` lanes plus the two
@@ -65,27 +68,27 @@ function layCoordConfig(main, config) {
   return [writeFileDeep(main, 'coord.config.json', `${JSON.stringify(config, null, 2)}\n`)];
 }
 
-// A minimal shard tree matching SANDBOX_SHARD_ID_PATTERN: `<seedShardDir>/clinics/<CC>/
-// clinic-<n>.json` plus the per-country `order.json` assembly manifest the real layout carries.
+// A minimal shard tree matching SANDBOX_SHARD_ID_PATTERN: `<seedShardDir>/records/<CC>/
+// record-<n>.json` plus the per-country `order.json` assembly manifest the real layout carries.
 // Shard BODIES are deliberately minimal — the spine's seed-scope logic keys on PATHS (which
-// clinic ids a diff touches), never on row content.
+// record ids a diff touches), never on row content.
 function layShardTree(main, { seedShardDir, country, ids }) {
   const written = [];
   for (const id of ids) {
     written.push(
       writeFileDeep(
         main,
-        `${seedShardDir}/clinics/${country}/clinic-${id}.json`,
-        `${JSON.stringify({ id: `clinic-${id}`, name: `Sandbox clinic ${id}` }, null, 2)}\n`,
+        `${seedShardDir}/records/${country}/record-${id}.json`,
+        `${JSON.stringify({ id: `record-${id}`, name: `Sandbox record ${id}` }, null, 2)}\n`,
       ),
     );
   }
   written.push(
     writeFileDeep(
       main,
-      `${seedShardDir}/clinics/${country}/order.json`,
+      `${seedShardDir}/records/${country}/order.json`,
       `${JSON.stringify(
-        ids.map((id) => `clinic-${id}`),
+        ids.map((id) => `record-${id}`),
         null,
         2,
       )}\n`,

@@ -1,14 +1,14 @@
 // scripts/coord/land/deps.mjs — plan 3961 T3.0: the land spine's dependency container.
 //
 // WHY THIS EXISTS. A core module under scripts/coord/land/ may import only scripts/coord/** and
-// node: builtins (Rule 3, docs/runbooks/scripts-module-layout.md) — but the spine
+// node: builtins (Rule 3, docs/coord/scripts-layout.md) — but the spine
 // (done-worktree.mjs) reaches ~37 plain scripts/*.mjs modules that were NOT moving in this plan
 // (landing-lock.mjs, coord-git.mjs, land-lib.mjs, done-worktree-lib.mjs, … — several of these have
 // SINCE moved under scripts/coord/ themselves via the later coord-kit extraction program, plan
 // 4096, but this container's own binding of them is unchanged). A core module that needs one of
 // them cannot import it directly. Threading a bag of them through every helper
-// signature as a parameter is the other option, and it is the churn the parity harness
-// (scripts/coord/land/parity.test.mjs) exists to avoid: ~150 helper call sites, most of them many
+// signature as a parameter is the other option, and it is the churn this migration's own
+// parity harness exists to avoid: ~150 helper call sites, most of them many
 // frames deep, all rewritten in lockstep with zero behaviour change to prove.
 //
 // The container is the third option: ONE object, assembled once from the real imports the command

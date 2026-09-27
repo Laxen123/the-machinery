@@ -2,6 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -26,6 +27,10 @@ import {
   batchHoldFor,
   batchHoldReason,
   parseBatchManifest,
+  readArchivedPlanIds,
+  batchLiveness,
+  dissolvedBatchReason,
+  readBatchRosterLiveness,
 } from './batch-paths.mjs';
 
 function tmpRepo() {
@@ -375,9 +380,9 @@ test('readRunnableBatchMembers: batch-claim-projection shape — [2459, 2460] bo
   }
 });
 
-// Stale-roster safety (plan 2459 item 6): a roster whose members have ALL moved on is
-// still reported verbatim by this LOW-LEVEL helper (it never verifies members still
-// resolve anywhere) — the "never refuses anything" property is a property of the
+// Called WITHOUT archive information (plan 4246 made it an opt-in `archivedIds`), a roster
+// whose members have ALL moved on is still reported as written by this LOW-LEVEL helper (it
+// never verifies members still resolve anywhere) — the "never refuses anything" property is a property of the
 // CALLERS (queue-drain only scans ready/, claim-plan only checks a resolvable id), not
 // of this function. Documented here so a future reader doesn't mistake the map's
 // presence for a currently-claimable guarantee.
@@ -388,6 +393,306 @@ test('readRunnableBatchMembers: a stale all-archived-members roster still return
     const held = readRunnableBatchMembers(join(root, 'docs/superpowers/batches'));
     assert.equal(held.get('101'), 'batch-stale');
     assert.equal(held.get('102'), 'batch-stale');
+  } finally {
+    cleanup();
+  }
+});
+
+// --- plan 4246: archived members are finished cars, not missing ones ---------------------
+//
+// THE BUG THESE PIN: batch-2026-09-26-profile-ui listed [4187, 4233]; 4187 landed solo and
+// archived. The batch kept HOLDING 4233 from solo claims while queue-drain refused the whole
+// train over the archived 4187 — a deadlock. With `archivedIds`, archived members drop out of
+// the live membership; ≥2 live keeps a (smaller) train, ≤1 live dissolves the batch.
+
+const ARCHIVE_REL = 'docs/superpowers/plans/archive';
+
+test('readArchivedPlanIds (disk): filename ids only (flat + one-level subfolder), canonicalized; non-plan files ignored', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    writeRel(root, `${ARCHIVE_REL}/4187-UI-day-strip.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/007-P07-legacy.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/infra/4227-Infra-nested.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/README.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/2026-notes.txt`, 'x');
+    const ids = readArchivedPlanIds({ archiveDir: join(root, ARCHIVE_REL) });
+    assert.deepEqual([...ids].sort(), ['4187', '4227', '7']);
+  } finally {
+    cleanup();
+  }
+});
+
+// Review finding b6ad2d: the first cut's local regex demanded a LETTER after `<id>-`, so an
+// archived plan with a date slug (`029-2026-05-21-….md`, the older archive shape) was never seen
+// as archived and its batch kept holding. The shared claimedIdOfBasename parser reads it, while
+// still refusing a dateless `<YYYY>-MM-DD-…` note that only LOOKS like it starts with an id.
+test('readArchivedPlanIds: a DATE-slugged archived name (`029-2026-05-21-…`) parses; a dateless `2026-05-17-…` does not', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    writeRel(root, `${ARCHIVE_REL}/029-2026-05-21-fb-insta-ui-surface.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/2026-05-17-dateless-note.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/2026-FABLE-Price-real-plan.md`, 'x');
+    const ids = readArchivedPlanIds({ archiveDir: join(root, ARCHIVE_REL) });
+    assert.deepEqual([...ids].sort(), ['2026', '29']);
+  } finally {
+    cleanup();
+  }
+});
+
+test('readArchivedPlanIds: a missing archive dir / no source fails SAFE — an empty set, never a throw', (t) => {
+  const { root, cleanup } = tmpRepo();
+  t.after(cleanup);
+  assert.equal(readArchivedPlanIds({ archiveDir: join(root, ARCHIVE_REL) }).size, 0);
+  assert.equal(readArchivedPlanIds().size, 0);
+});
+
+// Review finding 47956f: queue-drain reads ready/ at an ORIGIN commit, so the archive listing must
+// come from that same commit — a member archived on origin but not yet pulled locally counts, and
+// an archive file that exists only on local disk (never pushed) does not.
+test('readArchivedPlanIds (ref): names at the given COMMIT, never local disk', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    const g = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'master');
+    g('config', 'user.email', 't@t.t');
+    g('config', 'user.name', 'T');
+    g('config', 'commit.gpgsign', 'false');
+    writeRel(root, `${ARCHIVE_REL}/4187-UI-landed.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/029-2026-05-21-dated.md`, 'x');
+    writeRel(root, `${ARCHIVE_REL}/infra/4227-Infra-nested.md`, 'x');
+    writeRel(root, 'docs/superpowers/plans/ready/4233-App-live.md', 'x');
+    g('add', '-A');
+    g('commit', '-qm', 'seed');
+    const sha = g('rev-parse', 'HEAD').trim();
+    // Diverge the disk from the commit in both directions.
+    rmSync(join(root, ARCHIVE_REL, '4187-UI-landed.md'));
+    writeRel(root, `${ARCHIVE_REL}/4999-Infra-disk-only.md`, 'x');
+    const ids = readArchivedPlanIds({ repoRoot: root, ref: sha, archiveRel: ARCHIVE_REL });
+    assert.deepEqual([...ids].sort(), ['29', '4187', '4227']);
+    // A trailing slash on archiveRel is tolerated.
+    assert.equal(
+      readArchivedPlanIds({ repoRoot: root, ref: sha, archiveRel: `${ARCHIVE_REL}/` }).size,
+      3,
+    );
+    // A path absent at the ref → empty (data, not a fault).
+    assert.equal(
+      readArchivedPlanIds({ repoRoot: root, ref: sha, archiveRel: 'docs/nope' }).size,
+      0,
+    );
+    // No resolvable ref → empty, and no disk fallback.
+    assert.equal(
+      readArchivedPlanIds({ repoRoot: root, ref: null, archiveRel: ARCHIVE_REL }).size,
+      0,
+    );
+    // A git FAULT (unknown ref) fails safe: empty set, one stderr line through `log`.
+    const logged = [];
+    const bad = readArchivedPlanIds({
+      repoRoot: root,
+      ref: 'f'.repeat(40),
+      archiveRel: ARCHIVE_REL,
+      log: (m) => logged.push(m),
+    });
+    assert.equal(bad.size, 0);
+    assert.equal(logged.length, 1);
+    assert.match(logged[0], /treating no batch member as archived/);
+  } finally {
+    cleanup();
+  }
+});
+
+// Review finding b35525: the roster can be read at a git COMMIT (walkBatchFolders `at`) so a caller
+// judging against origin never combines an origin archive with a stale local batch.md.
+test('walkBatchFolders / roster readers `at` a commit: the committed roster wins over local disk; runnable with the 2 live ids', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    const g = (...a) => execFileSync('git', ['-C', root, ...a], { encoding: 'utf8' });
+    g('init', '-q', '-b', 'master');
+    g('config', 'user.email', 't@t.t');
+    g('config', 'user.name', 'T');
+    g('config', 'commit.gpgsign', 'false');
+    writeBatch(root, 'batch-three', { members: ['100', '101', '102'] });
+    writeBatch(root, 'batch-claimed', { members: ['300', '301'], status: 'claimed' });
+    writeRel(root, 'docs/superpowers/batches/stray/notes.md', 'no batch.md here');
+    writeRel(root, 'docs/superpowers/batches/README.md', 'top-level file');
+    writeBatch(root, 'archive/batch-old', { members: ['900', '901'] }); // reserved dir
+    writeRel(root, `${ARCHIVE_REL}/101-Infra-landed.md`, 'x');
+    g('add', '-A');
+    g('commit', '-qm', 'seed');
+    const sha = g('rev-parse', 'HEAD').trim();
+    // Stale LOCAL roster: drops 102, which would make the batch read as dissolved.
+    writeBatch(root, 'batch-three', { members: ['100', '101'] });
+    writeBatch(root, 'batch-local-only', { members: ['500', '501'] });
+
+    const dir = join(root, 'docs/superpowers/batches');
+    const at = { repoRoot: root, ref: sha };
+    const skipped = [];
+    const walked = [...walkBatchFolders(dir, { at, onSkip: (n, why) => skipped.push([n, why]) })];
+    assert.deepEqual(
+      walked.map((w) => w.slug),
+      ['batch-claimed', 'batch-three'],
+    );
+    assert.deepEqual(skipped, [['stray', 'no readable batch.md']]);
+
+    const archivedIds = () =>
+      readArchivedPlanIds({ repoRoot: root, ref: sha, archiveRel: ARCHIVE_REL });
+    const { runnable, dissolved } = readBatchRosterLiveness(dir, { at, archivedIds });
+    assert.deepEqual(
+      runnable.map((b) => [b.slug, b.members]),
+      [['batch-three', ['100', '102']]],
+    );
+    assert.deepEqual(dissolved, []);
+    assert.equal(findRunnableBatchForPlan(dir, '102', { at, archivedIds }), 'batch-three');
+    // `at` may be a thunk, resolved when the walk starts.
+    assert.equal(lazyBatchRoster(dir, { at: () => at, archivedIds }).get('102'), 'batch-three');
+    // The local disk still reads the stale roster — proof the two sources really differ.
+    assert.equal(findRunnableBatchForPlan(dir, '102', { archivedIds }), null);
+  } finally {
+    cleanup();
+  }
+});
+
+test('walkBatchFolders `at`: a null ref walks nothing; a git fault goes to onFault, or throws without one', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    execFileSync('git', ['-C', root, 'init', '-q', '-b', 'master']);
+    const dir = join(root, 'docs/superpowers/batches');
+    assert.deepEqual([...walkBatchFolders(dir, { at: { repoRoot: root, ref: null } })], []);
+    const badRef = 'f'.repeat(40);
+    const faults = [];
+    const at = { repoRoot: root, ref: badRef, onFault: (e) => faults.push(e) };
+    assert.deepEqual([...walkBatchFolders(dir, { at })], []);
+    assert.equal(faults.length, 1);
+    assert.throws(() => [...walkBatchFolders(dir, { at: { repoRoot: root, ref: badRef } })]);
+  } finally {
+    cleanup();
+  }
+});
+
+test('batchLiveness: the rule table — none archived / ≥2 live / ≤1 live', () => {
+  const arch = new Set(['4187']);
+  assert.deepEqual(batchLiveness({ members: ['4211', '4227'] }, arch), {
+    live: ['4211', '4227'],
+    archived: [],
+    dissolved: false,
+  });
+  assert.deepEqual(batchLiveness({ members: ['4187', '4233'] }, arch), {
+    live: ['4233'],
+    archived: ['4187'],
+    dissolved: true,
+  });
+  assert.deepEqual(batchLiveness({ members: ['4187', '4233', '4234'] }, arch), {
+    live: ['4233', '4234'],
+    archived: ['4187'],
+    dissolved: false,
+  });
+  // Everything archived → dissolved with nothing live.
+  assert.equal(batchLiveness({ members: ['4187'] }, arch).dissolved, true);
+  // No archive information at all → verbatim, never dissolved.
+  assert.deepEqual(batchLiveness({ members: ['4187', '4233'] }, null), {
+    live: ['4187', '4233'],
+    archived: [],
+    dissolved: false,
+  });
+  // A zero-padded roster token matches its canonical archive id.
+  assert.deepEqual(batchLiveness({ members: ['007', '4233'] }, new Set(['7'])).archived, ['007']);
+});
+
+test('dissolvedBatchReason: names the live count, the archived ids, and the solo survivor', () => {
+  assert.equal(
+    dissolvedBatchReason({ live: ['4233'], archived: ['4187'] }),
+    'dissolved: only 1 live member left (4187 archived) — 4233 is claimable solo',
+  );
+  assert.equal(
+    dissolvedBatchReason({ live: [], archived: ['101', '102'] }),
+    'dissolved: only 0 live members left (101, 102 archived)',
+  );
+});
+
+test('2-member batch, 1 archived: DISSOLVED — the survivor is held by nothing, in every reader', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    writeBatch(root, 'batch-profile-ui', { members: ['4187', '4233'] });
+    const dir = join(root, 'docs/superpowers/batches');
+    const archivedIds = new Set(['4187']);
+    assert.equal(readRunnableBatchMembers(dir, { archivedIds }).size, 0);
+    assert.equal(findRunnableBatchForPlan(dir, '4233', { archivedIds }), null);
+    assert.deepEqual(readRunnableBatches(dir, { archivedIds }), []);
+    const { runnable, dissolved } = readBatchRosterLiveness(dir, { archivedIds });
+    assert.deepEqual(runnable, []);
+    assert.equal(dissolved.length, 1);
+    assert.equal(dissolved[0].slug, 'batch-profile-ui');
+    assert.deepEqual(dissolved[0].members, ['4233']);
+    assert.deepEqual(dissolved[0].archivedMembers, ['4187']);
+    const lazy = lazyBatchRoster(dir, { archivedIds });
+    assert.equal(lazy.has('4233'), false);
+    assert.deepEqual(lazy.list(), []);
+    assert.deepEqual(
+      lazy.dissolved().map((b) => b.slug),
+      ['batch-profile-ui'],
+    );
+    assert.equal(lazyRunnableBatchMembers(dir, { archivedIds }).has('4233'), false);
+    // Without archive information the old verbatim behaviour stands (fixture callers).
+    assert.equal(findRunnableBatchForPlan(dir, '4233'), 'batch-profile-ui');
+  } finally {
+    cleanup();
+  }
+});
+
+test('3-member batch, 1 archived: still RUNNABLE with exactly the 2 live ids', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    writeBatch(root, 'batch-three', { members: ['100', '101', '102'] });
+    const dir = join(root, 'docs/superpowers/batches');
+    const archivedIds = new Set(['101']);
+    const batches = readRunnableBatches(dir, { archivedIds });
+    assert.equal(batches.length, 1);
+    assert.deepEqual(batches[0].members, ['100', '102']);
+    assert.deepEqual(batches[0].archivedMembers, ['101']);
+    const held = readRunnableBatchMembers(dir, { archivedIds });
+    assert.deepEqual([...held.keys()].sort(), ['100', '102']);
+    assert.equal(findRunnableBatchForPlan(dir, '100', { archivedIds }), 'batch-three');
+    assert.equal(findRunnableBatchForPlan(dir, '101', { archivedIds }), null);
+    const lazy = lazyBatchRoster(dir, { archivedIds });
+    assert.deepEqual(lazy.list()[0].members, ['100', '102']);
+    assert.deepEqual(lazy.dissolved(), []);
+  } finally {
+    cleanup();
+  }
+});
+
+test('archivedIds thunk: invoked at most ONCE per read, and NOT at all when no batch is runnable', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    const dir = join(root, 'docs/superpowers/batches');
+    let calls = 0;
+    const archivedIds = () => {
+      calls += 1;
+      return new Set(['101']);
+    };
+    writeBatch(root, 'batch-claimed', { members: ['100', '101'], status: 'claimed' });
+    readRunnableBatchMembers(dir, { archivedIds });
+    assert.equal(calls, 0, 'no runnable batch → the archive is never listed');
+    writeBatch(root, 'batch-a', { members: ['100', '101'] });
+    writeBatch(root, 'batch-b', { members: ['200', '201'] });
+    const lazy = lazyBatchRoster(dir, { archivedIds });
+    assert.equal(calls, 0, 'lazy roster: no read before the first lookup');
+    lazy.has('100');
+    lazy.list();
+    lazy.dissolved();
+    assert.equal(calls, 1, 'one listing serves both runnable batches and every shape');
+  } finally {
+    cleanup();
+  }
+});
+
+test('stale all-archived roster, WITH archive info: dissolved, holds nothing', () => {
+  const { root, cleanup } = tmpRepo();
+  try {
+    writeBatch(root, 'batch-stale', { members: ['101', '102'] });
+    const dir = join(root, 'docs/superpowers/batches');
+    const archivedIds = new Set(['101', '102']);
+    assert.equal(readRunnableBatchMembers(dir, { archivedIds }).size, 0);
+    assert.deepEqual(readBatchRosterLiveness(dir, { archivedIds }).dissolved[0].members, []);
   } finally {
     cleanup();
   }

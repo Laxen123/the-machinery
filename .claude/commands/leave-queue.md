@@ -32,7 +32,7 @@ It is idempotent and always exits 0; an already-absent entry is a no-op, never a
 
 ## Step 3 — confirm and state the re-entry path
 
-Print the resulting queue (`node scripts/landing-queue-board.mjs`) so the release is visible, then one line: the slot is gone, the work is untouched, and re-entry is by re-running `node scripts/done-worktree.mjs <slug>` when ACTUALLY ready (it re-enqueues at the back — a queue slot means "reviewed + done, merge NOW", per `docs/runbooks/plans-workflow.md` § Queue slot = readiness).
+Print the resulting queue (`node scripts/landing-queue-board.mjs`) so the release is visible, then one line: the slot is gone, the work is untouched, and re-entry is by re-running `node scripts/done-worktree.mjs <slug>` when ACTUALLY ready (it re-enqueues at the back — a queue slot means "reviewed + done, merge NOW", per `docs/coord/landing-queue.md` § Queue slot = readiness).
 
 ## Rules
 

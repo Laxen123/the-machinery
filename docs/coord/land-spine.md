@@ -84,6 +84,50 @@ over what changed since the checkpoint rather than the whole thing. A fresh land
 with an empty proof set — the cache lives and dies with the attempt, never crossing to a different
 piece of work.
 
+**Across pushes, the same idea is content-addressed.** The canonical waste is a land: a branch's
+final push gates a tree, and minutes later the land's merge push re-gates a patch-identical tree. A
+pass cache for the expensive pre-push battery removes that second run — and the machine-wide battery
+lock acquire with it — without any record of "the last gated push":
+
+- **The key is the content, minted fresh at check time.** It is a hash over a format version, the
+  runtime's major version, the version-control tool's version, the object ids of every path the
+  selected checks can read, the selection claim, and the object id of the whole file that decides
+  which gates run. Any content difference anywhere the checks can read is a different key and a
+  miss. A patch-identity skip would instead need a mutable "last gated push" marker, which a crashed
+  session could leave stale; content addressing needs no history, and "a merge push of already-gated
+  content" is simply a hit.
+- **The selection claim is canonical, not range-derived.** The key uses what the selector picks for
+  the branch's own content diff against the trunk (`merge-base..HEAD`), because a push range is an
+  artifact of remote-ref state: the final branch push and the land's merge push gate identical
+  content under different ranges, and keying the range makes them miss each other. The gate itself
+  triggers on the union of the push range and that canonical diff, so the branch side actually runs
+  — and records — the selection the merge push will look up.
+- **Soundness pins, because the one unacceptable failure is a false green.** A record refuses any
+  claim the run did not cover; a check refuses a hit whose claim does not cover the current run. A
+  green full run also records a universal twin that any selection of identical content may hit.
+  Dirt on any keyed path makes the push uncacheable, not a hit. A failure is never cached, and a red
+  run actively invalidates the key and its twin, so an earlier flaky pass can never shadow a real
+  failure. Every error — git failure, corrupt entry, empty selection — falls toward "run the gate".
+- **Key the whole gate-deciding file, not a marked block of it.** Keying only the block that
+  consults the cache looks sufficient and is not: the code that runs the checks and classifies
+  pass/fail, and the code that assembles the selection, sit outside any marker pair, so a fix to a
+  misclassification there would leave entries recorded by the buggy version servable — a false
+  green surviving its own fix. The cost is that any edit to that file busts the key.
+- **Proxies and a time bound for what cannot be keyed directly.** An untracked dependency directory
+  is keyed through its tracked lock file, and entries expire after a same-workday TTL that bounds
+  the drift that proxy can hide. A path prefix no selected check can read is dropped from the key so
+  unrelated churn does not defeat hits; any uncertain attribution keys everything.
+
+The cache lives in the repository's shared git directory — visible to every tree, never tracked,
+never swept by a clean, and disposable. `node scripts/coord/battery-pass-cache.mjs status` lists
+live entries, `path` prints the directory, and `invalidate --key <k>` drops a suspect entry; there is
+deliberately no switch that forces a hit. `PREPUSH_NO_BATTERY_CACHE=1` turns the cache off for a push
+(enforced in the hook and in the cache's own check), and `PREPUSH_FULL_BATTERY=1` forces a full run
+that neither reads nor records it. Every decision appends one telemetry line naming the outcome and,
+for a miss, the reason (no entry, expired, a keyed path's content moved, a different selection claim,
+a run broader than the canonical claim), so a later re-measure can attribute every leak. The other
+expensive gates use a sibling cache with the same discipline and a separate key format.
+
 ## Extension points and the registry contract
 
 The spine's own code should never contain a fact about any particular project. Everything
@@ -139,6 +183,89 @@ trunk regression gets through, because the whole point of the spine is to be the
 check happens regardless of how the moment feels. See [`worktrees.md`](worktrees.md) for the
 working-tree hygiene the merge step itself depends on, and [`hooks.md`](hooks.md) for how a hand
 merge is blocked at the tool layer rather than only discouraged in prose.
+
+## Landing recovery under contention
+
+**When the merge is already on the remote trunk but the land died in close-out, do not keep re-running
+the whole spine.** Every re-invocation repeats the idempotent re-merge, which under contention can
+keep losing the same lock race and re-tripping the same trunk-divergence check. The merge is done;
+only bookkeeping remains.
+
+**First, the one-command resume:** `node scripts/done-worktree.mjs <slug> --finish-close-out`. It
+reads where the dead land stopped entirely from **remote** state — no tree, no local sidecar file, no
+in-memory spine state, all of which are invisible to a fresh session — and finishes each remaining
+step idempotently: archive the work item, update the board row, the index and the session entry,
+dequeue, release the claim, delete the branch remotely and locally, and remove the tree directory.
+Each leftover is detected and cleared independently, so it converges from a kill at any step
+boundary, and a re-run against an already-closed-out land is a no-op. This is the recovery for the
+case a plain re-invocation cannot reach at all: a bare re-invoke needs the tree still registered on
+this checkout, so once teardown removed it — or once the whole session died, which is the usual
+shape of an unattended cloud land killed shortly after its merge — nothing else could finish the job.
+
+It is **fail-closed** and refuses by name rather than guessing. A branch on the remote whose tip is
+not an ancestor of the trunk (the shape of a live or unfinished land) is refused outright, never torn
+down. So is a land it cannot prove completed through one of two independent provers — the branch's
+merged ancestry, or the work item already sitting in the archive on the trunk (the archive commit is
+pushed only after the merge reaches the remote, so an archived item is itself proof, and it is the
+only prover left once the branch delete has run). A batch is refused by name too: its close-out
+spans many items and claims, so it recovers by re-invoking the batch land, or item by item. It never
+re-runs the merge, never enqueues and runs no gate.
+
+**Only when it refuses or reports residue, finish by hand, in this order:** remove the board row;
+dequeue (`node scripts/landing-queue.mjs dequeue <slug>` — the queue lives on its own coordination
+ref, not on the trunk and not on the board, so read it with `landing-queue.mjs status`, never by
+hand); move the work item to the archive; release the claim (confirm with the claim tool's own
+status, not a raw ref listing — a released claim ref still exists, pointing at a release
+tombstone); mark the session entry complete; tear down (stop tree-scoped processes, remove the
+directory, `git worktree prune`, delete the local branch, delete the remote branch). A batch runs the
+same steps once per member, plus its manifest and its one shared board and session entry.
+
+**Halt shapes worth recognizing:**
+
+- **The close-out push dies because the formatter cannot launch** (the shared dependency install is
+  torn). That is an environment heal, not a spine bug and never a hook-bypass case: repair the
+  shared install, confirm the formatter shim exists, then re-invoke the land plainly.
+- **A local-trunk fast-forward failure** is a recoverable seam with the branch unmerged. A residual
+  race after the merge recovers through the steps above; rebase onto the remote trunk first to
+  preserve a sibling's unpushed commit, never `reset --hard`.
+- **A queued land that hits a merge conflict holds its slot** (`LAND_BLOCKED_HOLDING`) rather than
+  crashing, with the landing mutex and head slot retained. Rebuild on the fresh trunk by
+  patch-replaying the branch's own diff (see `worktrees.md` § Landed-work-reversion lint), push with
+  lease, re-record the review, and resume. Do not merge the trunk _into_ the branch to resync: it
+  drags coordination-document changes onto the branch, which the coordination-branch guard then
+  refuses to commit.
+- **The merge push loses a non-fast-forward race on every retry** — the same holding seam, same
+  recovery. Coordination pushes from the same session racing its own in-flight land are expected and
+  absorbed by the retry loop, not something to sequence around; each lost attempt logs one line, so
+  a real storm is distinguishable from the retry never engaging.
+- **Heavy rework at the head requeues to the tail** (`LAND_BLOCKED_REQUEUED`): a second conflict in
+  the same attempt, a review re-pin refused because content changed, or a long cumulative head hold
+  with waiters behind moves the entry to the tail in one atomic write and releases the mutex. Finish
+  the rework during the tail wait, push, and re-invoke. Capped per attempt as a livelock guard; an
+  empty queue never requeues, because holding is free when nobody waits.
+- **A holding item can be overtaken by one path-disjoint, non-mutating waiter** and slide to
+  position two — never the tail. Nothing about its recovery changes; the resume waits out the
+  overtaker and clears its holding stamp before re-entering the merge.
+- **Rebase-conflict triage: look for a landed twin.** During a long wait a sibling may land work
+  your branch also absorbed. At each conflicted commit, check what the trunk landed on that file
+  since the merge base; when a landed item already covers your commit's intent, drop your commit
+  (`git rebase --skip`) instead of shipping two implementations of one surface, then re-verify the
+  imports of the commits you kept.
+- **A pure rebase does not stale a review.** Every sha-pinned marker is dual-pinned — the tip sha
+  and the rebase-stable range patch-id — so a rebase that changes no content leaves the marker
+  current with no halt and no re-pin commit; a content change invalidates it on both identities.
+  Re-recording a review at a new sha carries finding dispositions forward automatically when the
+  content is provably the same, or on an explicit carry flag after a content-changing resolution.
+- **A killed local land leaves debris the next land clears.** Run long lands in the background with
+  the fixed cap (see `worktrees.md` § Kill-safety rules); a dead merge-tree registration whose
+  directory is gone and whose metadata has sat idle is swept at the start of the next land, while a
+  fresh one is spared.
+- **An exit code with no seam name after teardown** usually means the land ran from a shell whose
+  working directory was the tree it just removed (or a wrapper shell that teardown's process kill
+  matched). The land very likely succeeded: check that the work item is archived on the trunk, the
+  tree is gone and the branch is deleted, and read the land's result file instead of the wrapper's
+  exit. Invoke lands from the shared checkout, and never pipe one into `tail`, which masks its exit
+  code.
 
 ## What this costs
 

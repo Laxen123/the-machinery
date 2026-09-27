@@ -16,7 +16,7 @@
 // Usage:
 //   node scripts/queued-run.mjs [--label <name>] [--] <cmd> [args...]
 //   pnpm --filter @vetapp/backend test:queued        # the vitest full-suite form
-//   node scripts/queued-run.mjs python -m pytest backend/scripts/price-pipeline/
+//   node scripts/queued-run.mjs python -m pytest backend/scripts/data-pipeline/
 //
 // Single-file runs stay ticket-free ON PURPOSE (not herd-shaped) — this is for
 // full-suite / whole-dir loads. The child is spawned via spawnWithTreeKill
@@ -29,7 +29,14 @@
 import { existsSync, statSync } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { withTestSlot, TEST_SLOT_ADMITTED_MARKER } from './coord/test-queue.mjs';
+import {
+  withTestSlot,
+  TEST_SLOT_ADMITTED_MARKER,
+  FAIL_OPEN_CONCURRENCY,
+  FAIL_OPEN_ENV,
+  failOpenEnv,
+  clampWorkerValue,
+} from './coord/test-queue.mjs';
 import { spawnWithTreeKill, waitForExit } from './coord/kill-tree.mjs';
 import { resolveSchedulingClass, applyCpuClass } from './coord/session-priority.mjs';
 // plan 4096 S10: the pytest worker POLICY (scripts/pytest-workers.mjs) is pytest-shaped project
@@ -176,6 +183,81 @@ export function injectPytestParallelism(
   return { cmd, args: newArgs };
 }
 
+// ── plan 4236 T2 (H2): clamp a run the queue never admitted ─────────────────────────────────
+// A fail-opened wait (max-wait expiry, a broken queue dir) still runs — it just runs NARROW. Two
+// halves: the env flag (FAIL_OPEN_ENV) reaches every runner that sizes itself from the per-slot
+// budget at load time inside the child, and this argv rewrite covers the two command shapes whose
+// width is already baked into argv before the wait even starts: `node --test` (the scripts
+// battery; node's own default is availableParallelism()-1) and a pytest sweep whose `-n` this very
+// wrapper injected from the pre-wait budget (injectPytestParallelism). Pure: `{ cmd, args }` in, a
+// fresh `{ cmd, args }` out; any other command is returned untouched.
+const NODE_BASENAME_RE = /(?:^|[\\/])node(?:\.exe)?$/i;
+const TEST_CONCURRENCY_RE = /^--test-concurrency(=|$)/;
+// Is this a `node --test` run? EXACT, not heuristic: `--test` must be the FIRST argument, which is
+// the shape every committed caller emits (the BATTERIES 'battery' entry, the pre-push hint, the
+// wiki-commit battery). gpt-review rounds 1-3 showed why nothing looser holds: node's option
+// grammar cannot be read without its option table — a value-flag list is always incomplete, and an
+// extension heuristic mis-reads `--import ./loader.mjs` one way and an extensionless script the
+// other. Any other shape is left untouched, i.e. it keeps exactly the pre-4236 behaviour; the one
+// thing this must never do is splice a flag into a real script's own arguments.
+function nodeTestFlagIndex(cmd, args) {
+  return NODE_BASENAME_RE.test(String(cmd)) && args[0] === '--test' ? 0 : -1;
+}
+
+// One clamp for every fail-open rewrite — test-queue.mjs's clampWorkerValue (gpt-review r2 ff21dd).
+const clampedWorkerValue = clampWorkerValue;
+
+export function clampFailOpenCommand({ cmd, args }) {
+  const testAt = nodeTestFlagIndex(cmd, args);
+  if (testAt >= 0) {
+    const kept = [];
+    let requested = null; // the last explicit concurrency (node's own last-wins reading)
+    for (let i = 0; i < args.length; i++) {
+      const a = String(args[i]);
+      if (TEST_CONCURRENCY_RE.test(a)) {
+        if (a === '--test-concurrency') {
+          // gpt-review r3 302d84: a separate-form flag with NO value is a malformed command node
+          // itself rejects — leave it exactly as typed rather than silently repairing it.
+          if (i + 1 >= args.length) return { cmd, args: [...args] };
+          requested = args[i + 1];
+          i++; // drop its separate value token too
+        } else {
+          requested = a.slice('--test-concurrency='.length);
+        }
+        continue;
+      }
+      kept.push(args[i]);
+    }
+    const at = kept.indexOf('--test');
+    return {
+      cmd,
+      args: [
+        ...kept.slice(0, at + 1),
+        // never WIDEN an explicit narrower request (gpt-review r1 172e56)
+        `--test-concurrency=${clampedWorkerValue(requested)}`,
+        ...kept.slice(at + 1),
+      ],
+    };
+  }
+  const pyAt = pytestArgsInsertIndex(cmd, args);
+  if (pyAt >= 0) {
+    const out = [...args];
+    for (let i = pyAt; i < out.length; i++) {
+      const a = String(out[i]);
+      if ((a === '-n' || a === '--numprocesses') && i + 1 < out.length) {
+        out[i + 1] = clampedWorkerValue(out[i + 1]);
+        i++;
+      } else if (/^-n.+$/.test(a)) {
+        out[i] = `-n${clampedWorkerValue(a.slice(2))}`;
+      } else if (a.startsWith('--numprocesses=')) {
+        out[i] = `--numprocesses=${clampedWorkerValue(a.slice('--numprocesses='.length))}`;
+      }
+    }
+    return { cmd, args: out };
+  }
+  return { cmd, args: [...args] };
+}
+
 // Only flags BEFORE the command belong to queued-run; everything from the first
 // non-flag token on is the wrapped command, passed through VERBATIM (its own
 // --label / -- / anything must never be consumed here).
@@ -202,7 +284,7 @@ export function parseArgs(argv) {
 }
 
 // Hold a slot for the whole child run; resolve to the exit code to forward.
-// opts: { spawnOpts, queueOpts, tier, yieldToHead, announceAdmitted } — test seams; production
+// opts: { spawnOpts, queueOpts, tier, yieldToHead, announceAdmitted, spawn } — test seams; production
 // callers pass nothing. `tier` keeps its pre-3226 override semantics: passing it skips the landing-queue read
 // entirely (a test seam, not a production path), and `yieldToHead` is an independent override in
 // that same mode (default false, matching pre-3226 behavior when omitted).
@@ -233,7 +315,7 @@ export async function runQueued({ label, cmd, args }, opts = {}) {
     opts.announceAdmitted ?? (() => process.stderr.write(`${TEST_SLOT_ADMITTED_MARKER}\n`));
   return withTestSlot(
     label,
-    async () => {
+    async ({ admitted } = { admitted: true }) => {
       // plan 4003 T1 / plan 4006 review round 2 (finding 0cb34c residual): the marker means the
       // wrapped command is starting NOW — whether `withTestSlot` awarded a genuine queue slot or
       // fail-opened (`TEST_QUEUE_DISABLE=1`, a queue I/O error, or max-wait expiry: the callback
@@ -252,7 +334,22 @@ export async function runQueued({ label, cmd, args }, opts = {}) {
       // a unit test injects it instead of capturing the real process stdout; production callers
       // pass nothing.
       announceAdmitted();
-      const child = spawnWithTreeKill(cmd, args, { stdio: 'inherit', ...opts.spawnOpts });
+      // plan 4236 T2: a run the queue never admitted (fail-open) runs clamped — see
+      // clampFailOpenCommand. A genuinely admitted run is spawned exactly as before.
+      let runCmd = cmd;
+      let runArgs = args;
+      let spawnOpts = { stdio: 'inherit', ...opts.spawnOpts };
+      if (admitted === false) {
+        ({ cmd: runCmd, args: runArgs } = clampFailOpenCommand({ cmd, args }));
+        spawnOpts = { ...spawnOpts, env: failOpenEnv(spawnOpts.env ?? process.env) };
+        console.error(
+          `queued-run: "${label}" was NOT admitted by the test queue (fail-open) — running it ` +
+            `CLAMPED to ${FAIL_OPEN_CONCURRENCY} worker(s) (${FAIL_OPEN_ENV}=1) so an unserialized ` +
+            'run cannot add a third full-box job (plan 4236)',
+        );
+      }
+      // `opts.spawn` is a test seam (records the argv/env, then delegates); production passes none.
+      const child = (opts.spawn ?? spawnWithTreeKill)(runCmd, runArgs, spawnOpts);
       // Synchronously, on the pid we just got: the demotion is inherited by everything the child
       // forks afterwards (pnpm → vitest workers, python → pytest-xdist), so the whole tree comes
       // up below-normal. Never throws, never elevates — see session-priority.mjs.

@@ -2061,6 +2061,29 @@ test('3004: --spec-review exempt-mechanical stamps NO specReviewBy and does not 
   }
 });
 
+// Plan 4195 (ledger :1066): --spec-review is case-insensitive for the exempt-mechanical
+// literal ONLY — normalized once at parse time, so "Exempt-Mechanical" behaves exactly
+// like "exempt-mechanical" (no specReviewBy, no --provenance conflict, stage: specced).
+// A sha value is stored verbatim, case included — normalization never touches it.
+test('4195: --spec-review Exempt-Mechanical (mixed case) is treated as exempt-mechanical', () => {
+  const repo = withVetappMutationBanner(makeIsolatedRepo());
+  try {
+    const res = runStamp(
+      repo.dir,
+      ['1000', 'sonnet', '--spec-review', 'Exempt-Mechanical'],
+      repo.stampExecModel,
+    );
+    assert.equal(res.code, 0, `expected exit 0\nstdout:${res.stdout}\nstderr:${res.stderr}`);
+    repo.g('fetch', '-q', 'origin', 'master');
+    const body = repo.g('show', 'origin/master:docs/superpowers/plans/ready/1000-Other-foo.md');
+    assert.match(body, /^specReview: exempt-mechanical$/m);
+    assert.match(body, /^stage: specced$/m);
+    assert.doesNotMatch(body, /specReviewBy/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
 test('3004: --spec-review --provenance stamps specReviewBy with the declared value, no WARN', () => {
   const repo = withVetappMutationBanner(makeIsolatedRepo());
   try {
@@ -2508,6 +2531,98 @@ test('3973: --cloud-exec/--env/--move fold execModel + cloudExec(+cloudEnv) + a 
     assert.match(body, /^cloudEnv: full$/m);
     const subject = repo.g('log', '-1', '--format=%B', 'origin/master');
     assert.match(subject, /Coord-Write: stamp-exec-model\+stamp-cloud-exec/);
+    // Plan 4195: the combined form's own execModel axis must NOT judge the false
+    // cloudExec-unstamped warning against the pre-cloud-axis body — the cloud axis
+    // (axes[1]) always writes a validated cloudExec key in this same invocation, so
+    // that warning is never correct in the combined form.
+    assert.doesNotMatch(res.stderr, /cloudExec: frontmatter key/);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// Plan 4195 (ledger :1745 shape): the bare `--cloud-exec` form with NO `--move` skips the
+// --move preflight projection (stamp-lib.mjs's own `--move` re-run of the axes loop never
+// fires here), so this covers the OTHER code path into execModelAxis.mutateBody the guard
+// must also cover, plus the `cloudExec: false` value.
+test('3973/4195: --cloud-exec false with no --move stamps cloudExec: false without the false-positive WARN (ledger :1745 shape)', () => {
+  const repo = makeIsolatedRepo();
+  try {
+    const res = runStamp(
+      repo.dir,
+      ['1000', 'fable', '--cloud-exec', 'false', '--reason', 'x'],
+      repo.stampExecModel,
+    );
+    assert.equal(res.code, 0, res.stderr);
+    assert.doesNotMatch(res.stderr, /cloudExec: frontmatter key/);
+    repo.g('fetch', '-q', 'origin', 'master');
+    const body = repo.g(
+      'show',
+      'origin/master:docs/superpowers/plans/ready/1000-FABLE-Other-foo.md',
+    );
+    assert.match(body, /^cloudExec: false$/m);
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// plan 4202: --spec-review WITHOUT --provenance stamps specReviewBy: undeclared (plan 3004's
+// existing behaviour — see the WARN test above), and the --move preflight (stamp-lib.mjs,
+// which judges the PROJECTED body — this axis's own mutation applied first) now refuses that
+// projected undeclared-provenance body via the same shared gate move-plan.mjs's ready/
+// promotion uses. This is the producer-side inflow plan 4202 closes WITHOUT touching
+// stamp-exec-model.mjs itself — the refusal comes entirely from the hoisted core.
+test('4202: --spec-review + --move ready WITHOUT --provenance is refused by the --move preflight (undeclared provenance)', () => {
+  const repo = withVetappMutationBanner(makeIsolatedRepo({ startFolder: 'pending-approval' }));
+  try {
+    const before = repo.g('rev-parse', 'origin/master').trim();
+    const res = runStamp(
+      repo.dir,
+      ['1000', 'sonnet', '--spec-review', 'a1b2c3d', '--move', 'ready'],
+      repo.stampExecModel,
+    );
+    assert.notEqual(
+      res.code,
+      0,
+      `expected a non-zero exit\nstdout:${res.stdout}\nstderr:${res.stderr}`,
+    );
+    assert.match(res.stderr, /specReviewBy: undeclared/);
+    assert.equal(repo.g('rev-parse', 'origin/master').trim(), before, 'no commit landed');
+    repo.g('fetch', '-q', 'origin', 'master');
+    const tree = repo.g('ls-tree', '-r', '--name-only', 'origin/master');
+    assert.doesNotMatch(tree, /ready\/1000-Other-foo\.md/, 'nothing landed in ready/');
+    assert.match(tree, /pending-approval\/1000-Other-foo\.md/, 'plan stays in pending-approval/');
+  } finally {
+    repo.cleanup();
+  }
+});
+
+// The sibling positive control: --provenance declared → the projected body carries a real
+// specReviewBy, so the SAME --move preflight passes and the combined form still works.
+test('4202: --spec-review --provenance + --move ready still succeeds (declared provenance is not gated)', () => {
+  const repo = withVetappMutationBanner(makeIsolatedRepo({ startFolder: 'pending-approval' }));
+  try {
+    const res = runStamp(
+      repo.dir,
+      [
+        '1000',
+        'sonnet',
+        '--spec-review',
+        'a1b2c3d',
+        '--provenance',
+        'fable-5/xhigh',
+        '--move',
+        'ready',
+      ],
+      repo.stampExecModel,
+    );
+    assert.equal(res.code, 0, `expected exit 0\nstdout:${res.stdout}\nstderr:${res.stderr}`);
+    repo.g('fetch', '-q', 'origin', 'master');
+    const tree = repo.g('ls-tree', '-r', '--name-only', 'origin/master');
+    assert.match(tree, /ready\/1000-Other-foo\.md/, 'plan moved to ready/');
+    const body = repo.g('show', 'origin/master:docs/superpowers/plans/ready/1000-Other-foo.md');
+    assert.match(body, /^specReview: a1b2c3d$/m);
+    assert.match(body, /^specReviewBy: fable-5\/xhigh$/m);
   } finally {
     repo.cleanup();
   }

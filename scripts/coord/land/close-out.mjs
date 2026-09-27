@@ -1,7 +1,7 @@
 // scripts/coord/land/close-out.mjs — plan 3961 T3.1: the land spine's close-out phase, moved
-// out of scripts/done-worktree.mjs behaviour-identical (parity proven by
-// scripts/coord/land/parity.test.mjs's 12 scenarios against committed goldens, plus the full
-// 571-case scripts/done-worktree.test.mjs, both unchanged by this move).
+// out of scripts/done-worktree.mjs behaviour-identical (parity proven by this migration's
+// parity-test suite against committed goldens, plus the full legacy test suite, both unchanged
+// by this move).
 //
 // WHAT THIS MODULE OWNS. The close-out phase of the file header's five-phase landing sequence:
 // idempotent board-row removal (single-plan and batch), the plan-file archive move (or a
@@ -14,7 +14,7 @@
 //
 // HOW THIS MODULE REACHES THE REST OF THE WORLD. A non-test module under scripts/coord/ may
 // import only scripts/coord/** and node: builtins (Rule 3,
-// docs/runbooks/scripts-module-layout.md) — so every one of the ~25 plain scripts/*.mjs modules
+// docs/coord/scripts-layout.md) — so every one of the ~25 plain scripts/*.mjs modules
 // this code used to reach directly is instead read off the bound dependency container,
 // `landDeps()` (scripts/coord/land/deps.mjs), AT CALL TIME, inside each function — never at
 // module top level. The container is bound once, by done-worktree.mjs's own `bindLandDeps({…})`
@@ -30,7 +30,7 @@
 // (a small pure helper with an outside, non-close-out spine call site), and — close-out-only by
 // call count but outside this move's audited contiguous block — `gateProbe`, `hasStagedChanges`,
 // `closeOutCommitAtHead`, and `regenIndex`. `pushMaster` specifically cannot move at all:
-// done-worktree.test.mjs source-inspects it by literal text
+// the legacy module's own test suite source-inspects it by literal text
 // (`source.indexOf('function pushMaster(MAIN)')`). All of these stay in done-worktree.mjs and
 // reach this module's callers through `D.spine.*`, exactly like `D.L.*` / `D.coordGit.*` / etc.
 // `dequeueQueueIfHeld` — a T3.1-era member of this same NOT-here list — moved to
@@ -43,7 +43,7 @@
 // phaseCloseOut / phasePreflight in done-worktree.mjs) as well as by tests. `archiveBatchMembers`,
 // `archiveBatchFolder`, `boardRemoveIdempotentBatch`, `boardHasRow`, `spineCarryForwardBody`,
 // `verifyCloseOutOnOrigin`, and `promoteWaitingBlocked` have no spine caller outside this module —
-// they are exported ONLY because scripts/done-worktree.test.mjs imports them directly (a
+// they are exported ONLY because the legacy module's own test suite imports them directly (a
 // deliberate, temporary re-export from done-worktree.mjs; T4 moves those test cases into this
 // module's own close-out.test.mjs and drops it). Everything else here is module-private.
 //

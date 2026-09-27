@@ -18,7 +18,7 @@
 // session goes fully idle until it is genuinely its turn, then wakes ONCE and re-runs
 // `done-worktree <slug>`. Pair it with a long (~1200s) ScheduleWakeup dead-man fallback
 // in case the watcher dies (machine sleep / Claude Code restart). Pattern + rationale:
-// docs/runbooks/plans-workflow.md "Self-manage mechanical waits".
+// docs/coord/landing-queue.md § "Chunked, resumable waiting".
 //
 // Usage:
 //   node scripts/landing-queue-watch.mjs <slug> [--interval <sec>] [--timeout <sec>]
@@ -112,8 +112,8 @@
 //
 // plan 1807 lever 2: two-tier poll cadence — NOT a distance-scaled/adaptive formula
 // (the plan explicitly pins "hardcoded two-tier ... no derived/adaptive formula in
-// v1"). This watcher — launched detached per docs/runbooks/plans-workflow.md
-// "Self-manage mechanical waits" — is the LIVE head-detection path in normal
+// v1"). This watcher — launched detached per docs/coord/landing-queue.md
+// § "Chunked, resumable waiting" — is the LIVE head-detection path in normal
 // operation (done-worktree.mjs's own in-process --wait loop is CLAUDE.md-forbidden to
 // run detached and is dormant in the real ripple flow; plan 1807 confirmed this
 // before touching either poll loop — see the plan body for the trace). Because

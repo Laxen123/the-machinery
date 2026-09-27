@@ -75,6 +75,7 @@ import {
   SWEEP_SURFACED_EXIT,
   coordCheckoutPath,
   COORD_CHECKOUT_GIT_TIMEOUT_MS,
+  LOCK_FREE_READ_ENV,
 } from './coord-git.mjs';
 import { resolveCommonDirPath } from './lock-path.mjs';
 // plan 2948: the ONE `/proc/<pid>/stat` parsing convention (kill-tree owns it; worktree-lock and
@@ -263,14 +264,11 @@ export function healStaleIndex(mainDir, { dry = false, maxPaths = STALE_INDEX_MA
   // unhandled throw here would escape runHeal and abort the whole heal pass.
   let staged;
   try {
-    staged = gitWithLockRetry(mainDir, [
-      'diff',
-      '--cached',
-      '--no-renames',
-      '--name-only',
-      '-z',
-      'HEAD',
-    ])
+    staged = gitWithLockRetry(
+      mainDir,
+      ['diff', '--cached', '--no-renames', '--name-only', '-z', 'HEAD'],
+      { env: LOCK_FREE_READ_ENV }, // plan 4237 T2: a probe, never an index write-back
+    )
       .split('\0')
       .filter(Boolean);
   } catch (e) {
@@ -888,7 +886,9 @@ export function classifyAbandonedRebaseShape(
   // same convention assertCleanOutsidePathspec uses, and step 6 owns MAIN's untracked dirt.
   let porcelain;
   try {
-    porcelain = git(mainDir, ['status', '--porcelain', '--untracked-files=no'])
+    porcelain = git(mainDir, ['status', '--porcelain', '--untracked-files=no'], {
+      env: LOCK_FREE_READ_ENV,
+    })
       .split('\n')
       .filter((l) => l.trim());
   } catch (e) {
@@ -1174,7 +1174,9 @@ export function healMasterSync(mainDir, { dry = false } = {}) {
   }
   // AHEAD or DIVERGED: an unpushed local commit (e.g. a --no-push record, a killed push).
   // pushMasterWithRebase needs a clean tracked tree for its rebase-retry.
-  const dirty = git(mainDir, ['status', '--porcelain', '--untracked-files=no']).trim();
+  const dirty = git(mainDir, ['status', '--porcelain', '--untracked-files=no'], {
+    env: LOCK_FREE_READ_ENV,
+  }).trim();
   if (dirty)
     return [
       r(

@@ -29,13 +29,13 @@ Default categories per target type:
 
 Default `n=4`, `model=sonnet`, `verifier_model=sonnet`.
 
-Compute the run slug: `<YYYY-MM-DD>-<short-target-slug>` (lowercase, ASCII, kebab; e.g., `2026-05-17-the product-se-akut`, `2026-05-17-features-md`). Create `docs/superpowers/audits/<run-slug>/` and `docs/superpowers/audits/<run-slug>/reviewers/` and `docs/superpowers/audits/<run-slug>/screenshots/`.
+Compute the run slug: `<YYYY-MM-DD>-<short-target-slug>` (lowercase, ASCII, kebab; e.g., `2026-05-17-example-com-contact`, `2026-05-17-features-md`). Create `docs/superpowers/audits/<run-slug>/` and `docs/superpowers/audits/<run-slug>/reviewers/` and `docs/superpowers/audits/<run-slug>/screenshots/`.
 
 Write `docs/superpowers/audits/<run-slug>/run.json` with the metadata.
 
 ## Step 2 — cost flag
 
-Quote the cost in ONE line before dispatch, per parent `the parent folder/CLAUDE.md` rule (>3 parallel subagents OR >50 work units):
+Quote the cost in ONE line before dispatch whenever a run fans out to more than 3 parallel subagents or more than 50 work units:
 
 > "Dispatching N=4 Sonnet reviewers on <target>. Est. ~20k tokens, ~$0.20. Stage 2 (~12 verifiers) flagged separately after Stage 1 returns."
 

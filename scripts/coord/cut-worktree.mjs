@@ -25,7 +25,7 @@
 // self-held claim is the sanctioned takeover flow, not a steal).
 //
 // SPARSE plan worktrees (plan 3956): a plan worktree used to be a DENSE checkout of every
-// tracked file -- 131,025 of them, 4.1 GB, 71% under `backend/data/price-pipeline`, which
+// tracked file -- 131,025 of them, 4.1 GB, 71% under the configured job-output root, which
 // most plans never read -- and git walked all of it on every status/add/commit/merge/reset in
 // every worktree (measured 2026-09-12: `status --porcelain` 12.4 s in a plan worktree vs 1.6 s
 // on the main checkout). The cut now decides a MODE per plan (planWorktreeMode) and, when the
@@ -137,15 +137,17 @@ export function worktreePathFor(slug) {
 export const DENSE_CATEGORIES = Object.freeze(['Pipe', 'DQ']);
 // The store NAMES are derived from the exclude list itself, so a store added there is a dense
 // term here in the same edit -- a second hand-kept list drifted by construction (/gpt-review key
-// 022ae0). The two extra terms name the folder and the sweep that reads it.
+// 022ae0). plan 4172: the extra terms (the folder holding the stores and the sweep that reads
+// it) are coord.config.json's `worktreeExcludeBasenames` — caller-injected like `excludes`, so
+// this module names no project directory of its own.
 //
 // plan 4071 T2: `excludes` (coord.config.json's `planWorktreeExcludedPaths`) is no longer a
 // coord-git.mjs module constant, so this is now a function OF that list rather than a module-load
 // constant computed from it — the caller (planWorktreeMode below) resolves the list once and
 // passes it in.
-export function denseBodyTermsFor(excludes) {
+export function denseBodyTermsFor(excludes, extraBasenames = []) {
   return Object.freeze([
-    ...new Set([...excludes.map((p) => pathBasename(p)), 'price-pipeline', 'weekly-price-sweep']),
+    ...new Set([...excludes.map((p) => pathBasename(p)), ...(extraBasenames || [])]),
   ]);
 }
 
@@ -168,6 +170,7 @@ export function planWorktreeMode({
   basename = null,
   dense = false,
   excludes = [],
+  extraBasenames = [],
 } = {}) {
   if (dense) return { dense: true, rule: '--dense' };
   if (typeof planText !== 'string')
@@ -181,7 +184,7 @@ export function planWorktreeMode({
   const category = basename ? planCategoryOf(basename) : null;
   if (category && DENSE_CATEGORIES.includes(category))
     return { dense: true, rule: `category ${category}` };
-  const term = denseBodyTermsFor(excludes).find((t) => planText.includes(t));
+  const term = denseBodyTermsFor(excludes, extraBasenames).find((t) => planText.includes(t));
   if (term) return { dense: true, rule: `body mentions "${term}"` };
   return {
     dense: false,
@@ -259,7 +262,10 @@ export function cutWorktree(
   assertSlugCharset(slug, 'slug');
   // plan 4071 T2: resolved ONCE from the repo root this function already receives
   // (coord.config.json's `planWorktreeExcludedPaths`, empty core default).
-  const { planWorktreeExcludedPaths: sparseExcludes } = loadCoordConfig(mainDir);
+  const {
+    planWorktreeExcludedPaths: sparseExcludes,
+    worktreeExcludeBasenames: sparseExtraBasenames,
+  } = loadCoordConfig(mainDir);
   const exec = run || ((args) => gitWithLockRetry(mainDir, args));
   const branch = branchFor(slug);
   const wtPath = worktreePathFor(slug);
@@ -431,6 +437,7 @@ export function cutWorktree(
     basename: plan?.basename ?? null,
     dense,
     excludes: sparseExcludes,
+    extraBasenames: sparseExtraBasenames ?? [],
   });
   const absWt = join(mainDir, wtPath);
   const wtExec = runInWorktree || ((args) => gitWithLockRetry(absWt, args));

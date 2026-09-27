@@ -12,7 +12,7 @@ files are `codex exec` dispatches (Sol, `gpt-6-sol`) instead of Sonnet subagents
 decision layer is an Opus session. `sol` differs from `fable` in WHY a plan lands here: it is
 elected by MECHANICAL eligibility rather than judgment shape, on whatever cadence the executor-lane
 toggle currently sets (`scripts/exec-model-default.json`, read with `node scripts/exec-model-default.mjs`
-— the project `docs/runbooks/plans-workflow.md` § Sol executor lane carries the live value and its
+— the project `docs/coord/plan-lanes.md` § Executor lanes and model allocation carries the live value and its
 history) for any plan whose criterion is statable now and is not on the coord-spine hard gate — see
 rule 4's carve-out below for the consequence. Any legacy reference to an
 "orchestrated-execution skill" — old plan bodies, runbooks, drain messages — means THIS file; there
@@ -22,7 +22,7 @@ is no invokable skill to search for (plan 1559 closed the stale-reference residu
 
 The heavy model makes the calls; cheap subagents touch the files. The economics only work if **bulk
 content never enters the orchestrator's context** — every rule below exists to protect that invariant.
-Review fix rounds follow `docs/runbooks/review-calibration.md` § Stopping rule: generate `scripts/review-fix-brief.mjs` and dispatch that must-fix-only brief in a fresh worker context, never fix inline.
+Review fix rounds follow `docs/coord/review.md` § Stopping rule: generate `scripts/review-fix-brief.mjs` and dispatch that must-fix-only brief in a fresh worker context, never fix inline.
 
 Vendor measurement of exactly this shape (Anthropic, BrowseComp benchmark on Claude Managed
 Agents, 2026-07): a **Fable 5 orchestrator + Sonnet 5 workers scored 96% of pure-Fable-5
@@ -91,11 +91,11 @@ dispatches rather than Sonnet subagents (§ Overview above).
    2026-08-29, replacing the fixed 2-round cap): the SAME gate/review finding comes back unfixed
    after two consecutive Sol rework rounds, and the orchestrator finishes that finding on the normal
    Claude lane and records the switch naming the finding; a round that shrinks or changes the
-   finding set keeps Sol, no round limit. Rule text: `docs/runbooks/plans-workflow.md` § Sol
-   executor lane.
+   finding set keeps Sol, no round limit. Rule text: `docs/coord/plan-lanes.md` § Executor lanes
+   and model allocation.
 5. **Zero-dispatch tripwire (mirror of rule 4; plan 1747).** Rule 4 catches over-delegation; the
    opposite failure — a bulk-shaped `execModel: fable` plan that never delegates at all — is caught
-   deterministically by a WARN-only Stop hook (`the project/scripts/hooks/bulk-fable-zero-dispatch-tripwire-stop.mjs`).
+   deterministically by a WARN-only Stop hook (`scripts/hooks/bulk-fable-zero-dispatch-tripwire-stop.mjs`).
    It fires when a session on a standard `worktree-<id>-<slug>` branch is executing a fable plan whose
    `summary`/H1 matches bulk-shape language ("batch", digit+item/record/holdout/battery, "corpus",
    "sweep"), has crossed ~40 inline Bash/Read/Edit/Write ops, and has made zero Agent/Task dispatches —
@@ -153,7 +153,7 @@ fix worker at 45+ minutes and ~500k context, still not done.
   into the prompt. One cluster → one agent, no ceremony; the fan-out is not the goal, the context
   split is.
 - **Disjoint write-sets are a HARD precondition** — the same constraint
-  `docs/runbooks/long-running-dispatch.md` § Concurrency already states for batch lanes.
+  `docs/coord/subagents.md` § Worker sizing — split a big wave by disjoint file cluster already states for batch lanes.
   Clusters whose files overlap stay SERIAL inside one agent, or take worktree isolation with an
   explicit merge step. Each parallel agent stages by explicit path (`git add <file>…`, never a
   directory) and retries ~20s on an `index.lock` collision, exactly as § Worker sizing requires.
@@ -177,7 +177,7 @@ fix worker at 45+ minutes and ~500k context, still not done.
 ## Self-yield contract — a dispatched worker bounds ITSELF (plan 2694)
 
 Hang detection is not a budget. The only worker-liveness trigger that exists anywhere is _silent
-hang_ (output-file mtime staleness → `TaskStop`, `docs/superpowers/specs/2026-06-21-llm-orchestrator-design.md`
+hang_ (output-file mtime staleness → `TaskStop`, per the project's own orchestrator design spec
 § Error handling); a worker that is still actively working — just slower and worse at 400k
 context than it was at 40k — trips nothing. So the bound goes INSIDE the dispatch, and the worker
 enforces it on itself.
@@ -215,7 +215,7 @@ green or a bound is spent.
   more dispatching. Park with the accumulated handoffs as the question.
 
 - **This is a graceful yield, not a kill.** Nothing is terminated mid-flight, so it does not
-  collide with `docs/superpowers/specs/2026-06-10-parallel-drain-design.md`'s never-kill-in-flight
+  collide with the project's own parallel-drain design spec's never-kill-in-flight
   rule: the task is bounded at dispatch time and the worker returns of its own accord with its
   work committed. It generalizes the continuation-worker pattern already in that spec
   (§ Blocked-plan triage) — a handoff plus a fresh worker resuming the existing pushed branch.
@@ -223,7 +223,7 @@ green or a bound is spent.
   tune them per dispatch when the work's shape justifies it. The CONTRACT — declared budget, WIP
   commit, compact handoff, fresh re-dispatch — is what binds.
 - **Do not conflate it with the session-level window wip-push** (an inline fable plan pushing WIP
-  because the 5-hour usage window closed, `docs/runbooks/local-drain-loop.md` § Modification 2).
+  because the 5-hour usage window closed, `docs/coord/local-drain-loop.md` § Modification 2).
   That is an orchestrator saving its own run; this is one dispatched worker bounding its own
   context. Both can be in play at once and neither implies the other.
 

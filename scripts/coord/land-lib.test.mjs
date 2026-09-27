@@ -74,7 +74,7 @@ function caught(fn) {
 
 // plan 1573: landDirBaseFor caps the ephemeral land checkout's DIRECTORY basename at 40 chars
 // (mirrors the plan-909 cut-worktree convention) — a long branch name plus a deep committed
-// path (backend/data/price-pipeline/render-store/…) exceeded Windows MAX_PATH (260) on an
+// path (backend/data/data-pipeline/render-store/…) exceeded Windows MAX_PATH (260) on an
 // untruncated `_land-<branch>` dir (session 1436 incident). The BRANCH itself is never
 // truncated — only the throwaway directory name.
 test('landDirBaseFor: short branch names are unchanged', () => {
@@ -1573,16 +1573,16 @@ const NUL = '\u0000';
 test('attributeConflict: a conflicted file landed by one plan names that plan', () => {
   const fakeRun = (_cwd, args) => {
     const path = args[args.length - 1];
-    assert.equal(path, 'apply-dsv-prices.py');
+    assert.equal(path, 'apply-chainx-prices.py');
     assert.equal(args[1], 'BASE..origin/master'); // <base>..origin/master per the plan
     // --full-history is REQUIRED: default simplification prunes the landing merge commit
     // (TREESAME to the side branch), and only the merge subject carries the plan id.
     assert.ok(args.includes('--full-history'), 'must pass --full-history');
-    return `0ad73bf4c0011${NUL}Merge worktree-993-DSV-pricelist-gaps: done 993-DSV-pricelist-gaps`;
+    return `0ad73bf4c0011${NUL}Merge worktree-993-ChainX-pricelist-gaps: done 993-ChainX-pricelist-gaps`;
   };
-  const out = attributeConflict('/wt', ['apply-dsv-prices.py'], 'BASE', { run: fakeRun });
+  const out = attributeConflict('/wt', ['apply-chainx-prices.py'], 'BASE', { run: fakeRun });
   assert.equal(out.length, 1);
-  assert.equal(out[0].path, 'apply-dsv-prices.py');
+  assert.equal(out[0].path, 'apply-chainx-prices.py');
   assert.deepEqual(
     out[0].plans.map((p) => p.id),
     ['993'],
@@ -1597,7 +1597,7 @@ test('attributeConflict: multiple landing plans (incl 4-digit id) are all named,
       `bbbbbbbbbbb2${NUL}Merge worktree-996-valp-synth: done 996-valp-synth`,
       `ccccccccccc3${NUL}Merge worktree-996-valp-synth: done 996-valp-synth`,
     ].join('\n');
-  const out = attributeConflict('/wt', ['seed-clinics.json'], 'BASE', { run: fakeRun });
+  const out = attributeConflict('/wt', ['seed-records.json'], 'BASE', { run: fakeRun });
   assert.deepEqual(
     out[0].plans.map((p) => p.id),
     ['1000', '996'],
@@ -1624,12 +1624,12 @@ test('attributeConflict: a git failure for a path yields empty attribution, neve
 test('formatConflictCulprits: renders the landing plan(s) per conflicted path', () => {
   const s = formatConflictCulprits([
     {
-      path: 'apply-dsv-prices.py',
+      path: 'apply-chainx-prices.py',
       plans: [{ id: '993', sha: '0ad73bf4c0011', subject: 'Merge worktree-993-x: done 993-x' }],
       commits: [],
     },
   ]);
-  assert.match(s, /apply-dsv-prices\.py/);
+  assert.match(s, /apply-chainx-prices\.py/);
   assert.match(s, /plan 993/);
   assert.match(s, /0ad73bf4c/);
 });
@@ -1679,17 +1679,17 @@ test('syncBranchOntoMaster: a real conflict names the sibling plan that landed t
   s.g(s.main, ['push', 'origin', 'worktree-mine']);
   // a SIBLING plan lands a CONFLICTING edit via a --no-ff merge with the canonical
   // spine subject — its OWN work-commit subject carries no plan id; only the merge does.
-  s.g(s.main, ['checkout', '-b', 'worktree-993-dsv-gaps', 'origin/master']);
+  s.g(s.main, ['checkout', '-b', 'worktree-993-chainx-gaps', 'origin/master']);
   writeFileSync(join(s.main, 'shared.py'), 'SIBLING 993 EDIT\n');
   s.g(s.main, ['add', 'shared.py']);
-  s.g(s.main, ['commit', '-m', 'price(dsv): rewrite gaps']); // NO plan id in this subject
+  s.g(s.main, ['commit', '-m', 'price(chainx): rewrite gaps']); // NO plan id in this subject
   s.g(s.main, ['checkout', 'master']);
   s.g(s.main, [
     'merge',
     '--no-ff',
-    'worktree-993-dsv-gaps',
+    'worktree-993-chainx-gaps',
     '-m',
-    'Merge worktree-993-dsv-gaps: done 993-dsv-gaps',
+    'Merge worktree-993-chainx-gaps: done 993-chainx-gaps',
   ]);
   s.g(s.main, ['push', 'origin', 'master']);
   // sync OUR branch onto the advanced master → conflict on shared.py
@@ -2613,7 +2613,7 @@ test('plan 1240: the queue-exempt set is main-checkout-allowlist (doc + config e
   }
   // 'other' — code/seed/CLAUDE.md/arbitrary docs — must block
   for (const p of [
-    'backend/src/data/seed-clinics.json',
+    'backend/src/data/seed-records.json',
     'scripts/coord/land-lib.mjs',
     'docs/ARCHITECTURE.md',
     'docs/research/x.md',
@@ -2680,14 +2680,14 @@ test('plan 1240: assertLandable ALLOWS an ahead commit touching only queue-exemp
 test('plan 1240: assertLandable BLOCKS an unpushed seed/code remnant (typed unpushed-master)', () => {
   const s = sandbox();
   mkdirSync(join(s.main, 'backend', 'src', 'data'), { recursive: true });
-  writeFileSync(join(s.main, 'backend', 'src', 'data', 'seed-clinics.json'), '[]\n');
-  s.g(s.main, ['add', 'backend/src/data/seed-clinics.json']);
+  writeFileSync(join(s.main, 'backend', 'src', 'data', 'seed-records.json'), '[]\n');
+  s.g(s.main, ['add', 'backend/src/data/seed-records.json']);
   s.g(s.main, ['commit', '-m', 'unpushed seed remnant']);
 
   const e = caught(() => assertLandable(s.main, { run: s.g }));
   assert.equal(e.reason, 'unpushed-master');
   assert.ok(
-    e.blockingPaths.includes('backend/src/data/seed-clinics.json'),
+    e.blockingPaths.includes('backend/src/data/seed-records.json'),
     'the seam names the blocking seed path',
   );
   assert.match(e.message, /SEED\/CODE remnant/);

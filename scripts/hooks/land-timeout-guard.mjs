@@ -5,7 +5,7 @@
 //
 // § WHY. Operator ruling 2026-08-24, verbatim: "I don't want random choices for the
 // timeout." The ruling is committed in two runbooks —
-// docs/runbooks/branch-hygiene.md § Kill-safety rules and
+// docs/coord/worktrees.md § Kill-safety rules and
 // coord/skills/done-worktree/SKILL.md § "The invocation shape is FIXED" — and BOTH are
 // prose that nothing enforced. Five misfires in two days, every one a number sized to the
 // job by eye:
@@ -25,7 +25,7 @@
 //
 // § THE VERDICT MATRIX — mirrors the SKILL.md table so there is ONE contract to keep in
 // step. Environment is classified from an INJECTED env object + the payload, never from
-// ambient process state, so every branch is a test parameter (vetapp/CLAUDE.md's
+// ambient process state, so every branch is a test parameter (your project's `CLAUDE.md`'s
 // platform-parameter rule).
 //
 //   LOCAL top-level  (no agent_id, CLAUDE_CODE_REMOTE unset)
@@ -71,7 +71,7 @@
 
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseAgentId, readStdin } from './lib/loader-common.mjs';
+import { denyEnvelope, parseAgentId, runHookCli } from './lib/loader-common.mjs';
 // plan 3960 (coord-core step 2): the ONE number is now `land.localTimeoutSeconds`
 // (coord.config.json), defaulting to today's exact 14400 — see resolveLandTimeoutSeconds below.
 import { loadCoordConfig } from '../coord/coord-config.mjs';
@@ -122,7 +122,7 @@ export const CANONICAL_CLOUD_INVOCATION =
 const CONTRACT_LINES = [
   '  Contract (both say the same thing, in prose, which is why this hook exists):',
   '    coord/skills/done-worktree/SKILL.md § The invocation shape is FIXED',
-  '    docs/runbooks/branch-hygiene.md § Kill-safety rules',
+  '    docs/coord/worktrees.md § Kill-safety rules',
 ];
 
 // ── shell-text parsing ───────────────────────────────────────────────────────
@@ -312,10 +312,10 @@ const ENV_ASSIGN_RX = /^[A-Za-z_][A-Za-z0-9_]*=/;
 // push previously hidden behind a leading `env` is now graded, where it silently passed before —
 // the correct direction (an ungraded land/push is a miss, not a feature). Covered three ways: the
 // existing 57-case battery re-ran green after this edit (no case relied on `env` staying opaque);
-// scripts/land-timeout-guard.test.mjs — this file's own name-pair — gained cases pinning the new
+// this file's own name-paired test gained cases pinning the new
 // behaviour for LANDS specifically (a wrong cap behind `env` now denies, a compliant one still
 // passes, and `env -i`/`env -u NAME` are consumed rather than read as the wrapped command); and
-// scripts/main-checkout-rebase-guard.test.mjs covers the `env FOO=1 git …` shape against this
+// the main-checkout-rebase-guard test covers the `env FOO=1 git …` shape against this
 // SAME shared parseSegment(). The name-paired cases are the ones that matter if LEADING_WRAPPERS
 // is ever edited again — without them a future change would break land grading silently.
 //
@@ -567,7 +567,7 @@ export function isPushSegment(parsed) {
 // ── the environment gate ─────────────────────────────────────────────────────
 //
 // Both markers are the ESTABLISHED ones, reused rather than re-coined:
-// `CLAUDE_CODE_REMOTE === 'true'` (vetapp/CLAUDE.md and cloud-land-backgrounding-guard.mjs
+// `CLAUDE_CODE_REMOTE === 'true'` (your project's `CLAUDE.md` and cloud-land-backgrounding-guard.mjs
 // both treat it as authoritative) and `agent_id` on the payload via loader-common's
 // shared parseAgentId, so a schema rename lands in one place for all three guards.
 // `env` is a PARAMETER so every branch is reachable from a test without touching the host
@@ -690,39 +690,29 @@ export function formatBlock(verdict) {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-function main(env = process.env) {
-  // Fail-open test seam — see § FAIL-OPEN in the header. Throws BEFORE reading stdin so
-  // the test exercises the outermost catch, not a parse branch.
+// The hook's whole outcome as DATA (plan 4238): the deny envelope it would print, or
+// null for silence. The in-process PreToolUse dispatcher (pretool-dispatch.mjs) calls
+// this; main() below is a thin CLI wrapper that prints it. The fail-open test seam
+// throws from HERE, so a forced error exercises the dispatcher's per-guard isolation
+// exactly as it exercises the CLI's outermost catch.
+export function evaluateHook(payload, { env = process.env } = {}) {
   if (String(env?.LAND_TIMEOUT_GUARD_FORCE_ERROR ?? '') === '1') {
     throw new Error('land-timeout-guard: forced error (fail-open test seam)');
   }
 
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
-
   const verdict = evaluate(payload, env);
-  if (!verdict) return;
+  if (!verdict) return null;
 
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: formatBlock(verdict),
-      },
-    }),
-  );
+  return denyEnvelope(formatBlock(verdict));
+}
+
+function main(env = process.env) {
+  return runHookCli((payload) => evaluateHook(payload, { env }));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await main();
   } catch {
     // fail open — a tool hook must never break the turn
   }

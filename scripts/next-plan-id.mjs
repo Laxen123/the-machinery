@@ -46,7 +46,12 @@ import {
   coordWrite,
   withCoordCheckout,
   isNonFastForward,
+  lsRemoteTimed,
+  derivedReadTimeoutMs,
+  boundedGit,
 } from './coord/coord-git.mjs';
+import { coordRef } from './coord/coord-refs.mjs';
+import { randomUUID } from 'node:crypto';
 import {
   addBullet,
   assertGeneratedRegionCanonical,
@@ -144,7 +149,7 @@ import { VALID_EVIDENCE } from './stamp-evidence.mjs';
 // Highest plan id found across the given strings (filenames, index refs, anything),
 // +1, zero-padded. Matches only a real plan-FILENAME shape — `NNN-Category-….md` at a
 // path/backtick/space boundary — so the counter is NOT inflated by digit runs that
-// aren't plan ids: clinic refs in INDEX archive prose (`clinic-783`, no `.md`), counts
+// aren't plan ids: record refs in INDEX archive prose (`record-783`, no `.md`), counts
 // ("120 req/min"), or a number embedded mid-filename (`077-Other-claude-haiku-429-…md`
 // → only 077, never the inner 429, which isn't boundary-preceded). (plan 230 — caught
 // dogfooding.) `\d{3,}` (not `\d{3}`) so a 4-digit id (plan 1000+) is SEEN — else the
@@ -343,6 +348,102 @@ export function nextIdFromRepo(mainDir, { fromOrigin = true } = {}) {
   }
   const ref = fromOrigin ? 'origin/master' : 'HEAD';
   return computeNextId(scanAllocatedNames(mainDir, ref));
+}
+
+// --- the plan-id FLOOR (plan 4237 T4) ------------------------------------------
+//
+// computeNextId is a tree/INDEX maximum with no memory: on 2026-09-26 a stale-index rollback
+// commit (c8c55d9e704) deleted the plan files AND the INDEX bullets of 4231 and 4232, and the
+// next two mints re-issued both ids — two plan files still share 4232 today. The floor is that
+// memory: a branch-shaped coordination ref (`refs/heads/coord/plan-id-floor`, under the plan-3756
+// prefix the cloud proxy admits for create + fast-forward) pointing at an empty-tree commit whose
+// message carries `floor=<N>`, the highest id ever reserved. The next id is
+// `max(treeMax, floor) + 1`, and the floor is raised to an id BEFORE that id's plan file is
+// pushed: a floor ahead of the tree is harmless (one skipped id), a tree ahead of the floor is
+// exactly the bug — so the two non-atomic refs fail safe in that order.
+//
+// Monotonic by CAS, the same push-rejection shape as claim-plan's session counter: the new
+// commit's parent is the tip we read, so a sibling's concurrent raise makes ours non-ff and we
+// re-read. It is NOT the id mutex (the plan-file push + idTakenByOther stay that); two sessions
+// racing to the same id both find the floor already covering it, and the plan-file push decides.
+export const PLAN_ID_FLOOR_REF = coordRef('plan-id-floor');
+
+export function parsePlanIdFloor(message) {
+  // Every floor= line, highest wins (review 2e8ef6): a message carrying two values must never
+  // resolve to the lower one — under-reading the floor is the re-issue this ref exists to stop.
+  let max = 0;
+  for (const m of String(message ?? '').matchAll(/^floor=(\d+)$/gm))
+    max = Math.max(max, Number(m[1]));
+  return max;
+}
+
+// { floor, sha } as origin holds it now; { floor: 0, sha: null } when the ref does not exist yet.
+// A ref that EXISTS but cannot be read throws (fail closed: minting from a lower floor is the
+// re-issue this exists to stop).
+export function readPlanIdFloor(mainDir, { gitImpl = git } = {}) {
+  const ls = lsRemoteTimed(mainDir, PLAN_ID_FLOOR_REF, { _git: gitImpl }).trim();
+  if (!ls) return { floor: 0, sha: null };
+  const sha = ls.split('\t')[0];
+  gitImpl(mainDir, ['fetch', '--quiet', 'origin', PLAN_ID_FLOOR_REF], {
+    timeout: derivedReadTimeoutMs(mainDir),
+  });
+  const raw = String(gitImpl(mainDir, ['cat-file', 'commit', sha]));
+  const i = raw.indexOf('\n\n');
+  const message = i === -1 ? '' : raw.slice(i + 2);
+  // review finding 24db67: a present ref whose message carries no floor is unreadable, not 0.
+  if (!/^floor=\d+$/m.test(message))
+    throw new Error(
+      `next-plan-id: ${PLAN_ID_FLOOR_REF} exists (${sha.slice(0, 12)}) but its commit carries no ` +
+        `floor=<N> line — refusing to mint from an unknown floor`,
+    );
+  return { floor: parsePlanIdFloor(message), sha };
+}
+
+// Raise the floor to at least `id`. Returns the floor now on origin. Never lowers it.
+// `snapshot` (review finding f9528b): the { floor, sha } the id scan just read, used for the FIRST
+// attempt instead of a second ls-remote + fetch + cat-file; a stale snapshot only costs one
+// non-ff and a fresh read (the floor never goes down, so `floor >= n` from it is still true).
+export function raisePlanIdFloor(
+  mainDir,
+  id,
+  { gitImpl = git, maxAttempts = 8, snapshot = null } = {},
+) {
+  const n = Number(id);
+  for (let i = 0; i < maxAttempts; i++) {
+    const { floor, sha } = i === 0 && snapshot ? snapshot : readPlanIdFloor(mainDir, { gitImpl });
+    if (floor >= n) return floor;
+    const tree = String(gitImpl(mainDir, ['mktree'], { input: '' })).trim();
+    const args = ['commit-tree', tree, '-m', `floor=${n}\nnonce=${randomUUID()}`];
+    if (sha) args.splice(2, 0, '-p', sha); // parent = the tip we read → FF when uncontended
+    const commit = String(gitImpl(mainDir, args)).trim();
+    try {
+      boundedGit(mainDir, ['push', 'origin', `${commit}:${PLAN_ID_FLOOR_REF}`], {
+        env: { HUSKY: '0' },
+        timeoutMs: 120_000,
+        _git: gitImpl,
+      });
+      return n;
+    } catch (e) {
+      if (isNonFastForward(e)) continue; // a sibling raised it first — re-read
+      // A push can land while its transport reports failure (plan 3554): one read decides.
+      const now = lsRemoteTimed(mainDir, PLAN_ID_FLOOR_REF, { _git: gitImpl })
+        .trim()
+        .split('\t')[0];
+      if (now === commit) return n;
+      if (now && now !== sha) continue;
+      throw e;
+    }
+  }
+  throw new Error(`next-plan-id: the plan-id floor stayed contended after ${maxAttempts} attempts`);
+}
+
+// The next id: the tree/INDEX scan, lifted above the floor.
+// `onFloor` receives the { floor, sha } read, so a claim can hand it to raisePlanIdFloor.
+export function nextIdWithFloor(mainDir, { fromOrigin = true, gitImpl = git, onFloor } = {}) {
+  const treeNext = Number(nextIdFromRepo(mainDir, { fromOrigin }));
+  const snapshot = readPlanIdFloor(mainDir, { gitImpl });
+  onFloor?.(snapshot);
+  return String(Math.max(treeNext, snapshot.floor + 1)).padStart(3, '0');
 }
 
 // Fast-forward duplicate-id guard (plan 777). The reserve-by-push bump only fires
@@ -579,7 +680,7 @@ export function buildClaimOps(mainDir, flags, config) {
       `next-plan-id: --category "${category}" is not an allowed plan category. ` +
         `Valid categories: ${planCategories.allowlist.join(', ')} ` +
         `(a leading FABLE- or SOL- exec-model segment is allowed on any of them). ` +
-        `See docs/runbooks/plans-workflow.md § Plan naming.`,
+        `See docs/coord/plan-lanes.md § Plan naming.`,
     );
   }
   // plan 2943: the OPTIONAL --evidence flag validated up front (fail fast, before any
@@ -765,6 +866,7 @@ export function buildClaimOps(mainDir, flags, config) {
   const env = { ...process.env, HUSKY: '0' };
 
   let current = null; // { id, relPath } of the attempt's written artefacts
+  let floorSnapshot = null; // plan 4237: the floor the last scanIds read (raise's first attempt)
   // plan 989: the working tree the artefacts are materialised in. Set per attempt by
   // tryCommitPush's withCoordCheckout to the DISPOSABLE coord-checkout; defaults to mainDir (only
   // reached on the COORD_MAIN_DIR short-circuit, where mainDir IS the isolated finish tree).
@@ -962,6 +1064,9 @@ export function buildClaimOps(mainDir, flags, config) {
     // the nonFastForward signal and let allocatePlanId bump the id + retry. The
     // per-378 fresh-base recovery is now coordWrite's opening fetch+merge, no
     // longer duplicated here.
+    // plan 4237 T4: reserve the id in the floor BEFORE its plan file can reach origin. A throw
+    // here (the floor unreadable or its push failing) is a real error, never the bump signal.
+    raisePlanIdFloor(mainDir, id, { snapshot: floorSnapshot });
     try {
       // plan 989: author the plan + INDEX in the DISPOSABLE coord-checkout (under the coord-write
       // lock), never the shared MAIN tree — so a session's uncommitted code edit can never block a
@@ -992,7 +1097,13 @@ export function buildClaimOps(mainDir, flags, config) {
   };
 
   return {
-    scanIds: () => nextIdFromRepo(mainDir, { fromOrigin: true }),
+    scanIds: () =>
+      nextIdWithFloor(mainDir, {
+        fromOrigin: true,
+        onFloor: (snap) => {
+          floorSnapshot = snap;
+        },
+      }),
     onPick,
     tryCommitPush,
     // Exposed for doClaim's Layer-1 pre-flight (plan 882): the slug-dup guard needs
@@ -1291,7 +1402,7 @@ async function main() {
   const sub = cmd || 'peek';
 
   if (sub === 'peek') {
-    console.log(nextIdFromRepo(mainDir, { fromOrigin: true }));
+    console.log(nextIdWithFloor(mainDir, { fromOrigin: true }));
     return 0;
   }
   if (sub === 'claim') {

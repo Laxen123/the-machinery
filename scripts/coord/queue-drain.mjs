@@ -85,7 +85,7 @@
 // + cost sort) is untouched and order-identical — a fable-lane stub is still
 // excluded by the stage/specReview gate, never bypassed. Flagless behaviour is
 // byte-identical to pre-1810. The cloud FABLE-drain routine calls `queue-drain.mjs
-// --cloud --lane fable` (docs/runbooks/cloud-routines/fable-drain.md).
+// --cloud --lane fable` for the fable lane.
 //
 // `--env full` (plan 1925, superset since plan 2003): composable with `--cloud`
 // (and REQUIRES it — the `cloudEnv` axis routes between CLOUD environment kinds;
@@ -106,7 +106,7 @@
 // safe-but-wasteful. Every other gate is untouched and order-identical;
 // `--env`-less behaviour is byte-identical to pre-1925. The full-lane routines
 // call `queue-drain.mjs --cloud --env full [--lane fable]`
-// (docs/runbooks/cloud-routines/{sonnet,fable}-full.md).
+// (the full-lane routine prompt for this project).
 //
 // `--env browser` (plan 2250): a THIRD cloudEnv value, one level above `full` on
 // the same superset ladder — `cloudEnv: browser` means the plan's acceptance needs
@@ -122,16 +122,16 @@
 // plan 3823 made the browser body the FLEET DEFAULT rather than a single-account exception:
 // the account registry marks every live account's `sonnet-full` AND `fable-full` slot
 // `browser`, so the reconciler renders a generated `--env browser` body for all six
-// (`docs/runbooks/cloud-routines/sonnet-browser.md`, `fable-browser.md`). WHICH of
+// (the browser-lane routine prompts for this project). WHICH of
 // those bodies is actually PUSHED onto its live trigger, and which routines are
-// ENABLED to run it, are both LIVE state — read the dated log in
-// `docs/runbooks/cloud-drain-landing.md` and ask `node
-// scripts/sync-trigger-bodies.mjs --dry-run`; never assert either here. The
+// ENABLED to run it, are both LIVE state — read this project's own dated
+// fleet log and ask the project's own trigger-body sync tool (`--dry-run`);
+// never assert either here. The
 // chromium-egress PASS behind the rung was measured on ONE env (one account, run
 // `cse_012Fc6JeHtjvuh4zkdMMPq3e`), and the operator decided on 2026-09-08 that a box
 // measured green for one account is taken to work for all, so there is no per-account
 // probe verdict to cite for the others. Evidence + probe recipe + lane status:
-// `docs/runbooks/cloud-drain-autonomy.md` § The cloudEnv axis.
+// `docs/coord/cloud-drains.md` § The cloudEnv axis.
 //
 // `cloudEnv: webkit` (plan 2313): a FOURTH rung on the same ladder, slotting between
 // `full` and `browser` — the plan's acceptance needs a live BROWSER-RENDERED page but
@@ -148,9 +148,9 @@
 // separate lane flag would be identical to `--env full`), `--env browser` admits it
 // as the top rung, and only the plain-`--cloud` Trusted lane excludes it (`exclude:
 // 'webkit-env'` — a Trusted env can neither install WebKit nor reach live hosts).
-// Positive per-lane verification: `scripts/probe-webkit-egress.mjs` (the
+// Positive per-lane verification: the project's own WebKit-egress probe tool (the
 // probe-chromium-egress sibling). Split rule + evidence:
-// `docs/runbooks/cloud-drain-autonomy.md` § The `cloudEnv: webkit` value.
+// `docs/coord/cloud-drains.md` § The cloudEnv axis.
 //
 // Blocked-by / archive check (plan 1819): a Blocked-by line naming another plan is
 // trusted at face value UNLESS that named plan is archived — a landed-and-archived
@@ -198,23 +198,16 @@ import { join, dirname, basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { findScriptsDir } from './scripts-anchor.mjs';
 import { execFileSync } from 'node:child_process';
-import {
-  resolveMain,
-  parseFlags,
-  deadSeedVerdict,
-  DEAD_SEED_MIN_AGE_MS,
-  // plan 3816 fix round: the ONE `git cat-file --batch` maxBuffer this repo's git subprocesses
-  // agree on (coord-git.mjs) — readBlobsBatched below mirrors in-progress-board.mjs's
-  // listPlansFromOrigin, which imports the SAME constant for the SAME reason (a whole ready/
-  // corpus's raw content, read in one batch, can exceed Node's 1MB execFileSync default).
-  GIT_MAXBUFFER,
-} from './coord-git.mjs';
+import { resolveMain, parseFlags, deadSeedVerdict, DEAD_SEED_MIN_AGE_MS } from './coord-git.mjs';
 import { DRAIN_STATUS_REF_GLOB, parseStatusHeads, readDrainStatuses } from './drain-status.mjs';
 import { loadCoordConfig } from './coord-config.mjs';
 import {
   readFrontmatterScalar,
   readSeedWriteValue,
   specReviewGateErrorFromValues,
+  // plan 4202: distinguishes the 'stub' exclude code from the new 'provenance' one — see
+  // the specGateCode comment at its call site (parsePlanMeta) for why this can't drift.
+  specReviewGateCode,
   stripFrontmatter,
   HEADING_LEVEL_RX,
   FENCE_DELIM_RX,
@@ -232,7 +225,28 @@ import {
   ARCHIVE_FOLDER,
 } from './build-index-lib.mjs';
 import { readCloudExecStamp, UNSET, NO_FRONTMATTER } from './local-drain-filter.mjs';
-import { lazyBatchRoster, canonicalPlanId, batchHoldFor } from './batch-paths.mjs';
+// plan 4255: the land-phase axis a /cloud-land hand-off stamps (landCloudExec + landCloudEnv).
+import {
+  DEFAULT_LAND_CLOUD_ENV,
+  isLandHandoff,
+  missingHandoffParts,
+  readLandStamps,
+} from './cloud-land-lib.mjs';
+import {
+  lazyBatchRoster,
+  canonicalPlanId,
+  batchHoldFor,
+  readArchivedPlanIds,
+  dissolvedBatchReason,
+  // plan 4246 review fix (b35525): the ONE ls-tree / cat-file --batch pair, now shared with the
+  // batch roster's origin read; readBlobsBatched moved there from this file and is re-exported
+  // below so its export surface is unchanged.
+  lsTreeBlobs,
+  readBlobsBatched,
+  // plan 4246 review round 3 (ca651e/9adfd7): the ONE archive filename -> canonical id parser
+  // (shared claimedIdOfBasename + canonicalPlanId), used by both Blocked-by archive readers.
+  planIdOfFilename,
+} from './batch-paths.mjs';
 // plan 3962 P1: was `import { parseCloudRepos } from './cloud-repos-lib.mjs'` — that project
 // module (the vetapp EXTRA-REPO registry, hardcodes the project's own extra-repo values) is not importable from
 // here once this file moves under the generic scripts/coord/** core (Rule 3,
@@ -532,14 +546,14 @@ export const CLOUD_ENV_RUNGS = [
       'cloudEnv: browser — needs a lane with verified live headless-Chromium egress ' +
       '(a plain Full-egress environment has fetch/WebKit egress but not verified ' +
       'Chromium-TLS egress, see the 2241 evidence in ' +
-      'docs/runbooks/cloud-drain-autonomy.md); since plan 3823 the browser body is ' +
+      'docs/coord/cloud-drains.md § The autonomy axis); since plan 3823 the browser body is ' +
       'the FLEET DEFAULT rather than a single-account exception — the account registry marks ' +
       'BOTH drain slots on all three live accounts `browser`, and the reconciler ' +
       'renders sonnet-browser.md / fable-browser.md for them. WHICH slots have that ' +
       'body pushed onto the live trigger, and which are enabled, are both LIVE state ' +
-      'this literal must never assert: read the dated log in ' +
-      'docs/runbooks/cloud-drain-landing.md, and ask ' +
-      'node scripts/sync-trigger-bodies.mjs --dry-run which bodies are actually in ' +
+      'this literal must never assert: read the dated fleet log for the current binding, ' +
+      'and ask ' +
+      'the trigger-body sync tool (in dry-run mode) which bodies are actually in ' +
       'sync. ' +
       'You are seeing this code because the run that produced it asked for a LOWER ' +
       'rung: re-run with --env browser, or route to a local/interactive session.',
@@ -633,7 +647,7 @@ function cloudEnvExclusion(cloudEnv, { lane }) {
 // because of the paragraph above: this constant routes nothing on its own, so a bootstrap
 // that fails degrades to a dark-but-working codex seat, never to a plan being admitted
 // somewhere it cannot run. A seat that must PROVE injection runs the differential control in
-// docs/runbooks/codex-claude-context-parity.md rather than trusting this flag.
+// docs/coord/rule-tiers.md § The multi-runtime mirroring problem rather than trusting this flag.
 const SOL_FULL_EGRESS_CLOUD_SUPPORTED = true;
 
 // solEnvExclusion (plan 3341): the `sol` lane's OWN environment ladder — driven off
@@ -655,7 +669,7 @@ const SOL_FULL_EGRESS_CLOUD_SUPPORTED = true;
 // the main checkout's `.codex/hooks.json` path plus a per-event content hash, and an
 // UNTRUSTED hook fires SILENTLY rather than loudly, so a false "it worked" is the
 // failure mode a probe must rule out before this constant can flip (see
-// docs/runbooks/codex-claude-context-parity.md, roughly :65-84). Returns null when
+// docs/coord/rule-tiers.md § The multi-runtime mirroring problem, roughly :65-84). Returns null when
 // admitted, else an { exclude, excludeReason } pair in the same shape
 // cloudEnvExclusion returns, so both feed the same downstream branch shape.
 // The two exclude codes solEnvExclusion below can produce, named ONCE here so its return
@@ -692,7 +706,7 @@ function solEnvExclusion(lane) {
         'cause (scripts/gpt-review.mjs seeds the missing ~/.codex/config.toml project-trust entry and ' +
         'passes --dangerously-bypass-hook-trust) and re-measured injection LIVE in a full-egress ' +
         'sandbox; this branch is therefore unreachable while SOL_FULL_EGRESS_CLOUD_SUPPORTED is true ' +
-        'and survives only for a deliberate re-pin (see docs/runbooks/codex-claude-context-parity.md) ' +
+        'and survives only for a deliberate re-pin (see docs/coord/rule-tiers.md § The multi-runtime mirroring problem) ' +
         '— route to LOCAL for now',
     };
   }
@@ -1223,6 +1237,11 @@ export function parsePlanMeta(
   const stage = stageFm ? stageFm.toLowerCase() : null;
   const specReviewFm = readFrontmatterScalar(content, 'specReview');
   const specReview = specReviewFm || null;
+  // plan 4202: the provenance-of-the-spec-pass axis (plan 3943/3004) — read here so the
+  // shared gate below (specReviewGateErrorFromValues) can refuse a real specReview sha
+  // stamped with specReviewBy: undeclared the same way the claim gate already does.
+  const specReviewByFm = readFrontmatterScalar(content, 'specReviewBy');
+  const specReviewBy = specReviewByFm || null;
   // plan 1781: the cloud-safety axis. Read from frontmatter ONLY (like execModel/
   // stage). 'true' | 'false' | null (absent — never stamped). In --cloud mode
   // anything but an explicit 'true' is excluded (see the gate below); off-cloud
@@ -1249,7 +1268,32 @@ export function parsePlanMeta(
   // Computed once here (not per-branch) for the same reason `strippedBlockedBy`
   // is precomputed above: the gate below and this value must never re-derive
   // independently.
-  const cloudEnvRung = cloudOnly ? cloudEnvExclusion(cloudEnv, { lane }) : null;
+  // plan 3111's adopt stamp, read here (hoisted by plan 4255) because the land-phase axis below
+  // needs it before the cloudEnv rung is computed. See the plan-3111 comment further down.
+  const adoptBranch = readFrontmatterScalar(content, 'adoptBranch') || null;
+  // plan 4255 (S1): the LAND-PHASE axis. A `/cloud-land` hand-off (cloud-land-lib.mjs) stamps
+  // `landCloudExec: true` + `landCloudEnv` on a plan whose branch is BUILT, reviewed and pushed.
+  // `landHandoff` is true only for a COMPLETE hand-off — the carrier, the adopt stamp AND the
+  // hand-off note — and then the taker lands the branch, never re-executes the plan
+  // (`item.landOnly`). `landPhaseAdmit` is the narrower case where the carrier is the ONLY thing
+  // letting the plan into a cloud drain (cloudExec is not 'true'); selectEligible then also
+  // requires the branch to actually be on origin, so a vanished branch can never turn into a
+  // from-scratch cloud execution of a plan whose build needs the local box.
+  const landStamps = readLandStamps(content);
+  const landHandoff = isLandHandoff(content, adoptBranch);
+  const landPhaseAdmit = cloudOnly && cloudExec !== 'true' && landHandoff;
+  // The env the cloud gate routes on: the land's own env for a hand-off, the plan's cloudEnv
+  // otherwise. A land never routes BELOW full (S2 — full is the only env with WebKit for the mobile
+  // gate): an absent, trusted or unrecognized landCloudEnv reads as full, and only a rung at or
+  // above full (full / webkit / browser) is honoured as written (review fix, gpt-review r1 a7a1c6).
+  const landEnvRung = CLOUD_ENV_RUNGS.find((r) => r.value === landStamps.landCloudEnv);
+  const fullRank = CLOUD_ENV_RUNGS.find((r) => r.value === DEFAULT_LAND_CLOUD_ENV).rank;
+  const routedCloudEnv = landHandoff
+    ? landEnvRung && landEnvRung.rank >= fullRank
+      ? landEnvRung.value
+      : DEFAULT_LAND_CLOUD_ENV
+    : cloudEnv;
+  const cloudEnvRung = cloudOnly ? cloudEnvExclusion(routedCloudEnv, { lane }) : null;
   // solEnvRung (plan 3341): the sol lane's OWN environment refusal (see
   // solEnvExclusion above) — `null` when admitted (every LOCAL invocation,
   // where cloudOnly is false, never reaches this) or when the plan isn't a
@@ -1286,7 +1330,7 @@ export function parsePlanMeta(
   // the item — the stamp is the plan's own declaration that a branch exists to inherit, and the
   // local drain driver hands the same adopt instruction to its worker (drain-run.mjs). Empty
   // string ⇒ null, matching every other optional scalar on this record.
-  const adoptBranch = readFrontmatterScalar(content, 'adoptBranch') || null;
+  // (`adoptBranch` itself is read above, beside the cloudEnv axis — plan 4255 needs it there.)
   // plan 2328: the operator priority stamp — `priority: high` (stamped via edit-plan.mjs,
   // spec 2026-07-24). It is a SORT key only (first key in selectEligible, ahead of the
   // 🟩/🟥-cost-id chain) — it never gates: an excluded priority plan stays excluded, and the
@@ -1310,7 +1354,14 @@ export function parsePlanMeta(
     specReview,
     filename,
     'queue-drain: excluding',
+    { specReviewBy },
   );
+  // plan 4202: which of the two lifecycle gates specGateMsg actually fired — 'stub' (no
+  // spec-pass at all) or 'provenance' (a spec-pass ran, but of undeclared provenance) —
+  // so the exclude code below can tell the operator which fix applies, rather than
+  // collapsing both into the older 'stub' code (specReviewGateCode is the SAME
+  // classification specReviewGateErrorFromValues is built on, so the two cannot drift).
+  const specGateCode = specReviewGateCode(stage, specReview, specReviewBy);
 
   // exclude is the gate; excludeReason is a human string surfaced in the drain's
   // closing skip-list (plan 443). Precedence (first match wins): in --cloud mode the
@@ -1380,7 +1431,12 @@ export function parsePlanMeta(
       // multi-blocker line ("plan 1055 and plan 1541") is stale only when ALL of
       // them have landed; a single still-open blocker keeps the whole line
       // 'blocked' even if an earlier-named sibling already archived.
-      if (blockedIds.every((bid) => archivedIds.has(bid))) {
+      // plan 4246 review round 3: the archive readers key their Sets by canonicalPlanId, so the
+      // lookup canonicalizes too (`plan 029` and `029-2026-…md` both mean 29). The ids shown in
+      // the messages below stay exactly as the Blocked-by line wrote them.
+      const isShipped = (bid) => archivedIds.has(canonicalPlanId(bid));
+      const isArchived = (bid) => isShipped(bid) || archivedUnshippedIds.has(canonicalPlanId(bid));
+      if (blockedIds.every(isShipped)) {
         // Archived AND shipped ⇒ STALE line: every named upstream has already
         // landed. Do not exclude — include the plan and warn instead of silently
         // vanishing it from the drain (the 1790/1794 incident).
@@ -1390,7 +1446,7 @@ export function parsePlanMeta(
           staleBlockedBy: `blocked-by ${blockedIds.length > 1 ? `plans ${blockedIds.join(', ')}` : `plan ${blockedIds[0]}`} — all archived (landed) — stale Blocked-by line: "${blockedBy}"`,
         };
       }
-      if (blockedIds.every((bid) => archivedIds.has(bid) || archivedUnshippedIds.has(bid))) {
+      if (blockedIds.every(isArchived)) {
         // plan 2496 (candidate 3, "surface, don't reconcile"): every named blocker IS
         // in archive/, but NOT every one of them is shipped (else the branch above
         // would have already fired) — at least one sits there 🗄️ SUPERSEDED or
@@ -1446,13 +1502,19 @@ export function parsePlanMeta(
       staleBlockedBy: null,
     };
   };
-  if (cloudOnly && cloudExec !== 'true') {
+  if (cloudOnly && cloudExec !== 'true' && !landPhaseAdmit) {
     // plan 1781: in the cloud, cloud-safety is the FIRST admission question.
+    // plan 4255: a COMPLETE land hand-off is the one way past it (landPhaseAdmit); an incomplete
+    // one says which part it lacks, so a half-run /cloud-land is visible rather than silent.
+    const missing = missingHandoffParts(content, adoptBranch);
     exclude = 'cloud';
     excludeReason =
-      cloudExec === 'false'
-        ? 'cloudExec: false — not cloud-safe (needs local tooling/keys or the seed sandbox); route to a local drain'
-        : 'cloudExec unset — not yet stamped cloud-eligible (spec-pass has not marked it); route to a local drain or stamp it';
+      missing.length > 0
+        ? `landCloudExec: true but the land hand-off is incomplete (missing ${missing.join(' and ')}) — ` +
+          're-run node scripts/cloud-land.mjs, or land it locally'
+        : cloudExec === 'false'
+          ? 'cloudExec: false — not cloud-safe (needs local tooling/keys or the seed sandbox); route to a local drain'
+          : 'cloudExec unset — not yet stamped cloud-eligible (spec-pass has not marked it); route to a local drain or stamp it';
   } else if (cloudEnvRung) {
     // plan 1925/2003/2250/2313, generalized by plan 2323: the cloudEnv routing
     // gate against the ordered CLOUD_ENV_RUNGS ladder (trusted < full == webkit <
@@ -1480,10 +1542,13 @@ export function parsePlanMeta(
     // is false there, so solEnvRung is always null) and on every non-sol plan.
     exclude = solEnvRung.exclude;
     excludeReason = solEnvRung.excludeReason;
-  } else if (operatorGated) {
+  } else if (operatorGated && !landHandoff) {
+    // plan 4255: a land hand-off's build is DONE — its operator inputs were consumed building the
+    // branch, and the land itself needs none — so the build-phase operator gates below do not hold
+    // it back. Every later gate (lane, spec, batch, Blocked-by) still applies.
     exclude = 'operator';
     excludeReason = 'operator-gated: needs an operator-supplied input / decision / green-light';
-  } else if (interactiveReason) {
+  } else if (interactiveReason && !landHandoff) {
     exclude = 'operator';
     excludeReason = interactiveReason;
   } else if (!execLaneInfo.drainClaimable) {
@@ -1530,9 +1595,13 @@ export function parsePlanMeta(
         ? 'execModel: sonnet (or absent, grandfathered sonnet) — not in the fable lane; route to the sonnet oracle/drain'
         : 'execModel: fable — heavy-model plan, not drainable (route to a Fable session; thin-orchestrator doctrine)';
   } else if (specGateMsg) {
-    exclude = 'stub';
+    // plan 4202: 'provenance' (a spec-pass ran, undeclared) is a DIFFERENT operator action
+    // from 'stub' (no spec-pass at all) — never reuse 'stub' for it (design 3).
+    exclude = specGateCode === 'provenance' ? 'provenance' : 'stub';
     excludeReason = specGateMsg;
-  } else if (batchHeldBy.has(canonicalPlanId(id))) {
+  } else if (!landHandoff && batchHeldBy.has(canonicalPlanId(id))) {
+    // plan 4255 (review r4 c35d3b): a complete land hand-off is past building — it is landed
+    // alone as `landOnly`, never boarded onto a train that would re-execute it.
     // plan 2459 Task 2 (leak B): this plan is a member of a RUNNABLE batch
     // (status: proposed, gate: null) — refuse the solo claim path here rather than
     // let the fastest claimer dissolve the train. Checked BEFORE Blocked-by: a batch
@@ -1587,6 +1656,9 @@ export function parsePlanMeta(
     cloudEnv,
     cloudRepos,
     adoptBranch,
+    // plan 4255: see the land-phase axis block above.
+    landHandoff,
+    landPhaseAdmit,
     priority,
     priorityTier,
     operatorGatedStamp,
@@ -1685,7 +1757,7 @@ function toItem(m) {
   if (m.tailBlockedBySkipped) item.tailBlockedBySkipped = m.tailBlockedBySkipped;
   // plan 2577: only present when the plan names extra repos. The drain reads this field
   // on the plan it picked and clones each listed repo BEFORE claiming — see the § Extra
-  // repos section of the routine prompts and docs/runbooks/cloud-drain-autonomy.md.
+  // repos section of the routine prompts and docs/coord/cloud-drains.md § The autonomy axis.
   if (m.cloudRepos?.length) item.cloudRepos = m.cloudRepos;
   // plan 3111: only present when the plan carries the hand-off stamp. Its meaning to a consumer is
   // "there is committed work on this branch — CONTINUE it, do not restart": cut the worktree with
@@ -1697,6 +1769,10 @@ function toItem(m) {
   // is the one state a present-but-unverified stamp can be in: an EXISTING but DIFFERENT branch is
   // already excluded above, so it never reaches here.
   if (m.adoptBranch) item.adoptBranch = m.adoptBranch;
+  // plan 4255: only present on a COMPLETE /cloud-land hand-off. It means "the build is DONE —
+  // adopt `adoptBranch` and LAND it; never re-execute the plan". local-drain-filter.mjs routes it
+  // away from a local drain (the whole point of the hand-off is that the land leaves the box).
+  if (m.landHandoff) item.landOnly = true;
   return item;
 }
 
@@ -1787,12 +1863,22 @@ function planRank(seedy) {
 // member is not cloud-eligible in this environment" are indistinguishable to whoever reads
 // the drain's output, and a mixed train would rot invisibly instead of being routed to the
 // local lane.
-function computeRunnableBatches(metas, batchRoster, { landingHeld, seedLane }) {
-  if (!batchRoster || batchRoster.length === 0) return { runnable: [], skipped: [] };
+//
+// plan 4246: `dissolvedBatches` (batch-paths.mjs's lazyBatchRoster().dissolved()) are the
+// runnable-status batches an ARCHIVED member left with fewer than two live members. They hold
+// nothing (their survivor is solo-eligible) and are never a train, but each is still logged in
+// `skipped` with a `dissolved: …` reason naming the archived ids — the same "never silently
+// absent" ruling as every other withheld train. An archived member of a batch that still has ≥2
+// live members never reaches this function at all: the roster already lists live ids only.
+function computeRunnableBatches(metas, batchRoster, { landingHeld, seedLane, dissolvedBatches }) {
+  const dissolvedSkips = dissolvedBatchSkips(dissolvedBatches);
+  if (!batchRoster || batchRoster.length === 0) {
+    return { runnable: [], skipped: sortSkipped(dissolvedSkips) };
+  }
   const seedy = (m) => seedLane && isSeedWrite(m);
   const byId = new Map(metas.map((m) => [canonicalPlanId(m.id), m]));
   const runnable = [];
-  const skipped = [];
+  const skipped = [...dissolvedSkips];
   for (const batch of batchRoster) {
     if (!batch.members || batch.members.length === 0) {
       skipped.push({ slug: batch.slug, reason: 'roster lists no members', blockers: [] });
@@ -1806,8 +1892,9 @@ function computeRunnableBatches(metas, batchRoster, { landingHeld, seedLane }) {
     for (const mid of batch.members) {
       const m = byId.get(canonicalPlanId(mid));
       if (!m) {
-        // Not in this scan's ready/ pool at all: archived, claimed, or re-filed since the
-        // roster was written — a stale roster entry, never a runnable train.
+        // Not in this scan's ready/ pool at all: claimed or re-filed since the roster was
+        // written (an ARCHIVED member never gets here — plan 4246 drops it from the roster's
+        // live members upstream) — never a runnable train, all-or-nothing.
         blockers.push({ id: String(mid), cause: 'not-in-ready-pool' });
         continue;
       }
@@ -1892,8 +1979,23 @@ function computeRunnableBatches(metas, batchRoster, { landingHeld, seedLane }) {
   const rank = planRank(seedy);
   runnable.sort((a, b) => rank(a._rank, b._rank));
   for (const b of runnable) delete b._rank; // internal ranking handle, never part of the contract
-  skipped.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
-  return { runnable, skipped };
+  return { runnable, skipped: sortSkipped(skipped) };
+}
+
+function sortSkipped(skipped) {
+  return skipped.sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+}
+
+// plan 4246: the `skippedBatches` entry for each dissolved batch — shared by computeRunnableBatches
+// and selectEligible's empty-ready fast path (review finding 23b124/4e915b: that path returned
+// `skippedBatches: []` before the dissolved batches were merged in, so a dissolved batch vanished
+// from the log exactly when ready/ yielded nothing).
+function dissolvedBatchSkips(dissolvedBatches) {
+  return (dissolvedBatches ?? []).map((b) => ({
+    slug: b.slug,
+    reason: dissolvedBatchReason({ live: b.members, archived: b.archivedMembers }),
+    blockers: b.archivedMembers.map((id) => ({ id: String(id), cause: 'archived' })),
+  }));
 }
 
 // ─── The already-executed-on-origin gate (plan 2863) ─────────────────────────
@@ -2177,15 +2279,26 @@ const adoptAmbiguousReason = (stamped, branches) =>
 // original behaviour (vetapp).
 export function selectEligible(
   metas,
-  { landingHeld = false, seedLane = true, batchRoster = null, onOriginIds = null } = {},
+  {
+    landingHeld = false,
+    seedLane = true,
+    batchRoster = null,
+    dissolvedBatches = null,
+    onOriginIds = null,
+  } = {},
 ) {
   if (metas.length === 0)
-    return { reason: 'empty', excluded: [], runnableBatches: [], skippedBatches: [] };
+    return {
+      reason: 'empty',
+      excluded: [],
+      runnableBatches: [],
+      skippedBatches: sortSkipped(dissolvedBatchSkips(dissolvedBatches)),
+    };
 
   const { runnable: runnableBatches, skipped: skippedBatches } = computeRunnableBatches(
     metas,
     batchRoster,
-    { landingHeld, seedLane },
+    { landingHeld, seedLane, dissolvedBatches },
   );
 
   // plan 2863: stamp the already-on-origin exclusion onto a COPY of each affected meta, so this
@@ -2307,8 +2420,41 @@ export function selectEligible(
         })
       : metas;
 
-  const excluded = gated.filter((m) => m.exclude);
-  let candidates = gated.filter((m) => !m.exclude);
+  // plan 4255: a plan admitted to a cloud drain ONLY through the land-phase carrier (its
+  // cloudExec is not 'true') must have its built branch on origin right now. The adopt dispatch
+  // above treats a stamp naming a branch origin no longer carries as INERT (the plan is handed out
+  // for a normal, from-scratch execution) — correct for a cloud-safe plan, wrong for one whose
+  // build needs the local box. So here an unreadable or branch-less origin excludes it instead.
+  //
+  // Review fix (gpt-review r1, c0d8db/0ccdde/04487a): a CLOUD-SAFE hand-off (cloudExec: true) whose
+  // branch is gone is no longer a hand-off at all — nothing is left to land — so it drops the
+  // land-only flag and falls back to the adopt axis's stale-stamp path (execute from scratch).
+  // Pinning `landOnly` there sent the drain to adopt a missing branch, refuse, release, and leave
+  // the plan in ready/ to fail the same way on every firing.
+  const landChecked = gated.map((m) => {
+    if (m.exclude || !m.landHandoff) return m;
+    const onOrigin = onOriginIds ? (onOriginIds.get(canonicalPlanId(m.id)) || []).length > 0 : null;
+    if (!m.landPhaseAdmit) return onOrigin === false ? { ...m, landHandoff: false } : m;
+    if (!onOriginIds)
+      return {
+        ...m,
+        exclude: 'cloud',
+        excludeReason:
+          'land-only hand-off (landCloudExec: true) but the oracle could not read origin to confirm ' +
+          `the built branch ${m.adoptBranch} — its build is not cloud-safe, so it is never run from scratch`,
+      };
+    if (!onOrigin)
+      return {
+        ...m,
+        exclude: 'cloud',
+        excludeReason:
+          `land-only hand-off (landCloudExec: true) but its built branch ${m.adoptBranch} is not on ` +
+          'origin — its build is not cloud-safe, so it is never run from scratch; route to a local drain',
+      };
+    return m;
+  });
+  const excluded = landChecked.filter((m) => m.exclude);
+  let candidates = landChecked.filter((m) => !m.exclude);
 
   // seedy(): treat a plan as seed-write only when the lane is active.
   // seedLane off ⇒ nothing is seedy → mutex never fires, sort is pure id order.
@@ -2396,6 +2542,11 @@ export function selectEligible(
         (m) =>
           m.exclude === 'fable' ||
           m.exclude === 'stub' ||
+          // plan 4202: an undeclared-provenance refusal is the SAME "lifecycle, not blocked"
+          // class as a bare stub — the fix (re-run /spec-pass and stamp --provenance) is a
+          // routing action, never a cross-plan block, so an all-'provenance' pool must not
+          // misreport as all_blocked either.
+          m.exclude === 'provenance' ||
           m.exclude === 'cloud' ||
           m.exclude === 'sonnet-lane' ||
           m.exclude === 'sol' ||
@@ -2728,81 +2879,17 @@ export function readPlanContentFromOrigin(repoRoot, ref, { _exec = execFileSync 
 export function listReadyBlobsFromOrigin(repoRoot, ref, { _exec = execFileSync } = {}) {
   if (!repoRoot) throw new Error('listReadyBlobsFromOrigin: no repoRoot available');
   if (!ref) throw new Error('listReadyBlobsFromOrigin: no ref (commit sha) available');
-  const out = _exec(
-    'git',
-    ['-C', repoRoot, 'ls-tree', '-r', ref, '--', `docs/superpowers/plans/${READY_FOLDER}`],
-    { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 },
+  // plan 4246 review fix: the listing itself is batch-paths.mjs's lsTreeBlobs (same argv shape,
+  // same first-tab split), shared with the batch roster and archive reads at the same sha.
+  return lsTreeBlobs(repoRoot, ref, `docs/superpowers/plans/${READY_FOLDER}`, { _exec }).filter(
+    (e) => e.path.endsWith('.md'),
   );
-  const entries = [];
-  for (const line of out.split('\n')) {
-    if (!line) continue;
-    const tab = line.indexOf('\t');
-    if (tab === -1) continue;
-    const sha = line.slice(0, tab).trim().split(/\s+/)[2];
-    const path = line.slice(tab + 1);
-    if (sha && path.endsWith('.md')) entries.push({ sha, path });
-  }
-  return entries;
 }
 
-// plan 3816 fix round (review Fix 1): ONE `git cat-file --batch` call for a whole SET of blob
-// shas — the byte-offset parser is PORTED from in-progress-board.mjs's listPlansFromOrigin
-// rather than imported (queue-drain.mjs is the one coordShare-adopted-byte-identical file the
-// tandapp sibling pulls verbatim; in-progress-board.mjs is not on that adopt list, so an import
-// here would ERR_MODULE_NOT_FOUND the sibling's copy the moment it syncs — the same
-// one-directional constraint documented on BLOCKED_BY_LINE_RE above). `encoding: null` — NOT the
-// string `'buffer'`, which throws `Unknown encoding: buffer` when `input` is also a string,
-// because Node encodes `input` with this same value — is what makes `out` a raw Buffer, so this
-// can slice by the BYTE size cat-file's header reports rather than a pre-decoded utf8 string (a
-// multi-byte character straddling a size boundary would corrupt every later offset).
-//
-// Returns contents aligned index-for-index with `shas`; a missing or malformed blob resolves to
-// `null` at its own index (mirroring listPlansFromOrigin's unreadable-entry-survives contract)
-// rather than throwing, so one vanished/truncated blob cannot take down the whole ready/ read —
-// once the stream stops being parseable, every remaining index degrades to `null` too, since a
-// malformed header means the position of the NEXT object is no longer known.
-export function readBlobsBatched(repoRoot, shas, { _exec = execFileSync } = {}) {
-  if (!repoRoot) throw new Error('readBlobsBatched: no repoRoot available');
-  if (shas.length === 0) return [];
-  const input = shas.join('\n') + '\n';
-  const out = _exec('git', ['-C', repoRoot, 'cat-file', '--batch'], {
-    input,
-    encoding: null,
-    maxBuffer: GIT_MAXBUFFER,
-    timeout: 15000,
-  });
-  const contents = [];
-  let offset = 0;
-  let unrecoverable = false;
-  for (let i = 0; i < shas.length; i++) {
-    if (unrecoverable) {
-      contents.push(null);
-      continue;
-    }
-    const nl = out.indexOf(0x0a, offset);
-    if (nl === -1) {
-      unrecoverable = true;
-      contents.push(null);
-      continue;
-    }
-    const header = out.slice(offset, nl).toString('utf8').trim();
-    offset = nl + 1;
-    const parts = header.split(/\s+/);
-    const size = parts.length >= 3 ? parseInt(parts[2], 10) : NaN;
-    if (parts[1] === 'missing') {
-      contents.push(null); // a vanished blob — no body follows, offset stays correct
-      continue;
-    }
-    if (!Number.isFinite(size) || offset + size > out.length) {
-      unrecoverable = true;
-      contents.push(null);
-      continue;
-    }
-    contents.push(out.slice(offset, offset + size).toString('utf8'));
-    offset += size + 1; // the trailing newline cat-file --batch appends after each object
-  }
-  return contents;
-}
+// plan 3816's `readBlobsBatched` (ONE `git cat-file --batch` for a whole set of blob shas) moved to
+// batch-paths.mjs in plan 4246's review fix so the batch roster's origin read shares it; it is
+// re-exported here so every existing importer of it from this module keeps working.
+export { readBlobsBatched };
 
 // plan 3443 Fix 1: minutes since `iso`, or null on an absent/unparseable stamp — the same
 // arithmetic landing-lock.mjs's ageMinutes uses, inlined rather than imported so this file
@@ -3179,7 +3266,7 @@ export function resolveLandingHeldForSeedLane({
 // archive checks stay plain Set lookups.
 //
 // Review fix: `archive/` holds plans that are "shipped OR closed"
-// (docs/runbooks/plans-workflow.md § Plan folder layout) — mere presence does
+// (docs/coord/plan-lanes.md § The lane set) — mere presence does
 // NOT prove the blocking WORK landed (a plan can be archived SUPERSEDED /
 // abandoned without ever shipping). Only a file whose `**Status:**` line carries
 // the `✅ COMPLETED` stamp done-worktree's normal archive close-out writes
@@ -3216,18 +3303,65 @@ function readArchivedIds(archiveDir) {
   // routes through the shared walker anyway, so a hand-created category folder there shows
   // up as a loud lint violation on a plan the oracle CAN see, never as a plan the oracle
   // silently forgot was archived (which would let a stale Blocked-by gate ready/ forever).
-  for (const { rel } of walkPlanDir(archiveDir, { pattern: /^(\d{3,})-(?=[A-Za-z])/ })) {
-    const m = rel
-      .split('/')
-      .pop()
-      .match(/^(\d{3,})-(?=[A-Za-z])/);
+  //
+  // plan 4246 review round 3 (9adfd7): ids are parsed by batch-paths.mjs's planIdOfFilename (the
+  // shared claimedIdOfBasename + canonicalPlanId), so a date-slugged archive name like
+  // `029-2026-05-21-….md` counts; the Sets are keyed by canonical id.
+  for (const { rel } of walkPlanDir(archiveDir, { pattern: /^\d{3,}-.*\.md$/ })) {
+    const id = planIdOfFilename(rel.split('/').pop());
+    if (!id) continue;
     let content;
     try {
       content = readFileSync(join(archiveDir, ...rel.split('/')), 'utf8');
     } catch {
       continue; // race with a concurrent archive move — skip, stay conservative
     }
-    (ARCHIVE_COMPLETED_RX.test(content) ? shipped : unshipped).add(m[1]);
+    (ARCHIVE_COMPLETED_RX.test(content) ? shipped : unshipped).add(id);
+  }
+  return { shipped, unshipped };
+}
+
+// plan 4246 review fix (b89c44): the origin twin of readArchivedIds above — the SAME `{ shipped,
+// unshipped }` partition, same filename id parser (planIdOfFilename, canonical keys — review round
+// 3, ca651e), same ARCHIVE_COMPLETED_RX test, but read at the
+// commit `ref` ready/ was read at. Names come from one ls-tree (lsTreeBlobs); CONTENT is read, in
+// one `git cat-file --batch`, only for archive files whose id is in `wantedIds` (the ids the ready
+// set's Blocked-by lines name) — never the whole lane. An unreadable blob is skipped, the same
+// "stay conservative" outcome as the disk scan's per-file read failure. A git fault logs once and
+// returns empty sets: every named blocker then reads as still open ('blocked'), never as shipped.
+function readArchivedIdsAtRef(
+  repoRoot,
+  ref,
+  wantedIds,
+  { _exec = execFileSync, log = console.error } = {},
+) {
+  const shipped = new Set();
+  const unshipped = new Set();
+  if (wantedIds.size === 0) return { shipped, unshipped };
+  const prefix = `docs/superpowers/plans/${ARCHIVE_FOLDER}/`;
+  try {
+    const hits = [];
+    for (const { sha, path } of lsTreeBlobs(repoRoot, ref, prefix, { _exec })) {
+      const segs = path.startsWith(prefix) ? path.slice(prefix.length).split('/') : [];
+      const name = segs.length && segs.length <= 2 ? segs[segs.length - 1] : '';
+      const id = planIdOfFilename(name);
+      if (id && wantedIds.has(id)) hits.push({ id, sha });
+    }
+    const contents = readBlobsBatched(
+      repoRoot,
+      hits.map((h) => h.sha),
+      { _exec },
+    );
+    hits.forEach((h, i) => {
+      if (typeof contents[i] !== 'string') return; // unreadable blob — skip, stay conservative
+      (ARCHIVE_COMPLETED_RX.test(contents[i]) ? shipped : unshipped).add(h.id);
+    });
+  } catch (e) {
+    log(
+      `queue-drain: readReadyMetas — archive read at ${String(ref).slice(0, 12)} failed ` +
+        `(${e?.message ?? e}); every archived Blocked-by id reads as still open.`,
+    );
+    return { shipped: new Set(), unshipped: new Set() };
   }
   return { shipped, unshipped };
 }
@@ -3315,6 +3449,56 @@ function readyEntriesFromOrigin(repoRoot, ref, { _exec = execFileSync, log = con
   return { entries, contents, skippedUnreadable };
 }
 
+// plan 4246: the ONE batch-roster construction for a ready/ dir — batches are a sibling of the
+// plans root (…/plans/ready → …/superpowers/batches), and the roster applies batch-paths.mjs's
+// live-membership rule against the plans ARCHIVE lane (its configured name, ARCHIVE_FOLDER,
+// plan 3960). The archive listing is a lazy thunk over a NAME-ONLY listing, run at most once per
+// scan and only if some runnable batch exists — never the content-reading readArchivedIds below,
+// which answers the separate shipped-vs-closed Blocked-by question.
+//
+// SAME SOURCE as ready/ (review finding 47956f): with a `repoRoot` the names are listed at the
+// commit sha `ref()` returns — the origin snapshot readReadyMetas pinned ready/ to — so a member
+// archived on origin but not yet pulled into the local checkout still counts as archived. `ref`
+// is a getter because the sha is only resolved inside readReadyMetas, after this roster is built;
+// the thunk runs later (at the first hold lookup), by which point it is set. No resolvable sha
+// (the origin read itself failed) → an empty set, never a disk read: queue-drain does not fall
+// back to disk for ready/ there either. Only `repoRoot: null` (`--ready` / `source: 'tree'`)
+// reads the archive from local disk, beside the ready/ dir it already reads from disk.
+// Both readReadyMetas's own fallback and main() build through here, so the hold map and the
+// runnableBatches/skippedBatches pass can never judge archive membership differently.
+function batchRosterFor(
+  readyDir,
+  { repoRoot = null, ref = () => null, _exec = execFileSync } = {},
+) {
+  return lazyBatchRoster(join(dirname(dirname(readyDir)), 'batches'), {
+    // Review fix b35525: the batch.md roster is read at that SAME commit too (batch-paths.mjs's
+    // walkBatchFolders `at`), so liveness never combines an origin archive with a stale local
+    // roster. A git fault logs and walks nothing (the oracle keeps running; claim-plan's own gate
+    // still refuses a held member at claim time).
+    at: repoRoot
+      ? () => ({
+          repoRoot,
+          ref: ref(),
+          _exec,
+          onFault: (e) =>
+            console.error(
+              `queue-drain: batch roster — git read at ${String(ref()).slice(0, 12)} failed ` +
+                `(${e?.message ?? e}); treating no batch as runnable this scan.`,
+            ),
+        })
+      : null,
+    archivedIds: () =>
+      repoRoot
+        ? readArchivedPlanIds({
+            repoRoot,
+            ref: ref(),
+            archiveRel: `docs/superpowers/plans/${ARCHIVE_FOLDER}`,
+            _exec,
+          })
+        : readArchivedPlanIds({ archiveDir: join(dirname(readyDir), ARCHIVE_FOLDER) }),
+  });
+}
+
 // Exported (plan 1819 review fix) so callers outside this module — currently
 // orchestrate-dryrun.mjs's dry-run pacer — read the SAME ready/ selection this
 // CLI does, instead of hand-maintaining a second copy that can silently drift
@@ -3358,6 +3542,9 @@ export function readReadyMetas(
 ) {
   let entries;
   let contents;
+  // plan 4246 review fix: the origin commit this call pinned ready/ to, so the batch roster's
+  // archive listing (batchRosterFor) reads the SAME snapshot. Stays null on `source: 'tree'`.
+  let snapshotSha = null;
   if (source === 'origin') {
     if (!repoRoot) {
       throw new Error(
@@ -3442,6 +3629,7 @@ export function readReadyMetas(
     // one line down from fix round 2's placement) so it can carry the unreadable-blob count that
     // read produces — onSnapshot still fires exactly once, still before this function returns,
     // per its own header comment above.
+    snapshotSha = originSha;
     let skippedUnreadable;
     ({ entries, contents, skippedUnreadable } = readyEntriesFromOrigin(repoRoot, originSha, {
       _exec,
@@ -3476,9 +3664,24 @@ export function readReadyMetas(
     const bb = extractBlockedByLine(sb);
     return bb && extractBlockedPlanIds(bb).length > 0;
   });
-  const { shipped: archivedIds, unshipped: archivedUnshippedIds } = needsArchiveCheck
-    ? readArchivedIds(join(dirname(readyDir), ARCHIVE_FOLDER))
-    : { shipped: new Set(), unshipped: new Set() };
+  // plan 4246 review fix (b89c44): on the origin read, resolve Blocked-by archive status at the
+  // SAME commit ready/ was read at (readArchivedIdsAtRef) instead of the local checkout — and
+  // only for the ids a Blocked-by line actually names, never all ~4k archive contents. The
+  // local-disk scan stays for `source: 'tree'`, which reads ready/ from disk as well.
+  const { shipped: archivedIds, unshipped: archivedUnshippedIds } = !needsArchiveCheck
+    ? { shipped: new Set(), unshipped: new Set() }
+    : snapshotSha
+      ? readArchivedIdsAtRef(
+          repoRoot,
+          snapshotSha,
+          new Set(
+            scopedBodies.flatMap((sb) =>
+              extractBlockedPlanIds(extractBlockedByLine(sb) ?? '').map(canonicalPlanId),
+            ),
+          ),
+          { _exec, log },
+        )
+      : readArchivedIds(join(dirname(readyDir), ARCHIVE_FOLDER));
   // plan 2459 Task 2: batch-hold membership, computed at most ONCE per scan (mirrors the
   // archivedIds precompute above) so parsePlanMeta never touches fs. Batches live as a
   // SIBLING of the plans root (docs/superpowers/batches), one level up from where
@@ -3496,7 +3699,13 @@ export function readReadyMetas(
   // concurrently editing, and the walk is paid for at most once per scan. `batchRoster` is
   // accepted from the caller so main can hold that reference; readReadyMetas builds its own
   // when called directly (orchestrate-dryrun's pacer).
-  const batchHeldBy = batchRoster ?? lazyBatchRoster(join(dirname(dirname(readyDir)), 'batches'));
+  const batchHeldBy =
+    batchRoster ??
+    batchRosterFor(readyDir, {
+      repoRoot: source === 'origin' ? repoRoot : null,
+      ref: () => snapshotSha,
+      _exec,
+    });
   return files.map((f, i) =>
     parsePlanMeta(f, contents[i], {
       category: entries[i].category,
@@ -3552,7 +3761,10 @@ export function main(argv) {
   const fableLane = flags.lane === 'fable';
   const lane = flags.env; // undefined (trusted) | 'full' | 'browser'
 
-  const batchRoster = lazyBatchRoster(join(dirname(readyDir), '..', 'batches'));
+  // plan 4246 review fix: `ref` reads main()'s own `originSha`, which readReadyMetas's onSnapshot
+  // sets to the commit it pinned ready/ to — so the archive listing names that same snapshot
+  // (declared below; the getter only runs after readReadyMetas has returned).
+  const batchRoster = batchRosterFor(readyDir, { repoRoot, ref: () => originSha });
   // fix round 2, Fix A/D: `originSha`/`originFetchFailed` are reported through readReadyMetas's
   // `onSnapshot` callback (invoked once, from INSIDE the origin read) rather than by main()
   // re-deriving its own post-hoc `rev-parse` — see readReadyMetas's Fix-A comment for why a
@@ -3617,6 +3829,7 @@ export function main(argv) {
     landingHeld,
     seedLane,
     batchRoster: batchRoster.list(),
+    dissolvedBatches: batchRoster.dissolved(),
     onOriginIds,
   });
 

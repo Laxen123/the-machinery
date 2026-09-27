@@ -12,8 +12,9 @@ This directory is the answer set, written once, generically. Every document here
 mechanism that works in any repository with any set of agents — none of it is specific to the
 project these documents were extracted from, and a lint enforces that by blocking any push that puts
 a domain noun in this tree. The project-specific version of the same facts — the actual service
-names, the actual incident history, the actual thresholds — lives in `../runbooks/`, and each
-document here points at its counterpart there.
+names, the actual incident history, the actual thresholds — belongs in your project's own runbooks,
+kept alongside these documents; the kit ships none, so a project that adopts it writes its own and
+points each one at the generic document here that it specialises.
 
 ## What this system is, in one paragraph
 
@@ -32,20 +33,23 @@ coordination server to deploy, authenticate, or keep alive.
 Read them in this order if you are new to the design. Each one is readable alone, but each assumes
 the one above it exists.
 
-| Layer            | Document                               | The question it answers                                           |
-| ---------------- | -------------------------------------- | ----------------------------------------------------------------- |
-| **State**        | [`plan-lanes.md`](plan-lanes.md)       | Where does work live, and how does anyone know its state?         |
-| **Exclusion**    | [`claims.md`](claims.md)               | How does exactly one agent get a unit of work, across machines?   |
-| **Isolation**    | [`worktrees.md`](worktrees.md)         | Where does each agent actually write, without colliding?          |
-| **Admission**    | [`landing-queue.md`](landing-queue.md) | Who is allowed to merge right now, and in what order?             |
-| **Execution**    | [`land-spine.md`](land-spine.md)       | What actually performs a merge, and how does it fail legibly?     |
-| **Enforcement**  | [`hooks.md`](hooks.md)                 | Which rules are enforced by code rather than by memory?           |
-| **Quality**      | [`review.md`](review.md)               | How is a change reviewed at a cost proportional to its risk?      |
-| **Delegation**   | [`subagents.md`](subagents.md)         | How does an expensive agent hand bulk work to a cheap one safely? |
-| **Autonomy**     | [`cloud-drains.md`](cloud-drains.md)   | How does an agent run with nobody watching, and fail visibly?     |
-| **Knowledge**    | [`wiki.md`](wiki.md)                   | Where does durable reasoning live, and how does it stay true?     |
-| **Evidence**     | [`bake-offs.md`](bake-offs.md)         | How do you run a comparison you will still trust in six months?   |
-| **Instructions** | [`rule-tiers.md`](rule-tiers.md)       | Which rules go in which instruction file, and why so few?         |
+| Layer            | Document                                       | The question it answers                                           |
+| ---------------- | ---------------------------------------------- | ----------------------------------------------------------------- |
+| **State**        | [`plan-lanes.md`](plan-lanes.md)               | Where does work live, and how does anyone know its state?         |
+| **Exclusion**    | [`claims.md`](claims.md)                       | How does exactly one agent get a unit of work, across machines?   |
+| **Isolation**    | [`worktrees.md`](worktrees.md)                 | Where does each agent actually write, without colliding?          |
+| **Admission**    | [`landing-queue.md`](landing-queue.md)         | Who is allowed to merge right now, and in what order?             |
+| **Execution**    | [`land-spine.md`](land-spine.md)               | What actually performs a merge, and how does it fail legibly?     |
+| **Enforcement**  | [`hooks.md`](hooks.md)                         | Which rules are enforced by code rather than by memory?           |
+| **Quality**      | [`review.md`](review.md)                       | How is a change reviewed at a cost proportional to its risk?      |
+| **Delegation**   | [`subagents.md`](subagents.md)                 | How does an expensive agent hand bulk work to a cheap one safely? |
+| **Autonomy**     | [`cloud-drains.md`](cloud-drains.md)           | How does an agent run with nobody watching, and fail visibly?     |
+| **Knowledge**    | [`wiki.md`](wiki.md)                           | Where does durable reasoning live, and how does it stay true?     |
+| **Evidence**     | [`bake-offs.md`](bake-offs.md)                 | How do you run a comparison you will still trust in six months?   |
+| **Instructions** | [`rule-tiers.md`](rule-tiers.md)               | Which rules go in which instruction file, and why so few?         |
+| **Layout**       | [`scripts-layout.md`](scripts-layout.md)       | Where may a tooling module import from, and what enforces it?     |
+| **Procedure**    | [`orchestrator-loop.md`](orchestrator-loop.md) | What exactly does `/orchestrate` do, step by step?                |
+| **Procedure**    | [`local-drain-loop.md`](local-drain-loop.md)   | How does `/local-drain` narrow that loop to local-only work?      |
 
 ## How the pieces fit
 
@@ -146,3 +150,6 @@ The layers are separable, and the ones with the best ratio of benefit to machine
 
 [`rule-tiers.md`](rule-tiers.md), [`wiki.md`](wiki.md) and [`bake-offs.md`](bake-offs.md) are
 orthogonal to the rest and can be adopted at any point, in any order.
+[`scripts-layout.md`](scripts-layout.md) applies from the moment you adopt any of the tooling.
+[`orchestrator-loop.md`](orchestrator-loop.md) and [`local-drain-loop.md`](local-drain-loop.md) are
+procedures rather than concepts: they assume every layer above is in place, and come last.

@@ -10,7 +10,7 @@
 // selector pulls a test into the battery because the pushed diff touched something the test
 // transitively imports, so the session that pays the cost is not the one that introduced the bug
 // and the bisect points at the innocent plan's diff. That is exactly what happened when plan 2478's
-// `scripts/lock-path.test.mjs` (green in the cloud, 2/4 red on every Windows checkout) blocked plan
+// a lock-path test (green in the cloud, 2/4 red on every Windows checkout) blocked plan
 // 2462's push. This gate owns the class so the next one cannot land.
 //
 // THE THREE SHAPES IT BLOCKS — (1) and (2) are verbatim plan-2478 regressions; (3) was added by
@@ -106,7 +106,7 @@
 //       and does NOT call this one — every pattern below is written against JS `//` comments and
 //       `const`/`let`/`var` binding syntax. The Python tree has the same class (plan 3622's own
 //       sweep found three live instances under a planted ancestor repo) and the same remedy — the
-//       `no_repo_dir` fixture in `backend/scripts/price-pipeline/conftest.py` — but a Python
+//       `no_repo_dir` fixture in the project's data pipeline conftest — but a Python
 //       instance is caught by review and by that fixture, NOT by this gate. Do not read the
 //       module-level "AND the Python test tree" scope line above as covering this shape.
 //           test('exits 0 outside any git repo', () => {
@@ -160,7 +160,7 @@
 // the call, so on a Windows host `signal.SIGKILL` — which does not exist there — raised an
 // `AttributeError` AFTER `os.getpgid` had already run but BEFORE `os.killpg` was ever reached, and
 // `kill_tree`'s own `except Exception: pass` swallowed it silently. The test
-// (`backend/scripts/price-pipeline/__tests__/test_pp_proc.py`) monkeypatched `sys.platform` to
+// (the project's data pipeline `test_pp_proc.py`) monkeypatched `sys.platform` to
 // `"linux"` to exercise the POSIX branch, and monkeypatched `os.getpgid`/`os.killpg` too — but
 // WITHOUT `raising=False`, so on Windows the `setattr` calls themselves raised before either fake
 // ever took effect. It surfaced as a missing `calls["killpg_args"]` key while `calls["getpgid_pid"]`

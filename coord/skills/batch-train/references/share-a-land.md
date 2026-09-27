@@ -30,7 +30,7 @@ should have batched, or batching true duplicates).
    fail, not the only gate):
    - 2–5 members for ordinary plans. **Sizing doctrine (operator 2026-07-06): batch size scales
      INVERSELY with member weight** — trivial single-shard DQ adjudications with front-loaded
-     decision rules (disjoint clinics, homogeneous 🟥) may ride up to ~8 per train, since every solo
+     decision rules (disjoint records, homogeneous 🟥) may ride up to ~8 per train, since every solo
      land pays the same fixed tax (claim + worktree + review + queue slot + merge/gates + teardown)
      and for one-row work the tax dwarfs the work. Heavy/fable/sol members never ride regardless
      (plan 3341: `sol` is a single Opus-orchestrated session by design, no batch conductor for it).
@@ -68,7 +68,7 @@ should have batched, or batching true duplicates).
 > The 2026-07-24 board-pass precedent — "'shares a queue slot' is not a batching reason" — is
 > OVERTURNED for the class 2459 Task 1 defines: small 🟩 `execModel: sonnet` `loop: afk` members
 > with no file-overlap edges. For that class, **batch is the default and solo needs the reason**.
-> Basis: the 2026-07-25 review-cost empirics in `docs/runbooks/plans-workflow.md` § Batch lane
+> Basis: the 2026-07-25 review-cost empirics in `docs/coord/plan-lanes.md` § Batch lanes
 > (finder fan-out flat f=9–11 solo vs batch; only verifiers scale) plus the queue-bottleneck
 > measurement (~12 min serialized head-time per land). The strict share-a-land test stays in
 > force for everything else — 🟥, fable-lane, sol-lane, `loop: hitl`, large or overlapping members.

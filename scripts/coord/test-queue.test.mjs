@@ -26,7 +26,12 @@ import {
   TEST_SLOT_ADMITTED_MARKER,
   SLOT_ADMISSION_GRACE_MS,
   slotAdmissionBackstopMs,
+  withTestSlot,
+  FAIL_OPEN_CONCURRENCY,
+  FAIL_OPEN_ENV,
+  clampWorkerValue,
 } from './test-queue.mjs';
+import { OVERFLOW_TEST_CONCURRENCY } from './battery-lock.mjs';
 
 // opts.budget: null disables the memory axis outright (no file read, no freemem() call) — the
 // pre-3954 CPU-only behaviour the tests below this point were written to assert.
@@ -619,4 +624,61 @@ test('slotAdmissionBackstopMs: TEST_QUEUE_MAX_WAIT_MS + the fixed grace, both re
     5000 + SLOT_ADMISSION_GRACE_MS,
   );
   assert.equal(slotAdmissionBackstopMs({}), MAX_WAIT_MS + SLOT_ADMISSION_GRACE_MS);
+});
+
+// ── plan 4236 T2 (H2): the fail-open stays, but it hands the caller `admitted: false` ──────────
+test('plan 4236 T2: a wait past maxWaitMs reaches the callback as admitted:false; a real slot as true', async () => {
+  delete process.env.TEST_QUEUE_DISABLE; // a parameter here, never ambient
+  const dir = mkdtempSync(join(tmpdir(), 'test-queue-'));
+  try {
+    const opts = { dir, pollMs: 25, log: () => {} };
+    const seen = [];
+    await withTestSlot(
+      'adm-1',
+      async (a) => {
+        seen.push(a);
+        await withTestSlot(
+          'adm-2',
+          async (b) => {
+            seen.push(b);
+            await withTestSlot('adm-3', async (c) => seen.push(c), {
+              ...opts,
+              pid: 33,
+              maxWaitMs: 100, // both slots busy → fail-open
+            });
+          },
+          { ...opts, pid: 22 },
+        );
+      },
+      { ...opts, pid: 11 },
+    );
+    assert.deepEqual(seen, [{ admitted: true }, { admitted: true }, { admitted: false }]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('plan 4236 T2: under TEST_QUEUE_FAIL_OPEN=1 the per-slot budget answers the clamp on both axes', () => {
+  assert.equal(FAIL_OPEN_ENV, 'TEST_QUEUE_FAIL_OPEN');
+  assert.equal(FAIL_OPEN_CONCURRENCY, 2);
+  assert.equal(
+    FAIL_OPEN_CONCURRENCY,
+    OVERFLOW_TEST_CONCURRENCY,
+    'the fail-open clamp is the plan-1795 overflow clamp — one number, pinned together',
+  );
+  const env = { TEST_QUEUE_CONCURRENCY: '2', VETAPP_CPU_CAP_PERCENT: '90', [FAIL_OPEN_ENV]: '1' };
+  const d = perSlotWorkerBudgetDetail(20, env, { freemem: () => 200_000_000_000, budget: null });
+  assert.equal(d.cpuBudget, 2);
+  assert.equal(d.workers, 2);
+  assert.equal(perSlotWorkerBudget(20, env, { budget: null }), 2);
+  // without the flag, unchanged
+  const { [FAIL_OPEN_ENV]: _omit, ...plain } = env;
+  assert.equal(perSlotWorkerBudgetDetail(20, plain, { budget: null }).cpuBudget, 9);
+});
+
+test('plan 4236 T2 (r2): clampWorkerValue keeps 1..2, replaces everything else with 2', () => {
+  assert.equal(clampWorkerValue('1'), '1');
+  assert.equal(clampWorkerValue('2'), '2');
+  for (const v of ['0', '3', '19', 'auto', '', undefined, '-1', '1.5'])
+    assert.equal(clampWorkerValue(v), '2', String(v));
 });

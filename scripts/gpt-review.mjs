@@ -114,7 +114,7 @@
 // completed raw/*.json still re-run from scratch, same as any other resume.
 //
 // ─── Exit codes (plan 3369, task 5 — every code this runner emits, documented
-// in ONE place; docs/runbooks/review-calibration.md carries the same table for
+// in ONE place; docs/coord/review.md § The calibration ladder carries the same table for
 // operator-facing recovery) ─────────────────────────────────────────────────
 //   0  — the review ran to completion (findings or not — findings are the
 //        point, not a failure — including the artifacts-only / path-scoped-to-
@@ -311,7 +311,7 @@ const PREP_LOG_MAX_BYTES = 4 * 1024 * 1024;
 import { parseFlags } from './coord/parse-flags.mjs';
 
 // plan 3279: these six were plain module-private consts. The copy-review lane
-// (`scripts/copy-review.mjs`) runs the SAME transport, models and effort against a
+// (a project-side sibling tool) runs the SAME transport, models and effort against a
 // translation bundle instead of a diff, and the plan's standing instruction for it is
 // "reuse, don't fork" — so they are exported rather than re-declared there, where a
 // second copy of the Luna model id would drift the day either model id rolls. The
@@ -336,7 +336,7 @@ export const FINDER_CONTEXT_BUDGET_CHARS = 1_048_576;
 // plan 3369 fix round 1 (1522de/46279f/4fd40f): the FIRST version of this list hand-copied
 // (not derived from) review-diff-scope.mjs's own REVIEW_DIFF_EXCLUDES entries —
 // `backend/src/data/seed` verbatim, plus a `**/render-store/**` / `**/render-fingerprints/**`
-// pair aimed at the SAME `backend/data/price-pipeline/` trees `REVIEW_DIFF_EXCLUDES`'s
+// pair aimed at the SAME `backend/data/data-pipeline/` trees `REVIEW_DIFF_EXCLUDES`'s
 // `backend/data` member already covers. But applyPathScope's `basePathspecs` already applies
 // `scopedPathspecs()` (== REVIEW_DIFF_EXCLUDES) UNCONDITIONALLY, before this budget-triggered
 // layer ever runs — so on THIS repo's real layout, none of those three hand-copied entries
@@ -403,7 +403,7 @@ export const CLAUDE_ARM_CAP = PER_ANGLE * 2;
 // proving the CLI validates it as a real option; only --bogus-flag was
 // "unknown option"): `--max-turns <N>` IS real, just undocumented/hidden from
 // --help. It is also this repo's ESTABLISHED cap mechanism —
-// backend/scripts/price-pipeline/lib_claude_transport.py's run_claude_p()
+// backend/scripts/data-pipeline/lib_claude_transport.py's run_claude_p()
 // already takes it as a required parameter, with existing callers ranging
 // from "6" (lib_pre_review.py's skeptic role) to "30" (its hunter/WebFetch
 // role). Using it here (instead of the --max-budget-usd this file used
@@ -567,7 +567,7 @@ export function histNote(endRef) {
 // present, so the two lanes cannot drift. Edit both or neither — the drift check fails the push
 // otherwise.
 export const SEVERITY_FLOOR_NOTE =
-  '### Severity floor (docs/runbooks/plans-workflow.md § Disposition policy) — Do not report perf micro-optimizations or one-line infra/tooling-debt observations that neither affect correctness nor block lands nor corrupt data; policy declines them by rule, so they only cost a disposition. A genuine defect of any size is still in scope.';
+  '### Severity floor (docs/coord/review.md § Disposition policy) — Do not report perf micro-optimizations or one-line infra/tooling-debt observations that neither affect correctness nor block lands nor corrupt data; policy declines them by rule, so they only cost a disposition. A genuine defect of any size is still in scope.';
 
 // VENDORED byte-identically into the import-free sonnet-review Workflow. Edit both or neither.
 export const FINDING_TAG_NOTE =
@@ -1296,7 +1296,7 @@ export function extractDelimitedCandidatesJson(assistantTexts) {
 // ALREADY isolated by extractDelimitedCandidatesJson — still tolerant of a
 // stray ```json fence inside the delimiters, mirroring the extraction
 // convention every other `claude -p` call site in this repo already uses
-// (scripts/fb-responder/classify.mjs's parseClassifyResponse; backend/scripts/
+// (a project-side classifier's parseClassifyResponse; backend/scripts/
 // closure-sweep/interpret-lib.mjs's parseWindows). Returns `candidates: null`
 // (with a `parseError` reason) on anything unparseable — never throws.
 export function parseClaudeArmCandidates(resultText) {
@@ -1723,7 +1723,7 @@ export function resolveCodexBin() {
 // (never the worktree: `~/.codex/config.toml` carries no worktree entries at all,
 // codex resolves the project layer through the shared Git directory, so every
 // `.claude/worktrees/<slug>` inherits the main checkout's trusted layer — see
-// docs/runbooks/codex-claude-context-parity.md). Derived, never hardcoded to the
+// docs/coord/rule-tiers.md § The multi-runtime mirroring problem). Derived, never hardcoded to the
 // sandbox's `/home/user/vetapp`, so the same seam is correct on a local checkout.
 // Returns null on any git failure; every caller treats that as "seed nothing".
 //
@@ -2550,7 +2550,7 @@ export async function runCodex({
 // spawnWithTreeKill (same tree-kill parity as runCodex — a subprocess timeout
 // can wedge if a grandchild holds the pipe, so tree-kill is not optional here
 // either), the prompt as a positional arg (this repo's established `claude -p`
-// convention — see scripts/fb-responder/classify.mjs / backend/scripts/
+// convention — see a project-side classifier / backend/scripts/
 // closure-sweep/interpret-lib.mjs — not stdin; scope-block prompts stay well
 // under the Windows command-line length limit since they carry file lists +a
 // short summary, never the full diff text). Read-only posture: `--allowedTools`
@@ -4325,7 +4325,7 @@ export function reviewLaunchCapDecision(
   // mirroring the guard hook's own `...(planLane ? { planLane } : {})` (scripts/hooks/review-round-
   // cap-guard.mjs). Without it main()'s `capDenialMessage({ ... })` call below had no lane to pass,
   // so a fastlane plan's second-launch denial printed the generic default-cap guidance instead of
-  // naming the fastlane and `scripts/park-review-findings.mjs`.
+  // naming the fastlane and the review-findings parking tool.
   return {
     planId,
     launchOrdinal,

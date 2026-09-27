@@ -1,4 +1,4 @@
-// scripts/coord/claude-env.mjs — moved from scripts/fb-responder/classify.mjs (plan 3959 T2).
+// scripts/coord/claude-env.mjs — moved from this project's Facebook-responder classifier module (plan 3959 T2).
 //
 // `process.env` minus the two account-override vars a call site must strip before spawning
 // `claude -p`, so the child bills the session's own CLAUDE_CONFIG_DIR account rather than a
@@ -8,7 +8,7 @@
 // already imported by more than the Facebook classifier alone (gpt-review.mjs), which is why it
 // moves to scripts/coord/ rather than staying a fb-responder-owned export.
 //
-// No fs, no git, no vetapp-specific knowledge — Rule 3 (docs/runbooks/scripts-module-layout.md)
+// No fs, no git, no vetapp-specific knowledge — Rule 3 (docs/coord/scripts-layout.md)
 // compliant: node: builtins only, no bare package specifiers, no import outside scripts/coord/.
 
 // The two account-override vars a call site must strip before spawning `claude -p`

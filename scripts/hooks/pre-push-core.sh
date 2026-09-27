@@ -520,8 +520,8 @@ node scripts/lint-plan-index.mjs
 node scripts/lint-board.mjs
 
 # ---- project hook seam: cloud-routine prompt drift, plan 1947 ----
-# The cloud-routine drain prompt bodies under docs/runbooks/cloud-routines/ and the
-# template they are generated from (scripts/cloud-routine-prompt-lib.mjs) are a
+# The cloud-routine drain prompt bodies and the
+# template they are generated from (a project-side prompt-template library) are a
 # VETAPP surface — a generic coordination checkout ships neither, so this lint was a
 # "core" gate only relative to this repo's own battery (plan 4096 T5). Moved behind
 # the standard seam: same position in the ordered gate list, same unconditional
@@ -634,7 +634,7 @@ run_range_guard scripts/assert-posix-path-assertions.mjs
 # hooks may reach into scripts, scripts may not reach back out. Unlike the seam guards this one
 # scans the WORKING TREE (no allowlist, nothing to grandfather); the range is used only to skip
 # the scan when the push touches no scripts/ file, and a git failure scans rather than skips.
-# Rule + evidence: docs/runbooks/scripts-module-layout.md. Plan 2622.
+# Rule + evidence: docs/coord/scripts-layout.md. Plan 2622.
 run_range_guard scripts/assert-scripts-self-contained.mjs
 
 # Block the push if a NEW lock-taking `git status`/`git diff` spawn lands in a read-only
@@ -785,7 +785,7 @@ pp_run_project_seam market_dossier_lint
 # done-worktree.mjs's preflight guard (wikiDiffOnWorktreeBranch), which now shares the
 # SAME retry-then-fail-closed contract (plan 1639) — a push OUTSIDE the done-worktree
 # spine (a bare `git push`, not `--no-verify`'d) is caught here too.
-# plan 3944: `docs/handoff/infra-debt.md` and `docs/handoff/grammar-debt.md` are the vetapp
+# plan 3944: `docs/handoff/infra-debt.md` and its sibling domain ledger (grammar-debt.md) are the vetapp
 # CLAUDE.md § Coordination's two plain-doc carve-outs from coordWrite — hand-edited on
 # MASTER, never on a worktree branch — and a ledger line riding a branch conflicts at the
 # landing-queue head exactly the same way a wiki page does (plan 3495 is the incident: a
@@ -826,7 +826,7 @@ pp_run_project_seam market_dossier_lint
 # own errexit hazard notes above. Branch comes from the COORD_DRIFT_BRANCH precompute (plan
 # 1766 item 8 — resolved once above, straight-line before this point; no re-spawn).
 # Test seam: PP_WIKI_RETRY_BACKOFFS_SEC overrides the space-separated backoff schedule (e.g.
-# "0 0 0" to make a test's retry-exhaustion path instant) — scripts/pre-push-hook.test.mjs.
+# "0 0 0" to make a test's retry-exhaustion path instant) — this file's own name-paired test.
 PP_WIKI_BRANCH="$COORD_DRIFT_BRANCH"
 case "$PP_WIKI_BRANCH" in
   worktree-*)
@@ -844,7 +844,7 @@ case "$PP_WIKI_BRANCH" in
         if [ -n "$PP_WIKI_BACKOFF" ]; then
           sleep "$PP_WIKI_BACKOFF"
         fi
-        if PP_WIKI_DIFF=$(git diff --name-only origin/master...HEAD -- 'wiki/**' 'WIKI.md' 'docs/handoff/infra-debt.md' 'docs/handoff/grammar-debt.md' 2>/dev/null); then
+        if PP_WIKI_DIFF=$(git diff --name-only origin/master...HEAD -- 'wiki/**' 'WIKI.md' 'docs/handoff/infra-debt.md' 'docs/handoff/grammar-debt.md' 2>/dev/null); then # dangling-ok: the optional domain ledger; an absent path is a no-op in this diff filter
           PP_WIKI_DIFF_FAILED=0
           break
         fi
@@ -867,12 +867,12 @@ case "$PP_WIKI_BRANCH" in
           echo "pre-push: wiki write-back must land straight to master, never ride a worktree branch. TWO causes reach this block and the fixes are OPPOSITE — decide which one you are looking at before acting (plan 2389)."
           echo "pre-push:   (a) you AUTHORED a wiki edit on this branch. The content is wanted; only the ROUTE is wrong. Fix: from inside this worktree, push the page content with \`node scripts/wiki-commit.mjs <pages…> -m \"chore(wiki): …\"\` (it auto-detects this checkout and routes to master via the disposable coord-checkout), then drop the wiki commit(s) from this branch (git rebase -i and drop them, or reset before them) and re-push."
           echo "pre-push:   (b) you never touched these pages — a merge of origin/master into this branch swept master's wiki pages into a commit, and a formatter pass then REWROTE them. The content is NOT wanted: wiki prose carries snake_case identifiers that prettier's markdown emphasis normalization eats (O_EXCL becomes O*EXCL), so wiki-committing this to master would land silent corruption. Tell (b) from (a) with \`git diff origin/master...HEAD -- 'wiki/**' 'WIKI.md'\`: emphasis/underscore-only churn on pages you did not edit is corruption, not an edit. Fix: DISCARD it (\`git checkout origin/master -- 'wiki/**' 'WIKI.md'\` then amend, or drop the offending commit) and re-push — do NOT run wiki-commit.mjs on it."
-          echo "pre-push: (plan 2389 added \`wiki/\` + \`WIKI.md\` to .prettierignore, so (b) should no longer be REACHABLE via lint-staged; a fresh (b) means either an older branch predating that fix, or the ignore entry regressed — scripts/assert-wiki-prettier-ignored.test.mjs is the gate for the latter.)"
+          echo "pre-push: (plan 2389 added \`wiki/\` + \`WIKI.md\` to .prettierignore, so (b) should no longer be REACHABLE via lint-staged; a fresh (b) means either an older branch predating that fix, or the ignore entry regressed — its own drift-guard test is the gate for the latter.)"
         fi
         if [ -n "$PP_LEDGER_ONLY" ]; then
           echo "pre-push: BLOCKED — this worktree branch carries hand-edited debt-ledger commit(s) (plan 3944):"
           printf '%s\n' "$PP_LEDGER_ONLY"
-          echo "pre-push: docs/handoff/infra-debt.md and docs/handoff/grammar-debt.md are CLAUDE.md § Coordination's plain-doc carve-outs from coordWrite — hand-edited on MASTER, never on a worktree branch (plan 3495: a dispatch was told to delete an infra-debt line on a branch; a ledger line riding a branch conflicts at the landing-queue head exactly like a wiki page). Fix: hand-edit the ledger on the MAIN checkout's master, \`git commit -m \"…\" -- <ledger path>\`, push via pushMasterWithRebase (scripts/coord/coord-git.mjs), then drop the ledger commit(s) from this branch (git rebase -i and drop them, or reset before them) and re-push."
+          echo "pre-push: docs/handoff/infra-debt.md and its sibling domain debt ledger are CLAUDE.md § Coordination's plain-doc carve-outs from coordWrite — hand-edited on MASTER, never on a worktree branch (plan 3495: a dispatch was told to delete an infra-debt line on a branch; a ledger line riding a branch conflicts at the landing-queue head exactly like a wiki page). Fix: hand-edit the ledger on the MAIN checkout's master, \`git commit -m \"…\" -- <ledger path>\`, push via pushMasterWithRebase (scripts/coord/coord-git.mjs), then drop the ledger commit(s) from this branch (git rebase -i and drop them, or reset before them) and re-push."
         fi
         echo "pre-push: Bypass: git push --no-verify (investigate first)."
         exit 1
@@ -919,8 +919,8 @@ fi
 # "since there is only 1 session per VM instance".
 #
 # Signal: `uname -s`, deliberately NOT an env var. Every cloud env — full-egress AND
-# trusted/limited-egress alike (docs/runbooks/cloud-drain-landing.md § Full-egress env
-# fleet) — carries both the coordination git-push token env var (this project's config
+# trusted/limited-egress alike (this project's full-egress env fleet) — carries both
+# the coordination git-push token env var (this project's config
 # names it) and FETCH_VANTAGE, so either would technically discriminate local from cloud
 # too. But both are SECRETS (their whole purpose is credential/vantage material), and
 # keying a test-SKIP decision on a secret's presence is a needless coupling when a
@@ -1184,7 +1184,7 @@ prepush_remaining_budget() {
 # local byte-identical-behaviour guarantee.
 #
 # Extracted as its own function (plan 3274, F3 review fix) specifically so
-# scripts/pre-push-hook.test.mjs can assert this DERIVATION directly — by grabbing this function's
+# this file's own name-paired test can assert this DERIVATION directly — by grabbing this function's
 # source (mirroring bound_status_class/battery_outcome_class's own grab()-and-exec test pattern in
 # that file) and feeding it controlled prepush_remaining_budget() readings — instead of inferring
 # a shrink from how long a real battery attempt survived a real sleep. The prior test calibrated a
@@ -1213,8 +1213,7 @@ prepush_derive_attempt_cap() {
 #
 # plan 3620: the FIRST line of both this banner and prepush_nonconvergent_report's (just below) is
 # a stable, greppable MARKER line — the machine-readable half of this plan's acceptance criterion
-# 3, pinned by scripts/pre-push-hook.test.mjs and documented again in
-# docs/runbooks/cloud-drain-landing.md § Push side. Exact grammar (one line, no other spelling):
+# 3, pinned by this file's own name-paired test. Exact grammar (one line, no other spelling):
 #   pre-push: MARKER prepush-outcome=CHUNKED gate=<gate>
 #   pre-push: MARKER prepush-outcome=NON_CONVERGENT gate=<gate>
 # A genuinely FAILING gate must NEVER print either line — that omission is what makes "chunked",
@@ -1653,10 +1652,10 @@ _rbr_tapfile_shows_timeout() {
 # Before this, the number was hand-copied at four places in this file (the real invocation site and
 # three operator-facing diagnostic strings), so a re-derivation had to find all four or leave the
 # messages quoting a cap the gate no longer applies. The JS side carries the twin definition —
-# BATTERY_TEST_TIMEOUT_MS in scripts/nightly-windows-suite.mjs, which is where the measured
+# BATTERY_TEST_TIMEOUT_MS in the JS-side nightly-suite module, which is where the measured
 # rationale for the VALUE lives (read it before changing this number; a shell variable and a JS
 # constant cannot share one literal, so the two are drift-pinned to the same number by
-# scripts/pre-push-battery-cap.test.mjs). Deliberately NOT `${BATTERY_TEST_TIMEOUT_MS:-900000}`:
+# a battery-cap test). Deliberately NOT `${BATTERY_TEST_TIMEOUT_MS:-900000}`:
 # this is a safety cap that turns an infinite hang into a bounded red, and an env knob on it is an
 # env knob for switching the backstop off on the one push that needed it.
 BATTERY_TEST_TIMEOUT_MS=900000
@@ -1869,7 +1868,7 @@ run_battery_with_retry() {
     # prepush_derive_attempt_cap, F3 review-round extraction — see that function's own header),
     # specifically so the pinned run_bounded invocation below — $_rbr_cap feeding node's --test
     # run — and its own cap-hit echo (both asserted on byte-for-byte by
-    # scripts/pre-push-battery-cap.test.mjs) stay untouched — only the VALUE $_rbr_cap holds at
+    # the battery-cap test) stay untouched — only the VALUE $_rbr_cap holds at
     # this point in the loop shrinks,
     # monotonically, as wall-clock time passes; it can never grow back on attempt 2, matching the
     # deadline itself. A no-op whenever chunking is off ($PREPUSH_CHUNK_MODE != 1): the caller's
@@ -1921,7 +1920,7 @@ run_battery_with_retry() {
          # participation only) rides in as a THIRD `--test-reporter`/`--test-reporter-destination`
          # pair on THIS invocation line, via $_rbr_ledger_reporter_args (built just above the loop
          # that reaches here) — NOT via NODE_OPTIONS. An earlier version of this fix used
-         # NODE_OPTIONS specifically to dodge the byte-exact pin scripts/pre-push-hook.test.mjs's
+         # NODE_OPTIONS specifically to dodge the byte-exact pin this file's own name-paired test's
          # "review finding 1afign8" case holds on this line; that dodge was itself the bug.
          # NODE_OPTIONS is a Node-wide env var — it is inherited by every `node` child THIS
          # battery's OWN tests spawn, and two scripts-battery files
@@ -1941,8 +1940,8 @@ run_battery_with_retry() {
          # inactive for this call) vanishes instead of becoming an empty argv element — the same
          # idiom $_rbr_conc already uses on this exact line. Placed BEFORE $_rbr_conc (not after)
          # so the trailing `$_rbr_conc "$@"` adjacency stays byte-for-byte intact for the OTHER,
-         # out-of-scope pins that assert on it (scripts/pre-push-battery-cap.test.mjs and
-         # scripts/battery-lock.test.mjs's own drift guards) — inserting anything between those
+         # out-of-scope pins that assert on it (its own battery-cap test and
+         # the battery-lock test's own drift guards) — inserting anything between those
          # two tokens would break both without a matching plan to touch either file. A relative
          # `./scripts/...` path (not bare `scripts/...`) is load-bearing in
          # $_rbr_ledger_reporter_args's assignment above: node's `--test-reporter` specifier
@@ -1961,7 +1960,7 @@ run_battery_with_retry() {
          # KEEPING 15 min, because the slowest legitimate test swung 5.1× with machine contention
          # (102.9s → 528.9s for the same test). The value itself now lives in ONE place per language:
          # $BATTERY_TEST_TIMEOUT_MS above for this file, BATTERY_TEST_TIMEOUT_MS in
-         # scripts/nightly-windows-suite.mjs for the JS side, which carries the full rationale.
+         # the JS-side nightly-suite module for the JS side, which carries the full rationale.
          # Placed immediately after `--test`, never between `$_rbr_conc` and `"$@"` (see the
          # adjacency comment above) so the two out-of-scope pins that assert on that trailing
          # adjacency stay intact.
@@ -2236,7 +2235,7 @@ GATE_CACHE_FILE=""
 # carries that serialized gather; empty/absent/stale is always safe — the consuming side
 # (gate_needs_run below) falls back to a fresh gather exactly as before this item.
 GATE_STATE_FILE=""
-# plan 2875 (review finding 4, DECLINED after investigation — see docs/runbooks/push-gate-tiering.md).
+# plan 2875 (review finding 4, DECLINED after investigation — see docs/coord/hooks.md § Diff-scoping).
 # The gpt-review pass flagged this guard as a defect: two flags whose NAMES say BATTERY gating a
 # probe that backs SEVEN unrelated gates, so debugging the battery silently disables their caching
 # too. That reading is wrong, and the "fix" was reverted before landing.
@@ -2324,7 +2323,7 @@ gate_outcome() {
   # the next gate simply retries, which is what the pre-memoization code did every time.
   # Kept SELF-CONTAINED (private-looking `_GO_*` globals, not a script-level
   # precompute shared with write_push_telemetry's own independent lookup) so
-  # scripts/pre-push-hook.test.mjs's gate_outcome-only extraction (the dur_s clamp test,
+  # this file's own name-paired test's gate_outcome-only extraction (the dur_s clamp test,
   # which pastes just this function body next to its own fake `git`) keeps working
   # unmodified — it never sees a preceding top-level precompute line.
   if [ -z "${_GO_COMMON_DIR:-}" ]; then
@@ -2478,7 +2477,7 @@ gate_close() {
 # gate_close's own default derivation from $3=0.
 #
 # $4 is the ALREADY-CLASSIFIED string, not a raw status — this helper does NOT call
-# bound_status_class itself. scripts/pre-push-orphan-bound-coverage.test.mjs asserts the
+# bound_status_class itself. Its own orphan-bound-coverage test asserts the
 # LITERAL `bound_status_class "$<STATUS_VAR>"` call at each gate's own call site (by name,
 # one per gate) as a drift guard; folding that call in here would make it textually
 # disappear from the hook, which that coverage test can't see through a shared helper — so
@@ -2486,7 +2485,7 @@ gate_close() {
 #
 # Deliberately does NOT own the arm-specific echo + exit 1 either: each gate's
 # cap/no-verdict/fail messages differ (and quote that gate's own re-run command), and
-# scripts/pre-push-orphan-bound-coverage.test.mjs's heavy-signature forward guard (which
+# the orphan-bound-coverage test's heavy-signature forward guard (which
 # flags an unwrapped heavy-process spawn) only recognizes those messages as prose — not a
 # spawn — when they stay literal `echo "..."` lines at the call site; folding them into a
 # function-call argument turns that same text into part of a `report_capped_verdict ...`
@@ -2714,7 +2713,7 @@ BATTERY_RAN_FILES=""
 # The canonical diff is merge-base(origin/master, HEAD)..HEAD — the tree's own content diff vs
 # master, identical for a branch's final force-push and its land's master merge-push where their
 # PUSH RANGES differ (a range is an artifact of remote-ref state). Feeding the union to the
-# trigger and the selector does two things the pass-cache needs (docs/runbooks/battery-pass-cache.md):
+# trigger and the selector does two things the pass-cache needs (docs/coord/land-spine.md § The once-per-land proof cache):
 #   1. the branch side actually RUNS (and records) the canonical selection — the plan-1838
 #      dominant leak was final trees that never got a battery at all because the final push's
 #      range carried no scripts/*.mjs, so the land's merge-push had nothing to hit;
@@ -2821,7 +2820,7 @@ if printf '%s\n' "$BATTERY_DELTA" | grep -qE '^scripts/.*\.mjs$|^scripts/hooks/'
   # ONE invocation line per bound-shape instead of a duplicated per-branch pair.
   #
   # plan 3959 T1: the flat `scripts/*.test.mjs` glob never reaches a NESTED test file
-  # (scripts/coord/x.test.mjs, scripts/fb-responder/x.test.mjs, scripts/lib/decision-dossier/
+  # (scripts/coord/<name>.test.mjs, scripts/<subdir>/<name>.test.mjs, scripts/lib/decision-dossier/
   # inline.test.mjs) — select-battery-tests.mjs's own listTestFiles() now walks the whole tree,
   # so the "cannot scope this delta, run everything" fallback must too, or the fallback would
   # silently run FEWER tests than a scoped selection sometimes does. APPENDED to the flat literal
@@ -2864,7 +2863,7 @@ $(find scripts -mindepth 2 -name '*.test.mjs' -not -path '*/node_modules/*' -not
     # per-test cap as the automated one instead of being the one entry point the fix never reaches.
     # plan 3242: the cap is interpolated from $BATTERY_TEST_TIMEOUT_MS, so the recipe can no longer
     # drift from the invocation site the way a hand-copied literal did.
-    echo "pre-push: LOCAL push — scripts/*.test.mjs selection is $BATTERY_TELEM_SEL file(s) (over the ${PREPUSH_LOCAL_DEMOTE_MAX_FILES}-file local threshold, or a full/unselectable run) — DEFERRING the battery to the land preflight (plan 2875; a cloud drain always runs this gate in full, see docs/runbooks/cloud-drain-landing.md). Get a real verdict now anyway: PREPUSH_FULL_BATTERY=1 git push, or node scripts/queued-run.mjs -- node --test --test-timeout=$BATTERY_TEST_TIMEOUT_MS --test-force-exit scripts/*.test.mjs."
+    echo "pre-push: LOCAL push — scripts/*.test.mjs selection is $BATTERY_TELEM_SEL file(s) (over the ${PREPUSH_LOCAL_DEMOTE_MAX_FILES}-file local threshold, or a full/unselectable run) — DEFERRING the battery to the land preflight (plan 2875; a cloud drain always runs this gate in full, see docs/coord/cloud-drains.md). Get a real verdict now anyway: PREPUSH_FULL_BATTERY=1 git push, or node scripts/queued-run.mjs -- node --test --test-timeout=$BATTERY_TEST_TIMEOUT_MS --test-force-exit scripts/*.test.mjs."
     scripts_node_test_ok=1
     gate_outcome scripts-battery skipped 0 "$BATTERY_TELEM_SEL"
   else
@@ -2884,7 +2883,7 @@ $(find scripts -mindepth 2 -name '*.test.mjs' -not -path '*/node_modules/*' -not
   # PREPUSH_FULL_BATTERY=1 bypasses the cache entirely (a forced full run must actually run and
   # is deliberately not recorded — it ran outside the cache's contract); PREPUSH_NO_BATTERY_CACHE=1
   # is the kill-switch if a skipped battery is ever suspected of masking a failure
-  # (docs/runbooks/battery-pass-cache.md). errexit-safe: the `|| STATUS=$?` consumes the
+  # (docs/coord/land-spine.md § The once-per-land proof cache). errexit-safe: the `|| STATUS=$?` consumes the
   # failing assignment's status, same shape as the acquire below.
   BATTERY_CACHE_KEY=""
   # plan 3223 (re-review finding A): the raw selection BATTERY_CACHE_KEY was derived FROM,
@@ -2904,7 +2903,7 @@ $(find scripts -mindepth 2 -name '*.test.mjs' -not -path '*/node_modules/*' -not
     # this gate — which runs AFTER the whole battery, sometimes minutes later — can reuse that
     # EXACT baseline instead of re-asking origin/master, which a sibling session's `git fetch` may
     # have moved in between (RECORD-REFUSED reason=key-drift, measured 8/218 records over 3.1 days
-    # — docs/runbooks/battery-pass-cache.md § Measured plan 2327). A missing/unwritable file just
+    # — docs/coord/land-spine.md § The once-per-land proof cache). A missing/unwritable file just
     # leaves BATTERY_CACHE_MERGE_BASE empty below, which record's own --merge-base handling treats
     # exactly like "not provided" — re-resolve fresh, i.e. today's behavior. This can only ever
     # widen the key-drift exposure back to today's baseline, never narrow correctness.
@@ -3150,7 +3149,7 @@ $(find scripts -mindepth 2 -name '*.test.mjs' -not -path '*/node_modules/*' -not
   # plan 3274: capture the ledger key THIS call actually used, before the plan-3223 disarm just
   # below blanks RBR_LEDGER_KEY back to "" for the data-dependency gate's own call further down —
   # the chunk-report path in the failure branch needs it after that disarm has run. It sits AFTER
-  # the RBR_RERUN_LOCK reset above, not before it, on purpose: scripts/battery-lock.test.mjs pins
+  # the RBR_RERUN_LOCK reset above, not before it, on purpose: the battery-lock test pins
   # that reset within 900 chars of the run_battery_with_retry "scripts" call it disarms, and this
   # block between the two pushed it to 953. Only the RBR_LEDGER_KEY blanking below has to happen
   # after this capture; RBR_RERUN_LOCK is an unrelated variable, so the order is free.
@@ -3362,8 +3361,13 @@ if [ -n "$DATA_TRIGGERED_FILES" ]; then
   # 120s cap rather than the battery's $BATTERY_CAP: this runs at most one ~4s file.
   # $DATA_TRIGGERED_FILES is a newline-separated list of space-free selected paths and stays
   # UNQUOTED so it word-splits into the function's "$@" at this call site.
+  # plan 4124: the "at most one ~4s file" premise fails on a push that carries a master merge —
+  # 8 selected files took ~160 s under load and a flat 120 s cap failed both attempts. The cap
+  # now scales with the selection: 120 s per selected file (one file keeps the old 120 s).
+  _dd_cap_n=$(printf '%s\n' "$DATA_TRIGGERED_FILES" | grep -c . 2>/dev/null) || _dd_cap_n=1
+  [ "${_dd_cap_n:-0}" -ge 1 ] 2>/dev/null || _dd_cap_n=1
   _t0=$(date +%s) || _t0=0
-  run_battery_with_retry "data-dependency" 120 "" $DATA_TRIGGERED_FILES
+  run_battery_with_retry "data-dependency" $((120 * _dd_cap_n)) "" $DATA_TRIGGERED_FILES
   data_test_ok=$RUN_BATTERY_OK
   _dd_dur=$(elapsed_since "$_t0")
   _dd_sel=$(printf '%s\n' "$DATA_TRIGGERED_FILES" | wc -l | tr -d ' ')
@@ -3410,8 +3414,8 @@ fi
 # script re-filters whatever it is handed down to the live corpus, so the whole changed-file
 # list can go straight in on stdin and the hook needs no copy of the corpus rules. Measured on
 # this checkout: 0.6 s combined for a one-doc push, 1.0 s for a five-doc push (two node
-# starts dominate); the full-corpus mode (no arguments, run weekly per
-# docs/runbooks/standing-operations.md) is 3.2 s.
+# starts dominate); the full-corpus mode (no arguments, run weekly as a standing
+# operation) is 3.2 s.
 #
 # ADVISORY — both scripts exit 0 without --check, and the `|| true` is belt-and-suspenders
 # against a future default change. Promotion of the dead-pointer half to blocking is a separate
@@ -3421,8 +3425,8 @@ fi
 # CORE, not a project seam (S2 follow-up, plan 3958): assert-doc-pointers.mjs and
 # assert-plan-pointers.mjs are both generic (no vetapp semantics of their own — they check
 # docs/, wiki/, WIKI.md, CLAUDE.md), and until scripts/coord/doc-token-lib.mjs existed they
-# imported their generic path-token helpers from scripts/lint-pipeline-doc.mjs, which itself
-# hard-imports scripts/pipeline-doc.mjs (the docs/PIPELINE.md market-template parser,
+# imported their generic path-token helpers from the project's pipeline-doc lint, which itself
+# hard-imports the project's pipeline-doc parser (a project-only stage-map parser,
 # vetapp-only) — the same coupling that keeps lint-pipeline-doc.mjs's OWN CLI a project seam
 # above (pp_project_pipeline_doc_lint). Now that both lints import their token helpers from
 # scripts/coord/doc-token-lib.mjs instead, their own closures are core-clean, so the call moved
@@ -3476,7 +3480,7 @@ fi
 # the updated:-length rule live as constants in scripts/coord/wiki-size-lint.mjs (single
 # owner; do not restate numbers here — the plan-2618 genericization exists because
 # a "16 KB" hardcoded in this echo went stale when the cap moved). The injected set
-# is DERIVED (clinics dir + hook-source basenames + aliases:/triggerPaths:
+# is DERIVED (per-record dir + hook-source basenames + aliases:/triggerPaths:
 # frontmatter under wiki/entities/), never a hand list. Diff-scoped to wiki/**
 # (<1s when it runs, mirrors the plan-950 seed-sanity tier); rules doc: WIKI.md
 # § "Page budgets + structure rules". errexit-safe: grep inside `if`, run

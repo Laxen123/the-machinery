@@ -55,6 +55,8 @@ import {
   ARCHIVE_FOLDER,
   PENDING_APPROVAL_FOLDER,
   READY_FOLDER,
+  claimedIdOfBasename,
+  PLAN_FILENAME_RX,
 } from './build-index-lib.mjs';
 import {
   computeDriftIsInherited,
@@ -378,6 +380,63 @@ export function checkNestingInvariant() {
   return 0;
 }
 
+// ── Same-id invariant (plan 4237 T4) ─────────────────────────────────────────
+// Two plan files carrying one id make a bare id ambiguous to move-plan / edit-plan / stamp-* and
+// are exactly what the 2026-09-26 re-issue left behind (a rollback commit deleted 4231/4232, the
+// counter handed both out again). next-plan-id's floor ref now stops a re-issue; this catches a
+// duplicate however it arrives. Only a PLAN-shaped basename counts (PLAN_FILENAME_RX, the
+// uppercase category tag — a `130-addendum-…md` note or a dated legacy archive name is not a
+// plan), and the id is the one the basename genuinely claims (claimedIdOfBasename).
+//
+// Grandfathered: the archive lane cannot be renamed by move-plan, so the pairs that predate this
+// check are waived by the EXACT archived path of one member — the other member still counts,
+// so a THIRD file reusing a waived id is still a duplicate. 213 / 245 / 274 are early-era archive
+// pairs from before the plan-777 dup guard; 4232 is the 2026-09-26 re-issue (plan 4237 S5).
+// Full repo paths under archive/, never a bare basename (review findings 98b87e / d933f5: a
+// basename waiver would also hide a COPY of that file in any other folder).
+export const GRANDFATHERED_DUPLICATE_ID_PATHS = Object.freeze([
+  'docs/superpowers/plans/archive/213-UI-hero-illustration-followups.md',
+  'docs/superpowers/plans/archive/245-Other-repair-landing-page-e2e-stanza-drift.md',
+  'docs/superpowers/plans/archive/274-UI-smadjur-in-speciesgate.md',
+  'docs/superpowers/plans/archive/4232-Pipe-stage6-shared-service-tag-meaning.md',
+]);
+
+export function findDuplicateIdViolations(
+  paths,
+  { waivedPaths = GRANDFATHERED_DUPLICATE_ID_PATHS } = {},
+) {
+  const waived = new Set(waivedPaths);
+  const byId = new Map();
+  for (const p of paths) {
+    const base = p.split('/').pop();
+    if (!PLAN_FILENAME_RX.test(base) || waived.has(p)) continue;
+    const id = claimedIdOfBasename(base);
+    if (id === null) continue;
+    const key = String(Number(id));
+    if (!byId.has(key)) byId.set(key, []);
+    byId.get(key).push(p);
+  }
+  return [...byId]
+    .filter(([, ps]) => ps.length > 1)
+    .map(([id, ps]) => `  plan id ${id} is carried by ${ps.length} files: ${ps.join(', ')}`);
+}
+
+export function checkDuplicateIdInvariant() {
+  const violations = findDuplicateIdViolations(listTrackedPlanFiles());
+  if (violations.length) {
+    console.error('');
+    console.error(
+      'lint-plan-index: duplicate plan id — two plan files share an id, so a bare id is ' +
+        'ambiguous to every plan tool. Renumber the newer one with a fresh ' +
+        '`node scripts/next-plan-id.mjs claim …` id (move-plan --rename):',
+    );
+    violations.forEach((v) => console.error(v));
+    console.error('');
+    return 1;
+  }
+  return 0;
+}
+
 // ── Foreign-drift attribution (plan 1650, layer 2) ──────────────────────────
 // A violation found by any check below can be INHERITED: a worktree branch cut from —
 // or rebased onto (done-worktree's land spine) — a master tip whose committed INDEX
@@ -591,6 +650,12 @@ export function main() {
       run: () => ({ code: checkNestingInvariant(), neverTolerate: false }),
       what: 'a plan is filed in an illegal category subfolder',
       // Reads tracked plan PATHS, not docs/INDEX.md — no checksIndex flag.
+    },
+    {
+      // 5. Same-id invariant (plan 4237 T4). Inheritable like the path checks above: it reads
+      // the tracked-plan path set, so a sibling's duplicate must not wedge an unrelated land.
+      run: () => ({ code: checkDuplicateIdInvariant(), neverTolerate: false }),
+      what: 'two plan files share one id',
     },
   ];
   for (const { run, what, checksIndex } of laterChecks) {

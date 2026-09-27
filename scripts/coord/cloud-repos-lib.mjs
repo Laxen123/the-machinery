@@ -93,7 +93,7 @@ import { repoRootFrom } from './scripts-anchor.mjs';
 //   - `note`:     one line a human reader needs that the fields above do not carry.
 // Deliberately NOT a field: how a drain pushes an edit back. It was `landsVia: 'direct-push'`
 // briefly, but nothing read it — the push-back contract is prose in the prompt block and in
-// docs/runbooks/cloud-drain-autonomy.md, so the field was pure decoration that a future row
+// docs/coord/cloud-drains.md § The autonomy axis, so the field was pure decoration that a future row
 // could set to something the generated prompt would then contradict (sonnet-review finding,
 // plan 2577). When a repo genuinely needs a different push-back path, add the field TOGETHER
 // with the consumer that branches on it.

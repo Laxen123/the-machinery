@@ -235,7 +235,7 @@ export function processChunkCapMsNow(chunkCfg, startEpoch) {
 // Test-only hook. `undefined` (the default) clears the stamp so the NEXT consumer re-derives it —
 // simulating a fresh process; an explicit epoch (or `null`) injects that exact value so a test can
 // assert a LATER consumer sees a reduced (or zero) budget without a real sleep. Never called outside
-// scripts/done-worktree.test.mjs. The plan-3430 monotonic bookkeeping is cleared either way: an
+// this module's own test suite. The plan-3430 monotonic bookkeeping is cleared either way: an
 // INJECTED deadline has no stamp instant to measure from, so `processChunkCapMsNow` falls back to
 // `deadline - Date.now()` — which is exactly what an injected epoch is asserting about.
 export function resetProcessChunkDeadlineForTest(epoch = undefined) {

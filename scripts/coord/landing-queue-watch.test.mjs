@@ -684,6 +684,7 @@ test('plan 972: CLI — --keep-hot runs a prep on a waiting poll, then times out
             head: 'other',
           }),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40),
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP: '0',
         },
       },
@@ -1927,6 +1928,7 @@ test('plan 2738 acceptance: a long prep does NOT starve head detection — the w
             { slug: 'demo-slug', position: 1, total: 3, head: 'demo-slug' },
           ]),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40),
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP_SLEEP_MS: String(PREP_MS),
         },
       },
@@ -1973,6 +1975,7 @@ test('plan 2738 acceptance: an infra-failed prep retries on a LATER poll, and st
             head: 'other',
           }),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40), // never advances — only the retry can re-fire a prep
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP: '6', // BUSY: the worktree lock is held, keep-hot did not run
         },
       },
@@ -2017,6 +2020,7 @@ test('plan 3274 (delta-review fix) acceptance: a GATE_CHUNKED prep actually gets
             head: 'other',
           }),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40), // never advances — only the retry can re-fire a prep
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP: '40', // GATE_CHUNKED: ran out of cloud-chunk budget, wants a re-invoke
         },
       },
@@ -2059,6 +2063,7 @@ test('plan 2738 acceptance: the poll loop keeps its cadence for the whole prep',
             head: 'other',
           }),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40),
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP_SLEEP_MS: String(PREP_MS),
         },
       },
@@ -2281,6 +2286,7 @@ test('plan 2816 acceptance: the incident trace — one healthy sibling, zero sta
             head: 'other',
           }),
           LQW_FAKE_ORIGIN_TIP: 'a'.repeat(40),
+          LQW_FAKE_STALE_PROBE: 'clean',
           LQW_FAKE_PREP: String(PREP_EXIT_BUSY),
           LQW_FAKE_BUSY_HOLDER: JSON.stringify({
             live: true,

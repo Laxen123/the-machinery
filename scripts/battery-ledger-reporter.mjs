@@ -23,7 +23,7 @@
 // note assumed `data.name === data.file` picks out the file-level wrapper. That holds ONLY when
 // node is invoked with an ABSOLUTE test-file path. This repo's actual invocations (the pre-push
 // hook's `"$@"`, done-worktree's `listScriptsTestFiles` output) are REPO-RELATIVE
-// (`scripts/foo.test.mjs`) — and empirically, the wrapper's `data.name` is the EXACT ARGV STRING
+// (`scripts/<name>.test.mjs`) — and empirically, the wrapper's `data.name` is the EXACT ARGV STRING
 // node received for that file (relative when invoked relatively, absolute when invoked
 // absolutely), while `data.file` is ALWAYS the resolved absolute path. So `name === file` is
 // FALSE for every real invocation this reporter will ever see. The robust, invocation-agnostic
@@ -73,6 +73,11 @@ export default async function* batteryLedgerReporter(source) {
     // that file, so resolving it against THIS process's own cwd reproduces node's own resolution
     // of `file` — a real subtest's human-readable `name` essentially never does.
     if (resolve(process.cwd(), name) !== file) continue;
-    yield `${JSON.stringify({ file, passed: !!details?.passed })}\n`;
+    // plan 4236 T5: the file's own wall time rides along (additive — every reader keys on
+    // `file`/`passed` and ignores the rest), so a heavy single-file question has data to answer
+    // from instead of ad-hoc logs. Absent when node reports no finite duration.
+    const ms = Number(details?.duration_ms);
+    const durationMs = Number.isFinite(ms) && ms >= 0 ? Math.round(ms) : undefined;
+    yield `${JSON.stringify({ file, passed: !!details?.passed, durationMs })}\n`;
   }
 }

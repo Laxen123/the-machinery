@@ -19,15 +19,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { bindLandDeps, LAND_DEPS_GROUPS } from './deps.mjs';
 import { buildRegistries } from './registry.mjs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   runPrepGateLifecycle,
   runPrepGates,
   landGateProven,
+  onceProvenClosureSkip,
+  landGateSameLandClosureProof,
+  noStartTallyKey,
+  recordNoProgressRound,
   runLandSeamStep,
   runLandSeamPhase,
   runPreflightGates,
+  batteryConcurrencyArgs,
+  batteryLockAcquireArgs,
+  surfaceBatteryLockDiagnostics,
 } from './gates-runner.mjs';
+import { perSlotWorkerBudgetDetail } from '../test-queue.mjs';
 import { withEnvVar } from '../../test-helpers/with-env-var.mjs';
+import * as realL from '../done-worktree-lib.mjs';
 
 // CLOUD-FLAG STRATEGY (plan 4057). `landGateProven` returns null outright when
 // `CLAUDE_CODE_REMOTE` is set — a cloud land deliberately proves every gate every land — and that
@@ -117,13 +129,25 @@ function bindFakeDeps() {
       'fake-cache-gate': { paths: [], envUncacheable: [] },
     }),
     pathCovers: () => false,
+    // plan 4192: the content key of a gate's closure at a revision. Answered from `keyFakes`
+    // (read at CALL time — the bound group is frozen): `byRev[rev]` when set, else `atAnyRev`,
+    // else null ("cannot key"), which is what every pre-4192 scenario above gets by default, so
+    // none of their recorded entries grows a `closureKey`.
+    gateKeyAtRev: (_git, _gates, _gate, rev) => keyFakes.byRev[rev] ?? keyFakes.atAnyRev ?? null,
   };
   // resolveGateRegistry(D) calls D.coordConfig.loadCoordConfig(...) before handing its result to
   // the fake gatesFrom above, which ignores it — any return value satisfies the call.
   deps.coordConfig = { loadCoordConfig: () => ({}) };
   deps.L = {
     isPartialGateProof: () => false,
-    gateProvenEntry: (sha, _at, envHash) => ({ sha, envHash }),
+    // plan 4192: the optional closureKey/landId ride along only when present, exactly like the
+    // real gateProvenEntry — so a scenario that never sets them still records `{ sha, envHash }`.
+    gateProvenEntry: (sha, _at, envHash, extra = {}) => ({
+      sha,
+      envHash,
+      ...(extra.closureKey ? { closureKey: extra.closureKey } : {}),
+      ...(extra.landId ? { landId: extra.landId } : {}),
+    }),
     // plan 4056 (finding `lgmdvs`): the `--prep` pass addresses a registered gate by the compact
     // prep key this map's inverse yields, and reads its carry-forward answer from
     // `landPrepGatesToRun`. Both are declared HERE rather than added to the bound container later:
@@ -137,7 +161,12 @@ function bindFakeDeps() {
     // whatever table the host supplies is a stronger pin than one that would still pass if the
     // driver had hardcoded this repo's own family names.
     MARKER_FAMILIES: { alpha: { label: 'Alpha' }, beta: { label: 'Beta' } },
+    // plan 4192 (gpt-review ffef29/9e14be): the no-start tally's pure helpers, delegated to the
+    // real lib so the recordNoProgressRound case below exercises the real reset/bump rules.
+    parseNoStartTally: realL.parseNoStartTally,
+    bumpNoStartRound: realL.bumpNoStartRound,
   };
+  deps.batteryLedger = { NON_CONVERGENT_ROUNDS: 2 };
   deps.spine = {
     appendDeployGateOutcome: (wtPath, fields) => telemetry.push(fields),
     emitSeam: (code, message, state) => {
@@ -171,6 +200,8 @@ function bindFakeDeps() {
 // because those fakes close over it. `var`-free and hoisted by `const` TDZ rules only because
 // nothing calls those fakes during binding itself.
 const prepFakes = { registries: null, toRun: {} };
+// plan 4192: the per-scenario closure-key answers the fake `gateKeyAtRev` above reads.
+const keyFakes = { byRev: {}, atAnyRev: null };
 // plan 4056 (the gate fold): the preflight driver's per-scenario interlude, read at call time
 // through the accessor above for the same freeze reason `prepFakes` exists.
 const driverFakes = { interlude: null };
@@ -180,6 +211,8 @@ function resetSpies() {
   telemetry.length = 0;
   seams.length = 0;
   shaQueue = [];
+  keyFakes.byRev = {};
+  keyFakes.atAnyRev = null;
 }
 
 function makeState(overrides = {}) {
@@ -1532,4 +1565,261 @@ test('plan 4056 driver: an ASYNC interlude is awaited before the next gate start
   await runPreflightGates(registries, {});
   assert.deepEqual(order, ['interlude:start', 'interlude:end', 'a']);
   driverFakes.interlude = null;
+});
+
+// ── plan 4192: the closure-keyed proof, and same-land reuse on a CLOUD land ────────────────────
+//
+// The rebase is simulated the way it looks to the gate: the proof names one sha, HEAD is now a
+// different one (the fake `diff` would still say "nothing changed", so a pass here that did NOT
+// come from the key arm would be indistinguishable — every cloud case therefore asserts a skip the
+// sha-delta arm could never grant there). The key at HEAD is injected through `keyFakes`.
+const PROOF_4192 = (extra = {}) => ({
+  sha: 'a'.repeat(40),
+  envHash: undefined,
+  closureKey: 'k-proven',
+  landId: 'land-1',
+  ...extra,
+});
+
+async function withCloudFlag(value, fn) {
+  const prev = process.env.CLAUDE_CODE_REMOTE;
+  if (value === undefined) delete process.env.CLAUDE_CODE_REMOTE;
+  else process.env.CLAUDE_CODE_REMOTE = value;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_CODE_REMOTE;
+    else process.env.CLAUDE_CODE_REMOTE = prev;
+  }
+}
+
+test('plan 4192: a proven build survives a rebase that leaves its closure content unchanged', async () => {
+  resetSpies();
+  keyFakes.byRev.HEAD = 'k-proven'; // HEAD moved (a rebase), the closure did not
+  const state = makeState({ landGateId: 'land-1', gatesProven: { build: PROOF_4192() } });
+  assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), true);
+});
+
+test('plan 4192: a rebase that changes one closure path invalidates the proof, locally too', async () => {
+  resetSpies();
+  keyFakes.byRev.HEAD = 'k-after-master-touched-frontend';
+  const state = makeState({ landGateId: 'land-1', gatesProven: { build: PROOF_4192() } });
+  // The fake delta says "nothing changed" — the key is what catches it, and it wins.
+  assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), false);
+});
+
+test('plan 4192: CLOUD — a same-land proof with a matching key authorizes the skip (both cloud spellings)', async () => {
+  for (const spelling of ['true', '1']) {
+    resetSpies();
+    keyFakes.byRev.HEAD = 'k-proven';
+    const state = makeState({ landGateId: 'land-1', gatesProven: { build: PROOF_4192() } });
+    await withCloudFlag(spelling, () => {
+      assert.equal(
+        onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'),
+        true,
+        `CLAUDE_CODE_REMOTE=${spelling}`,
+      );
+    });
+  }
+});
+
+test('plan 4192: CLOUD — the same entry under a DIFFERENT land id never authorizes a skip', async () => {
+  resetSpies();
+  keyFakes.byRev.HEAD = 'k-proven';
+  const state = makeState({ landGateId: 'land-2', gatesProven: { build: PROOF_4192() } });
+  await withCloudFlag('1', () => {
+    assert.equal(landGateSameLandClosureProof(state, 'build'), null);
+    assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), false);
+  });
+});
+
+test('plan 4192: CLOUD — a changed key, or a key that cannot be computed now, runs the gate', async () => {
+  resetSpies();
+  const state = makeState({ landGateId: 'land-1', gatesProven: { build: PROOF_4192() } });
+  await withCloudFlag('1', () => {
+    keyFakes.byRev.HEAD = 'k-other';
+    assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), false);
+    keyFakes.byRev = {}; // null ⇒ cannot judge by content ⇒ never the sha-delta arm on cloud
+    assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), false);
+  });
+});
+
+test('plan 4192: a LEGACY sha-only entry still skips on its delta locally and is still refused on cloud', async () => {
+  resetSpies();
+  keyFakes.byRev.HEAD = 'k-proven'; // present, but the entry has no key to compare it with
+  const legacy = { sha: 'a'.repeat(40), envHash: undefined };
+  const state = makeState({ landGateId: 'land-1', gatesProven: { build: legacy } });
+  await withCloudFlag(undefined, () => {
+    assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), true);
+  });
+  await withCloudFlag('1', () => {
+    assert.equal(onceProvenClosureSkip(state, '/wt', 'build', 'fake-cache-gate'), false);
+  });
+});
+
+test('plan 4192: a passing run records the closure key at the PROVEN sha and the land id', async () => {
+  resetSpies();
+  queueShas('sha1', 'sha1');
+  keyFakes.byRev.sha1 = 'k-at-sha1';
+  keyFakes.byRev.HEAD = 'k-wrong-rev'; // must NOT be the one recorded
+  const registries = registriesWith({
+    passCacheGate: 'fake-cache-gate',
+    run: () => ({ ok: true }),
+  });
+  const state = makeState({ landGateId: 'land-7' });
+  const out = await runPrepGateLifecycle(registries, 'build', {
+    wtPath: '/wt',
+    diff: ['x'],
+    state,
+    opts: {},
+  });
+  assert.equal(out.proofRecorded, true);
+  assert.deepEqual(state.gatesProven.build, {
+    sha: 'sha1',
+    envHash: undefined,
+    closureKey: 'k-at-sha1',
+    landId: 'land-7',
+  });
+});
+
+test('plan 4192: acceptance — a two-chunk CLOUD land runs build once, not twice', async () => {
+  resetSpies();
+  let runs = 0;
+  const registries = registriesWith({
+    passCacheGate: 'fake-cache-gate',
+    run: () => {
+      runs += 1;
+      return { ok: true };
+    },
+  });
+  const state = makeState({ landGateId: 'land-1' });
+  keyFakes.atAnyRev = 'k-same-content';
+  await withCloudFlag('1', async () => {
+    // chunk 1: nothing proven yet — the gate runs and banks a proof at sha1
+    queueShas('sha1', 'sha1');
+    const first = await runPrepGateLifecycle(registries, 'build', {
+      wtPath: '/wt',
+      diff: ['frontend/src/x.tsx'],
+      state,
+      opts: {},
+    });
+    assert.equal(first.proofRecorded, true);
+    // chunk 2: a head-of-queue rebase moved HEAD, the closure content did not
+    const second = await runPrepGateLifecycle(registries, 'build', {
+      wtPath: '/wt',
+      diff: ['frontend/src/x.tsx'],
+      state,
+      opts: {},
+    });
+    assert.deepEqual(second, { applicable: true, provenSkip: true });
+  });
+  assert.equal(runs, 1);
+});
+
+test('plan 4192: the no-start tally key is a LAND key from the first round, so a rebase keeps it', () => {
+  resetSpies();
+  const wt = mkdtempSync(join(tmpdir(), 'nostart-4192-'));
+  try {
+    // no gates sidecar, no tally: still a land key — never the head sha (the sha queue is empty,
+    // so a rev-parse here would throw)
+    assert.match(noStartTallyKey(wt), /^land:\S+$/);
+    mkdirSync(join(wt, '.scratch'), { recursive: true });
+    writeFileSync(
+      join(wt, '.scratch', 'land-gates-proven.json'),
+      JSON.stringify({ landId: 'land-1', slug: 'x', gatesProven: {} }),
+    );
+    assert.equal(noStartTallyKey(wt), 'land:land-1');
+    // a tally already carrying a land key wins over the sidecar: the series never switches keys
+    writeFileSync(
+      join(wt, '.scratch', 'land-chunk-nostart.json'),
+      JSON.stringify({ sha: 'land:first-series', rounds: { build: 1 } }),
+    );
+    assert.equal(noStartTallyKey(wt), 'land:first-series');
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+test('plan 4192 (gpt-review ffef29/9e14be): two no-start rounds across a rebase exhaust the bound even before any proof exists', () => {
+  resetSpies();
+  const wt = mkdtempSync(join(tmpdir(), 'nostart-4192-'));
+  try {
+    // round 1 at HEAD sha-A, no gates sidecar (nothing proven yet — the build never started)
+    queueShas('a'.repeat(40), 'a'.repeat(40));
+    const first = recordNoProgressRound(wt, 'build');
+    assert.deepEqual(first, { noStartRounds: 1, exhausted: false });
+    // the head-of-queue rebase: HEAD is now sha-B, the land is the same
+    queueShas('b'.repeat(40), 'b'.repeat(40));
+    const second = recordNoProgressRound(wt, 'build');
+    assert.deepEqual(second, { noStartRounds: 2, exhausted: true });
+  } finally {
+    rmSync(wt, { recursive: true, force: true });
+  }
+});
+
+// plan 4236 T1 (H1): the land battery's worker cap comes from the SAME per-slot CPU budget pytest
+// and vitest already obey — injected CPU count, slot count and cap percent, never the real box.
+test('plan 4236 T1: the battery argv is capped from the per-slot CPU budget (CPU axis, not memory)', () => {
+  const env90 = { VETAPP_CPU_CAP_PERCENT: '90', TEST_QUEUE_CONCURRENCY: '2' };
+  const env80 = { VETAPP_CPU_CAP_PERCENT: '80', TEST_QUEUE_CONCURRENCY: '2' };
+  assert.deepEqual(batteryConcurrencyArgs([], 20, env90, perSlotWorkerBudgetDetail), [
+    '--test-concurrency=9',
+  ]);
+  assert.deepEqual(batteryConcurrencyArgs([], 20, env80, perSlotWorkerBudgetDetail), [
+    '--test-concurrency=8',
+  ]);
+  // the plan-1795 overflow clamp (lock status 4 / ETIMEDOUT) always wins, never doubled
+  assert.deepEqual(
+    batteryConcurrencyArgs(['--test-concurrency=2'], 20, env90, perSlotWorkerBudgetDetail),
+    ['--test-concurrency=2'],
+  );
+  // the CPU axis is read, never `.workers`: a budget fn whose memory axis would bind at 3 still
+  // yields the CPU figure, and the call asks for the memory axis to be disabled outright
+  const seen = [];
+  const fake = (cpu, env, opts) => {
+    seen.push(opts);
+    return { workers: 3, cpuBudget: 9, memoryBudget: 3, binding: 'memory' };
+  };
+  assert.deepEqual(batteryConcurrencyArgs([], 20, env90, fake), ['--test-concurrency=9']);
+  assert.deepEqual(seen, [{ budget: null }]);
+  // a one-thread box never yields 0
+  assert.deepEqual(batteryConcurrencyArgs(undefined, 1, env90, perSlotWorkerBudgetDetail), [
+    '--test-concurrency=1',
+  ]);
+});
+
+// plan 4236 T3(a)/(c): the land declares its own pid as the lock holder, and the acquire CLI's
+// stderr reap verdict reaches the land log instead of being swallowed.
+test('plan 4236 T3(a): the land battery-lock acquire declares --holder-pid (its own long-lived pid)', () => {
+  assert.deepEqual(batteryLockAcquireArgs('cli.mjs', 'dw-battery-77', 77), [
+    'cli.mjs',
+    'acquire',
+    '--label',
+    'dw-battery-77',
+    '--holder-pid',
+    '77',
+  ]);
+  assert.equal(batteryLockAcquireArgs('cli.mjs', 'x').at(-1), String(process.pid));
+});
+
+test('plan 4236 T3(c): the acquire CLI reap line reaches the land log; other stderr does not', () => {
+  const logged = [];
+  const stderr = [
+    'battery-lock: waiting for dw-battery-1 (host h, pid 2, age 5m)',
+    'battery-lock: reaped dw-battery-3836 (host h, pid 40816, age 127m) — reason: age — retrying',
+    'battery-lock: IGNORING --holder-pid 5 — it is already provably dead',
+    '',
+  ].join('\r\n');
+  assert.equal(
+    surfaceBatteryLockDiagnostics(stderr, (l) => logged.push(l)),
+    2,
+  );
+  assert.deepEqual(logged, [
+    'done-worktree: battery-lock: reaped dw-battery-3836 (host h, pid 40816, age 127m) — reason: age — retrying',
+    'done-worktree: battery-lock: IGNORING --holder-pid 5 — it is already provably dead',
+  ]);
+  assert.equal(
+    surfaceBatteryLockDiagnostics(undefined, () => assert.fail('no log')),
+    0,
+  );
 });

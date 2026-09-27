@@ -6,7 +6,7 @@
 // parallel sessions push to directly (every worktree checkout is exempt; a rewrite there is
 // scoped to one session's own branch).
 //
-// § WHY. `vetapp/CLAUDE.md` and this hobby's memory both already say a MAIN-checkout wedge
+// § WHY. Your project's `CLAUDE.md` and this hobby's memory both already say a MAIN-checkout wedge
 // goes through `node scripts/heal-main.mjs`, never a hand rebase/reset/pull — that rule was
 // prose, and prose gets skipped under pressure:
 //   plan 3541  a MAIN-checkout wedge was hand-rebased directly instead of running the healer.
@@ -161,7 +161,7 @@
 // case-sensitive. Two strings naming the same Windows directory can differ in drive-letter or
 // segment case (git itself is inconsistent about this across call sites), and a case-sensitive
 // compare would silently ALLOW on a mismatch with no signal that anything was wrong — the guard
-// would simply stop firing. `platform` is a parameter (vetapp/CLAUDE.md's platform-parameter
+// would simply stop firing. `platform` is a parameter (your project's `CLAUDE.md`'s platform-parameter
 // rule) so both branches are exercised directly in tests without needing two host OSes.
 //
 // Refuted in review, twice, do not re-litigate: a finder claimed `scanGitPrefix()` misses git's
@@ -177,7 +177,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readStdin } from './lib/loader-common.mjs';
+import { denyEnvelope, runHookCli } from './lib/loader-common.mjs';
 import {
   classifyEnvironment,
   GIT_BASENAMES,
@@ -247,7 +247,7 @@ export function pathsEqual(a, b, platform = process.platform) {
 // = one process, so in production there is exactly one key — `HOOK_DIR` — ever computed, and
 // only once, and never at all when a command carries no candidate verb, § COST DISCIPLINE). The
 // `hookDir` parameter (default `HOOK_DIR`, derived from `import.meta.url`) is a test seam only —
-// vetapp/CLAUDE.md's platform-parameter idiom, mirroring `classifyEnvironment(payload, env =
+// your project's `CLAUDE.md`'s platform-parameter idiom, mirroring `classifyEnvironment(payload, env =
 // process.env)` elsewhere in this file — so a test can point "this hook's own repo" at an
 // isolated temp fixture instead of the real checkout. `null` in the cache means "attempted and
 // failed" (should not happen in production — see the header note); a key simply absent means
@@ -399,7 +399,7 @@ export function classifyGitSegment(parsed) {
 
 // ── the verdict ──────────────────────────────────────────────────────────────
 
-// Returns null (ALLOW) or { key, target } (DENY). `env` is a parameter (vetapp/CLAUDE.md's
+// Returns null (ALLOW) or { key, target } (DENY). `env` is a parameter (your project's `CLAUDE.md`'s
 // platform-parameter rule), kept symmetric with land-timeout-guard.mjs's `evaluate(payload,
 // env)` signature. The third argument is test-only: `{ hookDir, platform }` override which
 // checkout counts as "this hook's own repo" and which OS's path-comparison rules apply —
@@ -473,39 +473,29 @@ export function formatBlock(verdict) {
 
 // ── main ─────────────────────────────────────────────────────────────────────
 
-function main(env = process.env) {
-  // Fail-open test seam — see § FAIL-OPEN in the header. Throws BEFORE reading stdin so the
-  // test exercises the outermost catch, not a parse branch.
+// The hook's whole outcome as DATA (plan 4238): the deny envelope it would print, or
+// null for silence. The in-process PreToolUse dispatcher (pretool-dispatch.mjs) calls
+// this; main() below is a thin CLI wrapper that prints it. The fail-open test seam
+// throws from HERE, so a forced error exercises the dispatcher's per-guard isolation
+// exactly as it exercises the CLI's outermost catch.
+export function evaluateHook(payload, { env = process.env } = {}) {
   if (String(env?.MAIN_CHECKOUT_REBASE_GUARD_FORCE_ERROR ?? '') === '1') {
     throw new Error('main-checkout-rebase-guard: forced error (fail-open test seam)');
   }
 
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
-
   const verdict = evaluate(payload, env);
-  if (!verdict) return;
+  if (!verdict) return null;
 
-  process.stdout.write(
-    JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: formatBlock(verdict),
-      },
-    }),
-  );
+  return denyEnvelope(formatBlock(verdict));
+}
+
+function main(env = process.env) {
+  return runHookCli((payload) => evaluateHook(payload, { env }));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await main();
   } catch {
     // fail open — a tool hook must never break the turn
   }

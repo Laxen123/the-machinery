@@ -63,7 +63,7 @@
 // (`=== true`, exact tool name) because there is no such default to reason about.
 //
 // § SCOPE IS THE SUBAGENT ONLY. Every one of these calls is LEGITIMATE at top level —
-// vetapp/CLAUDE.md positively REQUIRES a backgrounded gate-running push on the shared
+// your project's `CLAUDE.md` positively REQUIRES a backgrounded gate-running push on the shared
 // local checkout, and `TaskOutput`/`Monitor` are the sanctioned way a top-level session
 // reaps its own background work. A top-level payload has no `agent_id`, so the guard is
 // silent there by construction, which is the whole reason the probe had to come first.
@@ -77,7 +77,7 @@
 // § MEASUREMENT. One line per firing (ISO timestamp + pattern key + agent type) is
 // appended to ~/.claude/session-state/subagent-backgrounding-guard-firings.log — the
 // hand-rolled-guard-firings.log / wedge-kills.log precedent. Plan 3116 acceptance 3 grades
-// the fix by re-running scripts/measure-subagent-endings.mjs against the same corpus; this
+// the fix by re-running the project's subagent-ending measurement against the same corpus; this
 // log is the cheap cross-check on whether the warning is being heeded rather than merely
 // shown.
 //
@@ -89,12 +89,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   alreadyInjected,
-  emitInjection,
+  injectionEnvelope,
   markInjected,
   markerDirFor,
   parseAgentId,
   parseContextId,
-  readStdin,
+  runHookCli,
 } from './lib/loader-common.mjs';
 
 export const FIRING_LOG = join(
@@ -225,18 +225,13 @@ export function logFiring(
   }
 }
 
-function main() {
-  const raw = readStdin();
-  if (!raw.trim()) return;
-  let payload;
-  try {
-    payload = JSON.parse(raw);
-  } catch {
-    return; // malformed → fail open
-  }
-
+// The hook's whole outcome as DATA (plan 4238): the warn envelope it would print, or
+// null for silence. The firing log and the per-context repeat marker are side effects it
+// still performs itself, exactly as before the fold. The in-process PreToolUse dispatcher
+// (pretool-dispatch.mjs) calls this; the CLI below is a thin wrapper that prints it.
+export function evaluateHook(payload) {
   const key = evaluate(payload);
-  if (!key) return;
+  if (!key) return null;
 
   // The firing LOG records every firing (it is the measurement surface for plan 3121); only
   // the injected TEXT shortens on a repeat. Conflating the two would make the log under-count
@@ -250,7 +245,7 @@ function main() {
   const repeat = alreadyInjected(markerDir, key);
   if (!repeat) markInjected(markerDir, key);
 
-  emitInjection(
+  return injectionEnvelope(
     formatWarning(key, payload, { repeat }),
     `⚠️  subagent-backgrounding guard: ${key}`,
     'PreToolUse',
@@ -259,7 +254,7 @@ function main() {
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   try {
-    main();
+    await runHookCli(evaluateHook);
   } catch {
     // fail open — a tool hook must never break the turn
   }

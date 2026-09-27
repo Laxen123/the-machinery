@@ -33,7 +33,7 @@
 // The page->source mapping is NOT invented here: it already exists as each page's `sources:`
 // frontmatter list (40 of 51 pages carry it — the other 11 are the 8 exempt spine/meta pages
 // plus whatever bucket 5 is currently flagging), already citing code paths like
-// `backend/src/adapters/provet-cloud.ts` and `backend/scripts/price-pipeline/ (code)`.
+// `backend/src/adapters/some-platform.ts` and `backend/scripts/data-pipeline/ (code)`.
 // Source "freshness" is the git LAST-COMMIT date of each path (NOT filesystem mtime, which a
 // fresh worktree checkout resets) — deterministic and worktree-safe.
 //
@@ -409,7 +409,7 @@ export function findStaleStatusClaims(pages, planFolderOf) {
 
 // The history skip is scoped to the CLAUSE that carries the citation, not to the whole line
 // (round-1 review finding, plan 4125). Line-wide, any past-tense word anywhere in a sentence
-// suppressed every citation on it — "This adapter WAS the default before Evidensia; see
+// suppressed every citation on it — "This adapter WAS the default before the newer one; see
 // `backend/scripts/legacy.py` for the old logic" hid a genuinely dead `legacy.py`, because "was"
 // described the adapter, not the path. Splitting on clause boundaries keeps the intended case
 // ("the old `x.py` was deleted by plan N" is history) while narrowing the blast radius.
@@ -785,7 +785,7 @@ function git(repoRoot, args, maxBuffer = 64 * 1024 * 1024) {
   });
 }
 
-// plan-id → status folder. `buildPlanFolderIndex` (coord/build-index-lib.mjs) is the ONE parser
+// plan-id → status folder. `buildPlanFolderIndex` (scripts/coord/build-index-lib.mjs) is the ONE parser
 // for a plan path's status, and its regex admits the optional one-level CATEGORY folder that a
 // hand-rolled one-level readdir misses
 // — a round-1 review finding: a plan filed at `<status>/<category>/<id>-*.md` resolved to null, so
@@ -842,7 +842,7 @@ export function makePlanFolderOf(repoRoot, { fetch = false } = {}) {
 
 // "Does this cited path exist in the REPO?" — deliberately not `existsSync` alone (round-1 review
 // finding). A plan worktree is cut SPARSE by default, so a tracked path under one of the six heavy
-// price-pipeline stores is simply not on disk, and a bare existsSync reported every wiki citation
+// data-pipeline stores is simply not on disk, and a bare existsSync reported every wiki citation
 // of one as a dead pointer purely because of where the sweep was run from.
 //
 // The gitignore arm is deliberate, and a round-2 review finding argued against it: `git

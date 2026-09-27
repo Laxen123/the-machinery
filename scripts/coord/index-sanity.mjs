@@ -58,7 +58,7 @@ import { statSync } from 'node:fs';
 import { join } from 'node:path';
 import { GIT_MAXBUFFER } from './coord-git.mjs';
 import { resolveCommonDirPath } from './lock-path.mjs';
-import { gitIsolatedEnv } from './child-env.mjs';
+import { gitIsolatedEnv, LOCK_FREE_READ_ENV } from './child-env.mjs';
 
 // git's own index format opens with a 12-byte header ("DIRC" + 4-byte version + 4-byte
 // entry count); anything shorter cannot even hold that and is unambiguously torn.
@@ -80,7 +80,8 @@ function git(dir, args, { exec = execFileSync } = {}) {
   return exec('git', ['-C', dir, ...args], {
     encoding: 'utf8',
     maxBuffer: GIT_MAXBUFFER, // a 131k-path ls-tree/ls-files listing overflows the 1MB default
-    env: gitIsolatedEnv(),
+    // plan 4237 T2: every read here probes the shared MAIN index — never write it back.
+    env: gitIsolatedEnv(LOCK_FREE_READ_ENV),
   });
 }
 
